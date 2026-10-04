@@ -1,0 +1,13 @@
+[Unit]
+Description=RetroKM hub (shared keyboard, mouse and clipboard)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/retrokm-hub -c /etc/retrokm.conf
+# a crash restarts it; the emergency key (ctrl+alt+shift+escape) exits
+# cleanly and leaves it stopped until the next boot
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

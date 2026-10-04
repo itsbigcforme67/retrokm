@@ -83,6 +83,14 @@ agents/linux/rkm_clip.py -n laptop 127.0.0.1      # Wayland (wl-clipboard) or X1
 build/rkm-x11 -c -n laptop 127.0.0.1              # X11 alternative
 ```
 
+To have it all start by itself, run `./install-laptop.sh` once (it asks for
+sudo). It installs the hub as a systemd service started at boot (config in
+`/etc/retrokm.conf`, logs with `journalctl -u retrokm-hub`) and starts this
+desktop's agent at login, under the first screen name in `retrokm.conf`. Run it
+again after rebuilding or editing the config. On other X11 machines, put an
+autostart entry that runs `rkm-x11 -n NAME HUB-ADDRESS`; the agent keeps
+retrying until the hub is up.
+
 Every screen name an agent uses must have a `[screen NAME]` section in the
 hub config. `retrokm.conf.example` documents every option.
 

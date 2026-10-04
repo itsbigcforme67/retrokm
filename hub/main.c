@@ -39,6 +39,7 @@ static double rel_fx, rel_fy;    /* fractional remainder for relative agents */
 static unsigned char mods;       /* physical modifier state, HID bit order */
 static int buttons;              /* physical mouse buttons held (bit per button) */
 static int locked;               /* edge switching disabled */
+static int touched;              /* any input yet; until then the first screen wins */
 static unsigned char swallowed[256];
 
 static unsigned char *clip;      /* UTF-8, LF line endings */
@@ -462,7 +463,9 @@ static void relayout(void)
     } else if (active && !active_mon) {
         active_mon = monitor_showing(active);
     }
-    if (!active) fallback();
+    /* At boot agents connect in any order; until someone uses the keyboard
+     * or mouse, keep handing control to the first screen in the config. */
+    if (!active || !touched) fallback();
 }
 
 void hub_extron_changed(void)
@@ -482,6 +485,7 @@ void hub_motion(int dx, int dy)
     Screen *s = active;
     double mag, gain, nx, ny;
     int dir = 0;
+    touched = 1;
 
     if (!s) return;
     mag = sqrt((double)dx * dx + (double)dy * dy);
@@ -533,6 +537,7 @@ void hub_button(int btn, int down)
     static const int evbtn[] = { 0, BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA };
     Screen *s = active;
     unsigned char p[2];
+    touched = 1;
 
     if (btn < 1 || btn > 5) return;
     if (down) buttons |= 1 << btn;
@@ -549,6 +554,7 @@ void hub_wheel(int dy, int dx)
 {
     Screen *s = active;
     unsigned char p[4];
+    touched = 1;
 
     if (!s) return;
     if (s->local) { uinput_wheel(dy, dx); return; }
@@ -564,6 +570,7 @@ void hub_key(int evcode, int usage, int state)
     Screen *s;
     unsigned char p[3];
     int is_mod = usage >= HID_LCTRL && usage <= HID_RGUI, i;
+    touched = 1;
 
     if (is_mod && state != RKM_KEY_REPEAT) {
         unsigned char bit = (unsigned char)(1 << (usage - HID_LCTRL));
