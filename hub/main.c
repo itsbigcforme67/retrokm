@@ -291,6 +291,51 @@ static Monitor *neighbor(const Monitor *m, int dir)
     return best;
 }
 
+/* ---- visible areas ------------------------------------------------------ */
+
+/* Index of the area holding x,y; -1 if none.  No areas: all of it. */
+static int area_at(const Screen *s, double x, double y)
+{
+    int i;
+    for (i = 0; i < s->narea; i++) {
+        const int *a = s->area[i];
+        if (x >= a[0] && x <= a[0] + a[2] - 1 && y >= a[1] && y <= a[1] + a[3] - 1) return i;
+    }
+    return s->narea ? -1 : 0;
+}
+
+static double clampd(double v, double lo, double hi)
+{
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+/* Keep the pointer out of the parts of an irregular desktop (monitors of
+ * different sizes) that no monitor shows.  The pointer slides along the
+ * edge it ran into, as it would on the machine itself. */
+static void fit_area(const Screen *s, double *x, double *y, double ox, double oy)
+{
+    double best = -1;
+    int i;
+
+    if (area_at(s, *x, *y) >= 0) return;
+    if ((i = area_at(s, *x, oy)) >= 0) {
+        *y = clampd(*y, s->area[i][1], s->area[i][1] + s->area[i][3] - 1);
+        return;
+    }
+    if ((i = area_at(s, ox, *y)) >= 0) {
+        *x = clampd(*x, s->area[i][0], s->area[i][0] + s->area[i][2] - 1);
+        return;
+    }
+    for (i = 0; i < s->narea; i++) {            /* last resort: nearest area */
+        const int *a = s->area[i];
+        double cx = clampd(*x, a[0], a[0] + a[2] - 1), cy = clampd(*y, a[1], a[1] + a[3] - 1);
+        double d = (cx - *x) * (cx - *x) + (cy - *y) * (cy - *y);
+        if (best < 0 || d < best) { best = d; ox = cx; oy = cy; }
+    }
+    *x = ox;
+    *y = oy;
+}
+
 /* ---- switching ---------------------------------------------------------- */
 
 static unsigned char remap_usage(const Screen *s, unsigned char usage)
@@ -366,6 +411,7 @@ static void switch_to(Screen *t, Monitor *m, double x, double y)
     if (y < 0) y = 0;
     if (x > t->w - 1) x = t->w - 1;
     if (y > t->h - 1) y = t->h - 1;
+    fit_area(t, &x, &y, x, y);
     px = x;
     py = y;
     rel_fx = rel_fy = 0;
@@ -424,6 +470,11 @@ void hub_extron_changed(void)
     relayout();
 }
 
+int hub_routing(void)
+{
+    return active != NULL;
+}
+
 /* ---- input routing ------------------------------------------------------ */
 
 void hub_motion(int dx, int dy)
@@ -462,6 +513,7 @@ void hub_motion(int dx, int dy)
     if (ny < 0) ny = 0;
     if (nx > s->w - 1) nx = s->w - 1;
     if (ny > s->h - 1) ny = s->h - 1;
+    fit_area(s, &nx, &ny, px, py);
 
     if (is_rel(s)) {
         double ax = dx * gain + rel_fx, ay = dy * gain + rel_fy;
@@ -521,6 +573,12 @@ void hub_key(int evcode, int usage, int state)
 
     if (usage && !is_mod && state == RKM_KEY_DOWN) {
         unsigned char held = (unsigned char)((mods | (mods >> 4)) & 0x0F);
+        /* emergency exit, whatever the config says: ctrl+alt+shift+escape */
+        if (usage == HID_ESC && held == (RKM_MOD_LCTRL | RKM_MOD_LSHIFT | RKM_MOD_LALT)) {
+            logmsg("emergency exit key pressed");
+            quit = 1;
+            return;
+        }
         for (i = 0; i < cfg.nhotkeys; i++) {
             Hotkey *h = &cfg.hotkeys[i];
             if (h->usage == usage && (h->mods & 0x0F) == held) {

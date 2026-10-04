@@ -145,6 +145,8 @@ agents/linux/rkm_clip.py -n laptop 192.168.1.10              # clipboard, in you
 - `show <screen>` hotkeys route a machine's video to the monitor under the
   pointer through the Extron, and (with `on_tie = follow`) control follows.
 - Copy on one machine, move the pointer away, paste on another.
+- **Ctrl+Alt+Shift+Escape** stops the hub and gives the keyboard back. The
+  hub also lets go of the keyboard and mouse whenever no agent is connected.
 - The control socket accepts the same commands as hotkeys, plus `status`:
 
   ```

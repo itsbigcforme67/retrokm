@@ -34,6 +34,7 @@ static int already_open(const char *path)
 static int try_open(const char *path, int filter)
 {
     unsigned char evbits[EV_MAX / 8 + 1], keybits[KEY_MAX / 8 + 1], relbits[REL_MAX / 8 + 1];
+    unsigned char absbits[ABS_MAX / 8 + 1];
     char name[128] = "";
     int fd;
 
@@ -49,13 +50,19 @@ static int try_open(const char *path, int filter)
         memset(evbits, 0, sizeof evbits);
         memset(keybits, 0, sizeof keybits);
         memset(relbits, 0, sizeof relbits);
+        memset(absbits, 0, sizeof absbits);
         ioctl(fd, EVIOCGBIT(0, sizeof evbits), evbits);
         ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keybits), keybits);
         ioctl(fd, EVIOCGBIT(EV_REL, sizeof relbits), relbits);
+        ioctl(fd, EVIOCGBIT(EV_ABS, sizeof absbits), absbits);
         is_kbd = BIT(keybits, KEY_A) && BIT(keybits, KEY_ENTER);
         is_mouse = BIT(evbits, EV_REL) && BIT(relbits, REL_X) && BIT(keybits, BTN_LEFT);
-        /* touchpads, tablets and touchscreens stay with the desktop */
-        if (BIT(evbits, EV_ABS) || !(is_kbd || is_mouse)) { close(fd); return -1; }
+        /* touchpads, tablets and touchscreens stay with the desktop; other
+         * absolute axes (a keyboard's volume knob) do not disqualify */
+        if (BIT(absbits, ABS_X) || BIT(absbits, ABS_MT_POSITION_X) || !(is_kbd || is_mouse)) {
+            close(fd);
+            return -1;
+        }
     }
 
     memset(&devs[ndevs], 0, sizeof devs[0]);
@@ -171,11 +178,20 @@ void input_tick(void)
     long long now = now_ms();
     int i;
 
-    if (cfg.grab)
-        for (i = 0; i < ndevs; i++)
+    /* With no machine to route to, the desktop keeps the keyboard and mouse,
+     * so a hub without agents never locks anyone out. */
+    for (i = 0; i < ndevs; i++) {
+        if (cfg.grab && hub_routing()) {
             if (!devs[i].grabbed) try_grab(&devs[i]);
-    if (cfg.ndevices == 0 && now - last_scan > 2000) {   /* hotplug */
+        } else if (devs[i].grabbed && ioctl(devs[i].fd, EVIOCGRAB, 0) == 0) {
+            devs[i].grabbed = 0;
+            devs[i].dx = devs[i].dy = 0;
+            logmsg("input: released %s", devs[i].path);
+        }
+    }
+    if (cfg.ndevices >= 0 && now - last_scan > 2000) {   /* hotplug */
         last_scan = now;
-        scan();
+        if (cfg.ndevices == 0) scan();
+        for (i = 0; i < cfg.ndevices; i++) try_open(cfg.devices[i], 0);
     }
 }

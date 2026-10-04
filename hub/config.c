@@ -155,6 +155,13 @@ int config_load(const char *path)
                 scr->min_move_ms = 1000 / hz;
             }
             else if (!strcasecmp(k, "remap")) { if (parse_remap(scr, v) < 0) goto bad; }
+            else if (!strcasecmp(k, "area")) {
+                int *a = scr->area[scr->narea];
+                if (scr->narea >= MAX_AREAS ||
+                    sscanf(v, "%dx%d+%d+%d", &a[2], &a[3], &a[0], &a[1]) != 4 || a[2] < 1 || a[3] < 1)
+                    goto bad;
+                scr->narea++;
+            }
             else goto bad;
             break;
         case S_MONITOR:

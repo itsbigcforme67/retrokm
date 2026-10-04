@@ -12,6 +12,7 @@
 #define MAX_REMAP     16
 #define MAX_DEVICES   16
 #define EXTRON_MAX_IO 64
+#define MAX_AREAS     8
 
 struct Screen;
 
@@ -55,6 +56,8 @@ typedef struct Screen {
     long long last_move_ms;
     unsigned char remap_from[MAX_REMAP], remap_to[MAX_REMAP];
     int nremap;
+    int area[MAX_AREAS][4];      /* visible rectangles x,y,w,h; none = all of it */
+    int narea;
 } Screen;
 
 typedef struct Monitor {
@@ -101,6 +104,7 @@ void hub_button(int btn, int down);
 void hub_wheel(int dy, int dx);
 void hub_key(int evcode, int usage, int state);
 void hub_extron_changed(void);
+int hub_routing(void);                  /* some screen is taking input */
 Screen *screen_by_name(const char *name);
 Monitor *monitor_by_name(const char *name);
 

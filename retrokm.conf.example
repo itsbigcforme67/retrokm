@@ -27,6 +27,11 @@ poll = 5               # seconds between re-reads, in case a change was missed
 [screen laptop]
 local = yes            # the hub's own desktop, driven through /dev/uinput
 size = 1920x1080
+# For a desktop made of monitors of different sizes, list the parts that are
+# really shown (WxH+X+Y, as xrandr prints them) so the pointer cannot get
+# lost in the gaps:
+#area = 1920x1080+0+0
+#area = 1080x1920+1920+0
 
 [screen octane]
 input = 1
@@ -66,6 +71,8 @@ output = 2
 # show <screen> [monitor]    route its video to a monitor (default: the one
 #                            under the pointer)
 # lock                       toggle switching at screen edges
+#
+# ctrl+alt+shift+escape always stops the hub, whatever is configured here.
 
 [hotkeys]
 ctrl+alt+1 = goto laptop
