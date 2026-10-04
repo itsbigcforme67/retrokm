@@ -1,0 +1,80 @@
+# RetroKM hub configuration.  Copy to retrokm.conf and edit.
+
+[hub]
+# Keyboards and mice to capture: auto (every keyboard and mouse, with
+# hotplug; touchpads are left alone), none, or one "device =" line per
+# /dev/input/by-id/... path.
+device = auto
+speed = 1.0            # pointer speed
+accel = 0.5            # 0 = no acceleration
+# When the switcher puts another machine on the monitor under the pointer:
+# follow = start controlling that machine, stay = keep the current one.
+on_tie = follow
+#listen = 0.0.0.0
+#port = 24850
+#control_port = 24851  # text commands on 127.0.0.1; 0 disables
+
+[extron]
+device = /dev/ttyUSB0
+baud = 9600
+poll = 5               # seconds between re-reads, in case a change was missed
+#tie_command = !       # ! = video+audio, & = RGBHV only, % = video only
+#read_command = %      # CrossPoint 300 and other RGBHV models may want &
+
+# ---- machines ---------------------------------------------------------------
+# "input" is the switcher input the machine's video is wired to.
+
+[screen laptop]
+local = yes            # the hub's own desktop, driven through /dev/uinput
+size = 1920x1080
+
+[screen octane]
+input = 1
+
+[screen pc]            # Windows 98 SE and 2000 on the same box: use one name in both
+input = 2
+
+[screen quadra]
+input = 3
+rate = 60              # pointer updates per second; lower it for slow machines
+speed = 0.6            # small screen, slow the pointer down
+# A PC keyboard's Alt sits where a Mac's Command is.  Swap them here:
+remap = leftalt:leftmeta, leftmeta:leftalt
+
+[screen g4]
+input = 4
+remap = leftalt:leftmeta, leftmeta:leftalt
+
+# ---- monitors, as they stand on the desk -------------------------------------
+# pos = column,row.  Each monitor either always shows one screen, or shows
+# whatever the switcher currently ties to an output.
+
+[monitor left]
+pos = 0,0
+output = 1
+
+[monitor laptop]
+pos = 1,0
+screen = laptop
+
+[monitor right]
+pos = 2,0
+output = 2
+
+# ---- hotkeys ------------------------------------------------------------------
+# goto <screen>              control a machine, shown or not
+# show <screen> [monitor]    route its video to a monitor (default: the one
+#                            under the pointer)
+# lock                       toggle switching at screen edges
+
+[hotkeys]
+ctrl+alt+1 = goto laptop
+ctrl+alt+2 = goto octane
+ctrl+alt+3 = goto pc
+ctrl+alt+4 = goto quadra
+ctrl+alt+5 = goto g4
+ctrl+alt+f2 = show octane
+ctrl+alt+f3 = show pc
+ctrl+alt+f4 = show quadra
+ctrl+alt+f5 = show g4
+ctrl+alt+l = lock
