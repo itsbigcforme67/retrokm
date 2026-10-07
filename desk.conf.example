@@ -1,0 +1,64 @@
+# A whole desk behind an Extron MVX 88 (8x8 VGA), for the Tab5 touch panel.
+# Copy to retrokm.conf and change the input / output numbers to match how
+# the cables are really wired.
+
+[hub]
+device = auto
+panel_port = 24852     # the Tab5 panel connects here
+#state = /etc/retrokm.conf.state   # where panel moves are saved (default: config + .state)
+
+[extron]
+device = /dev/ttyUSB0
+baud = 9600
+inputs = 8
+outputs = 8
+
+# ---- machines -----------------------------------------------------------------
+# art picks the panel's picture: ideapad, precision, armbox, octane (or blank)
+
+[screen laptop]
+label = IdeaPad Gaming 3
+art = ideapad
+area = 1920x1080+0+0
+area = 1080x1920+1920+0
+
+[screen precision]     # Windows 98 SE and 2000
+label = Precision 410
+art = precision
+input = 1
+
+[screen armbox]
+label = Media box
+art = armbox
+input = 2
+
+[screen octane]
+label = Octane
+art = octane
+input = 3
+speed = 0.8
+
+# ---- monitors -------------------------------------------------------------------
+
+[monitor laptop]
+pos = 1,0
+screen = laptop
+
+[monitor left]
+pos = 0,0
+output = 1
+
+[monitor right]
+pos = 2,0
+output = 2
+
+[monitor top]
+pos = 1,-1
+output = 3
+
+[hotkeys]
+ctrl+alt+1 = goto laptop
+ctrl+alt+2 = goto precision
+ctrl+alt+3 = goto armbox
+ctrl+alt+4 = goto octane
+ctrl+alt+l = lock

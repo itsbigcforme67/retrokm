@@ -54,6 +54,7 @@ This was built without access to the real hardware. Be clear-eyed about it:
 | `rkm-uinput` Linux agent | Compiles; not run |
 | `rkm_clip.py` | Tested with stand-in commands, not with wl-clipboard itself |
 | Windows agent | Written and syntax-checked against stub headers only; never compiled with a real SDK or run |
+| Tab5 touch panel (`panel/`) | Tested in its Linux build against the hub and the Extron simulator; builds for the Tab5, not yet run on it |
 | Classic Mac agent | Written and syntax-checked against stub headers only; never compiled with Retro68 or run |
 
 Expect the Windows and Mac agents to need a debugging pass on real machines.
@@ -144,6 +145,12 @@ sudo build/rkm-uinput -n laptop -g 1920x1080 192.168.1.10    # input
 agents/linux/rkm_clip.py -n laptop 192.168.1.10              # clipboard, in your session
 ```
 
+## Touch panel
+
+An M5Stack Tab5 can show the desk and rearrange it: drag machines onto
+monitors to switch the Extron, drag monitors around, tap a machine to give it
+the keyboard. See [panel/README.md](panel/README.md).
+
 ## Using it
 
 - Push the pointer off the edge of a monitor to move to the machine on the
@@ -208,6 +215,7 @@ agents/x11/     IRIX and other X11 systems
 agents/win32/   Windows 98 SE / 2000
 agents/macos/   classic Mac OS (68k binary, also for PowerPC)
 agents/linux/   uinput input agent and clipboard helper
+panel/          M5Stack Tab5 touch panel (desk map, drag-to-switch)
 tests/          end-to-end test, Extron simulator, build stubs
 docs/           protocol description
 ```

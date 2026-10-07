@@ -13,10 +13,14 @@ on_tie = follow
 #listen = 0.0.0.0
 #port = 24850
 #control_port = 24851  # text commands on 127.0.0.1; 0 disables
+#panel_port = 24852    # Tab5 touch panel, on the LAN (see panel/README.md)
+#state = retrokm.conf.state   # where monitor moves from the panel are saved
 
 [extron]
 device = /dev/ttyUSB0
 baud = 9600
+#inputs = 8            # matrix size, for the touch panel
+#outputs = 8
 poll = 5               # seconds between re-reads, in case a change was missed
 #tie_command = !       # ! = video+audio, & = RGBHV only, % = video only
 #read_command = %      # CrossPoint 300 and other RGBHV models may want &
@@ -25,6 +29,8 @@ poll = 5               # seconds between re-reads, in case a change was missed
 # "input" is the switcher input the machine's video is wired to.
 
 [screen laptop]
+#label = IdeaPad Gaming 3   # name and picture on the touch panel
+#art = ideapad
 local = yes            # the hub's own desktop, driven through /dev/uinput
 size = 1920x1080
 # For a desktop made of monitors of different sizes, list the parts that are

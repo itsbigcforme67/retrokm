@@ -8,6 +8,8 @@
 
 Config cfg;
 
+static void load_state(void);
+
 static char mon_fixed[MAX_MONITORS][32];   /* resolved after the whole file is read */
 
 static char *trim(char *s)
@@ -71,6 +73,9 @@ int config_load(const char *path)
     cfg.extron_poll = 5;
     cfg.extron_tie_cmd = '!';
     cfg.extron_read_cmd = '%';
+    cfg.extron_inputs = 8;
+    cfg.extron_outputs = 8;
+    snprintf(cfg.state_path, sizeof cfg.state_path, "%s.state", path);
 
     while (fgets(line, sizeof line, f)) {
         char *s = trim(line), *eq, *k, *v, *c;
@@ -122,6 +127,8 @@ int config_load(const char *path)
             if (!strcasecmp(k, "listen")) copy(cfg.listen, sizeof cfg.listen, v);
             else if (!strcasecmp(k, "port")) cfg.port = atoi(v);
             else if (!strcasecmp(k, "control_port")) cfg.ctl_port = atoi(v);
+            else if (!strcasecmp(k, "panel_port")) cfg.panel_port = atoi(v);
+            else if (!strcasecmp(k, "state")) copy(cfg.state_path, sizeof cfg.state_path, v);
             else if (!strcasecmp(k, "grab")) cfg.grab = truthy(v);
             else if (!strcasecmp(k, "speed")) cfg.speed = atof(v);
             else if (!strcasecmp(k, "accel")) cfg.accel = atof(v);
@@ -140,10 +147,14 @@ int config_load(const char *path)
             else if (!strcasecmp(k, "poll")) cfg.extron_poll = atoi(v);
             else if (!strcasecmp(k, "tie_command") && *v) cfg.extron_tie_cmd = *v;
             else if (!strcasecmp(k, "read_command") && *v) cfg.extron_read_cmd = *v;
+            else if (!strcasecmp(k, "inputs")) cfg.extron_inputs = atoi(v);
+            else if (!strcasecmp(k, "outputs")) cfg.extron_outputs = atoi(v);
             else goto bad;
             break;
         case S_SCREEN:
             if (!strcasecmp(k, "local")) scr->local = truthy(v);
+            else if (!strcasecmp(k, "label")) copy(scr->label, sizeof scr->label, v);
+            else if (!strcasecmp(k, "art")) copy(scr->art, sizeof scr->art, v);
             else if (!strcasecmp(k, "size")) {
                 if (sscanf(v, "%dx%d", &scr->w, &scr->h) != 2) goto bad;
             }
@@ -208,6 +219,47 @@ bad:
     }
     if (cfg.nscreens == 0) {
         fprintf(stderr, "%s: no [screen] sections\n", path);
+        return -1;
+    }
+    load_state();
+    return 0;
+}
+
+/* Monitor positions moved from the touch panel override the config's, and
+ * live in a small file of their own so the config is never rewritten. */
+static void load_state(void)
+{
+    FILE *f = fopen(cfg.state_path, "r");
+    char line[128], name[32];
+    int col, row;
+
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        Monitor *m;
+        if (sscanf(line, "monitor %31s %d %d", name, &col, &row) == 3 && (m = monitor_by_name(name))) {
+            m->col = col;
+            m->row = row;
+        }
+    }
+    fclose(f);
+}
+
+int config_save_state(void)
+{
+    char tmp[sizeof cfg.state_path + 4];
+    FILE *f;
+    int i;
+
+    snprintf(tmp, sizeof tmp, "%s.new", cfg.state_path);
+    if (!(f = fopen(tmp, "w"))) {
+        logmsg("cannot save %s", cfg.state_path);
+        return -1;
+    }
+    fprintf(f, "# monitor positions set from the touch panel; delete to go back to the config\n");
+    for (i = 0; i < cfg.nmonitors; i++)
+        fprintf(f, "monitor %s %d %d\n", cfg.monitors[i].name, cfg.monitors[i].col, cfg.monitors[i].row);
+    if (fclose(f) != 0 || rename(tmp, cfg.state_path) != 0) {
+        logmsg("cannot save %s", cfg.state_path);
         return -1;
     }
     return 0;

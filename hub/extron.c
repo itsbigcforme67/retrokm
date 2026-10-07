@@ -88,6 +88,8 @@ int extron_init(void)
 
 int extron_fd(void) { return fd; }
 
+int extron_online(void) { return fd >= 0; }
+
 int extron_input_for(int output)
 {
     return (output >= 1 && output <= EXTRON_MAX_IO) ? tie[output] : 0;
@@ -103,7 +105,7 @@ static void port_write(const char *s)
 void extron_tie(int input, int output)
 {
     char cmd[32];
-    if (input < 1 || output < 1 || input > EXTRON_MAX_IO || output > EXTRON_MAX_IO) return;
+    if (input < 0 || output < 1 || input > EXTRON_MAX_IO || output > EXTRON_MAX_IO) return;
     snprintf(cmd, sizeof cmd, "%d*%d%c", input, output, cfg.extron_tie_cmd);
     port_write(cmd);
     need[output] = watched[output];            /* confirm even if the reply is lost */

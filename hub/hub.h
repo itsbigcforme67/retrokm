@@ -16,7 +16,7 @@
 
 struct Screen;
 
-enum { CONN_FREE = 0, CONN_AGENT, CONN_CTL };
+enum { CONN_FREE = 0, CONN_AGENT, CONN_CTL, CONN_PANEL };
 
 typedef struct Conn {
     int kind;
@@ -37,10 +37,14 @@ typedef struct Conn {
     /* control */
     char line[256];
     int line_len;
+    /* panel */
+    unsigned layout_sent;        /* hash of the last layout it was sent */
 } Conn;
 
 typedef struct Screen {
     char name[32];
+    char label[48];              /* shown on the touch panel */
+    char art[16];                /* which picture the panel draws */
     int w, h;                    /* pixels; from HELLO, or config for local */
     int local;                   /* injected by the hub itself through uinput */
     int extron_input;            /* 0 = not routed through the switcher */
@@ -77,6 +81,8 @@ typedef struct Hotkey {
 typedef struct Config {
     char listen[64];
     int port, ctl_port;
+    int panel_port;              /* touch panel, on the LAN; 0 = off */
+    char state_path[256];        /* monitor positions moved from the panel */
     char devices[MAX_DEVICES][128];
     int ndevices;                /* 0 = auto-detect */
     int grab;
@@ -84,6 +90,7 @@ typedef struct Config {
     int follow_tie;              /* active screen follows the monitor on a tie */
     char extron_dev[128];
     int extron_baud, extron_poll;
+    int extron_inputs, extron_outputs;   /* size of the matrix */
     char extron_tie_cmd, extron_read_cmd;
     Screen screens[MAX_SCREENS];
     int nscreens;
@@ -110,6 +117,7 @@ Monitor *monitor_by_name(const char *name);
 
 /* config.c */
 int config_load(const char *path);
+int config_save_state(void);
 
 /* keymap.c */
 int evdev_to_hid(int code);
@@ -137,7 +145,8 @@ int extron_fd(void);
 void extron_readable(void);
 void extron_tick(void);
 int extron_input_for(int output);       /* 0 = unknown */
-void extron_tie(int input, int output);
+void extron_tie(int input, int output);  /* input 0 = disconnect */
+int extron_online(void);
 void extron_watch(int output);
 
 /* text.c */

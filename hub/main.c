@@ -29,7 +29,7 @@
 int verbose;
 
 static Conn conns[MAX_CONNS];
-static int lfd = -1, cfd = -1;
+static int lfd = -1, cfd = -1, pfd_listen = -1;
 static volatile sig_atomic_t quit;
 
 static Screen *active;           /* screen receiving input, or NULL */
@@ -694,6 +694,171 @@ static void run_command(char *cmd, Conn *r)
     }
 }
 
+/* ---- touch panel -------------------------------------------------------- */
+
+/* The panel (an M5Stack Tab5 on the LAN) sees the layout and may rearrange
+ * monitors and switcher ties, and pick which machine gets the keyboard.  It
+ * cannot inject input.  Each change to the layout is pushed to it as one
+ * line: "layout {json}". */
+
+typedef struct { char *p; size_t len, cap; } Sbuf;
+
+static void sb_printf(Sbuf *b, const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+
+    for (;;) {
+        va_start(ap, fmt);
+        n = vsnprintf(b->p ? b->p + b->len : NULL, b->p ? b->cap - b->len : 0, fmt, ap);
+        va_end(ap);
+        if (n < 0) return;
+        if (b->p && b->len + (size_t)n < b->cap) { b->len += (size_t)n; return; }
+        b->cap = (b->cap + (size_t)n + 1) * 2;
+        b->p = realloc(b->p, b->cap);
+        if (!b->p) { b->len = b->cap = 0; return; }
+    }
+}
+
+static void sb_str(Sbuf *b, const char *s)   /* JSON string */
+{
+    sb_printf(b, "\"");
+    for (; *s; s++) {
+        if (*s == '"' || *s == '\\') sb_printf(b, "\\%c", *s);
+        else if ((unsigned char)*s < 0x20) sb_printf(b, " ");
+        else sb_printf(b, "%c", *s);
+    }
+    sb_printf(b, "\"");
+}
+
+static void layout_json(Sbuf *b)
+{
+    int i;
+
+    sb_printf(b, "{\"active\":");
+    sb_str(b, active ? active->name : "");
+    sb_printf(b, ",\"locked\":%d,\"switcher\":{\"present\":%d,\"online\":%d,\"inputs\":%d,\"outputs\":%d}",
+              locked, cfg.extron_dev[0] != 0, extron_online(), cfg.extron_inputs, cfg.extron_outputs);
+    sb_printf(b, ",\"screens\":[");
+    for (i = 0; i < cfg.nscreens; i++) {
+        Screen *s = &cfg.screens[i];
+        sb_printf(b, "%s{\"name\":", i ? "," : "");
+        sb_str(b, s->name);
+        sb_printf(b, ",\"label\":");
+        sb_str(b, s->label[0] ? s->label : s->name);
+        sb_printf(b, ",\"art\":");
+        sb_str(b, s->art);
+        sb_printf(b, ",\"input\":%d,\"ready\":%d,\"w\":%d,\"h\":%d}", s->extron_input, ready(s), s->w, s->h);
+    }
+    sb_printf(b, "],\"monitors\":[");
+    for (i = 0; i < cfg.nmonitors; i++) {
+        Monitor *m = &cfg.monitors[i];
+        sb_printf(b, "%s{\"name\":", i ? "," : "");
+        sb_str(b, m->name);
+        sb_printf(b, ",\"col\":%d,\"row\":%d,\"fixed\":", m->col, m->row);
+        sb_str(b, m->fixed ? m->fixed->name : "");
+        sb_printf(b, ",\"output\":%d,\"input\":%d,\"shows\":", m->extron_output,
+                  m->fixed ? 0 : extron_input_for(m->extron_output));
+        sb_str(b, m->cur ? m->cur->name : "");
+        sb_printf(b, "}");
+    }
+    sb_printf(b, "]}");
+}
+
+static unsigned fnv(const char *s, size_t n)
+{
+    unsigned h = 2166136261u;
+    while (n--) h = (h ^ (unsigned char)*s++) * 16777619u;
+    return h;
+}
+
+/* Called every pass of the main loop: send the layout to panels that have
+ * not seen this version of it. */
+static void panel_push(int force)
+{
+    Sbuf b = { 0, 0, 0 };
+    unsigned h;
+    int i, any = 0;
+
+    for (i = 0; i < MAX_CONNS; i++)
+        if (conns[i].kind == CONN_PANEL && !conns[i].dead) any = 1;
+    if (!any) return;
+    sb_printf(&b, "layout ");
+    layout_json(&b);
+    sb_printf(&b, "\n");
+    if (!b.p) return;
+    h = fnv(b.p, b.len);
+    for (i = 0; i < MAX_CONNS; i++) {
+        Conn *c = &conns[i];
+        if (c->kind != CONN_PANEL || c->dead || (!force && c->layout_sent == h)) continue;
+        c->layout_sent = h;
+        conn_write(c, b.p, b.len);
+    }
+    free(b.p);
+}
+
+static Monitor *monitor_at(int col, int row)
+{
+    int i;
+    for (i = 0; i < cfg.nmonitors; i++)
+        if (cfg.monitors[i].col == col && cfg.monitors[i].row == row) return &cfg.monitors[i];
+    return NULL;
+}
+
+static void run_panel_command(char *cmd, Conn *r)
+{
+    char *argv[5] = { 0, 0, 0, 0, 0 }, *save = NULL, *tok;
+    int argc = 0;
+
+    for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 5; tok = strtok_r(NULL, " \t\r\n", &save))
+        argv[argc++] = tok;
+    if (argc == 0) return;
+
+    if (!strcasecmp(argv[0], "layout")) {
+        r->layout_sent = 0;                       /* send it again, even if unchanged */
+    } else if (!strcasecmp(argv[0], "tie") && argc == 3) {
+        /* tie <screen> <monitor>: put that machine's video on that monitor */
+        Screen *s = screen_by_name(argv[1]);
+        Monitor *m = monitor_by_name(argv[2]);
+        if (!s || !s->extron_input) ctl_printf(r, "error %s is not wired to the switcher\n", argv[1]);
+        else if (!m || m->fixed) ctl_printf(r, "error %s is not a switched monitor\n", argv[2]);
+        else if (!extron_online()) ctl_printf(r, "error the switcher is not connected\n");
+        else extron_tie(s->extron_input, m->extron_output);
+    } else if (!strcasecmp(argv[0], "untie") && argc == 2) {
+        Monitor *m = monitor_by_name(argv[1]);
+        if (!m || m->fixed) ctl_printf(r, "error %s is not a switched monitor\n", argv[1]);
+        else if (!extron_online()) ctl_printf(r, "error the switcher is not connected\n");
+        else extron_tie(0, m->extron_output);
+    } else if (!strcasecmp(argv[0], "move") && argc == 4) {
+        /* move <monitor> <col> <row>; whatever stood there takes its old place */
+        Monitor *m = monitor_by_name(argv[1]), *o;
+        int col = atoi(argv[2]), row = atoi(argv[3]);
+        if (!m || col < -20 || col > 20 || row < -20 || row > 20) {
+            ctl_printf(r, "error bad move\n");
+            return;
+        }
+        if ((o = monitor_at(col, row)) && o != m) {
+            o->col = m->col;
+            o->row = m->row;
+        }
+        m->col = col;
+        m->row = row;
+        logmsg("panel: monitor %s moved to %d,%d", m->name, col, row);
+        config_save_state();
+    } else if (!strcasecmp(argv[0], "goto") && argc == 2) {
+        Screen *s = screen_by_name(argv[1]);
+        if (!s || !ready(s)) ctl_printf(r, "error %s is offline\n", argv[1]);
+        else goto_screen(s);
+    } else if (!strcasecmp(argv[0], "lock")) {
+        locked = argc >= 2 ? !strcasecmp(argv[1], "on") : !locked;
+    } else if (!strcasecmp(argv[0], "ping")) {
+        ctl_printf(r, "pong\n");
+    } else {
+        ctl_printf(r, "error commands are layout, tie <screen> <monitor>, untie <monitor>, "
+                      "move <monitor> <col> <row>, goto <screen>, lock [on|off], ping\n");
+    }
+}
+
 /* ---- agent protocol ----------------------------------------------------- */
 
 static void conn_detach(Conn *c)
@@ -863,7 +1028,7 @@ static void accept_conn(int from, int kind)
     c->last_rx_ms = now_ms();
     rkm_parser_init(&c->ps);
     snprintf(c->peer, sizeof c->peer, "%s:%d", inet_ntoa(sa.sin_addr), ntohs(sa.sin_port));
-    if (verbose) logmsg("%s: %s connection", c->peer, kind == CONN_CTL ? "control" : "agent");
+    if (verbose) logmsg("%s: %s connection", c->peer, kind == CONN_CTL ? "control" : kind == CONN_PANEL ? "panel" : "agent");
 }
 
 static void conn_readable(Conn *c)
@@ -887,7 +1052,8 @@ static void conn_readable(Conn *c)
         if (buf[i] == '\n') {
             c->line[c->line_len] = 0;
             c->line_len = 0;
-            run_command(c->line, c);
+            if (c->kind == CONN_PANEL) run_panel_command(c->line, c);
+            else run_command(c->line, c);
         } else if (c->line_len < (int)sizeof c->line - 1) {
             c->line[c->line_len++] = (char)buf[i];
         }
@@ -918,6 +1084,10 @@ static void housekeeping(void)
     if (now - last_ping < 1000) return;
     for (i = 0; i < MAX_CONNS; i++) {
         Conn *c = &conns[i];
+        if (c->kind == CONN_PANEL && !c->dead && now - c->last_rx_ms > DEAD_MS) {
+            logmsg("%s: panel went quiet, dropping", c->peer);   /* it pings every few seconds */
+            c->dead = 1;
+        }
         if (c->kind != CONN_AGENT || c->dead) continue;
         if (!c->screen && now - c->last_rx_ms > HELLO_MS) c->dead = 1;
         else if (now - c->last_rx_ms > DEAD_MS) {
@@ -971,18 +1141,21 @@ int main(int argc, char **argv)
     lfd = listen_on(cfg.listen, cfg.port);
     if (lfd < 0) return 1;
     if (cfg.ctl_port > 0 && (cfd = listen_on("127.0.0.1", cfg.ctl_port)) < 0) return 1;
+    if (cfg.panel_port > 0 && (pfd_listen = listen_on(cfg.listen, cfg.panel_port)) < 0) return 1;
     extron_init();
     input_init();
     logmsg("hub ready: agents on %s:%d, control on 127.0.0.1:%d", cfg.listen, cfg.port, cfg.ctl_port);
+    if (pfd_listen >= 0) logmsg("touch panel on %s:%d", cfg.listen, cfg.panel_port);
     relayout();
 
     while (!quit) {
-        struct pollfd pfd[MAX_CONNS + MAX_DEVICES + 4];
-        Conn *pc[MAX_CONNS + MAX_DEVICES + 4];
-        int infds[MAX_DEVICES], nin, n = 0, timeout = 100, base_in, xfd, xi = -1, ci = -1;
+        struct pollfd pfd[MAX_CONNS + MAX_DEVICES + 5];
+        Conn *pc[MAX_CONNS + MAX_DEVICES + 5];
+        int infds[MAX_DEVICES], nin, n = 0, timeout = 100, base_in, xfd, xi = -1, ci = -1, pi = -1;
 
         pfd[n].fd = lfd; pfd[n].events = POLLIN; pc[n++] = NULL;
         if (cfd >= 0) { ci = n; pfd[n].fd = cfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
+        if (pfd_listen >= 0) { pi = n; pfd[n].fd = pfd_listen; pfd[n].events = POLLIN; pc[n++] = NULL; }
         xfd = extron_fd();
         if (xfd >= 0) { xi = n; pfd[n].fd = xfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
         base_in = n;
@@ -1003,6 +1176,7 @@ int main(int argc, char **argv)
 
         if (pfd[0].revents & POLLIN) accept_conn(lfd, CONN_AGENT);
         if (ci >= 0 && (pfd[ci].revents & POLLIN)) accept_conn(cfd, CONN_CTL);
+        if (pi >= 0 && (pfd[pi].revents & POLLIN)) accept_conn(pfd_listen, CONN_PANEL);
         if (xi >= 0 && pfd[xi].revents) extron_readable();
         for (i = 0; i < nin; i++)
             if (pfd[base_in + i].revents) input_readable(infds[i]);
@@ -1023,6 +1197,7 @@ int main(int argc, char **argv)
         extron_tick();
         housekeeping();
         reap();
+        panel_push(0);
     }
 
     if (active) do_leave(active);
