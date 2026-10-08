@@ -53,11 +53,11 @@ This was built without access to the real hardware. Be clear-eyed about it:
 | Hub keyboard/mouse capture (evdev) and local injection (uinput) | Compiles; not run, the build machine had no input devices |
 | `rkm-uinput` Linux agent | Compiles; not run |
 | `rkm_clip.py` | Tested with stand-in commands, not with wl-clipboard itself |
-| Windows agent | Written and syntax-checked against stub headers only; never compiled with a real SDK or run |
+| Windows agent | Built with Open Watcom (`agents/win32/build-watcom.sh`); works on Windows 2000 (Dell Precision 410); not yet run on 98 SE |
 | Tab5 touch panel (`panel/`) | Tested in its Linux build against the hub and the Extron simulator; builds for the Tab5, not yet run on it |
 | Classic Mac agent | Written and syntax-checked against stub headers only; never compiled with Retro68 or run |
 
-Expect the Windows and Mac agents to need a debugging pass on real machines.
+Expect the Mac agent to need a debugging pass on real machines.
 The Mac agent in particular pokes low-memory globals at interrupt time; try
 it on a machine you do not mind rebooting.
 
