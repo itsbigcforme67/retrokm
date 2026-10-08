@@ -19,11 +19,13 @@ panel_port = 24852
 ```
 
 Give each `[screen]` a `label` and an `art` (`ideapad`, `precision`,
-`armbox`, `octane`; anything else gets a plain box). `desk.conf.example`
+`armbox`, `octane`, `dreamcast`; anything else gets a plain box). A monitor
+with `shared = <machine>` has a second input; tap it on the panel to say
+which input it is on. `desk.conf.example`
 has a full desk behind an Extron MVX 88.
 
 The panel port takes `layout`, `tie <screen> <monitor>`, `untie <monitor>`,
-`move <monitor> <col> <row>`, `goto <screen>`, `lock` and `ping`, and pushes
+`move <monitor> <col> <row>`, `share <monitor> [on|off]`, `goto <screen>`, `lock` and `ping`, and pushes
 `layout {json}` whenever anything changes. It cannot type keys or move the
 pointer. Like the rest of RetroKM it has no password, so keep it on your
 own network.

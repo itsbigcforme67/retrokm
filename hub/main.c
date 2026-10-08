@@ -88,7 +88,7 @@ Monitor *monitor_by_name(const char *name)
 
 static int ready(const Screen *s)
 {
-    return s && (s->local || s->in);
+    return s && !s->no_agent && (s->local || s->in);
 }
 
 static int is_rel(const Screen *s)
@@ -246,6 +246,7 @@ static void resolve_monitors(void)
         Monitor *m = &cfg.monitors[i];
         int in;
         if (m->fixed) { m->cur = m->fixed; continue; }
+        if (m->shared && m->shared_on) { m->cur = m->shared; continue; }
         m->cur = NULL;
         in = extron_input_for(m->extron_output);
         if (in <= 0) continue;
@@ -294,15 +295,31 @@ static Monitor *neighbor(const Monitor *m, int dir)
 
 /* ---- visible areas ------------------------------------------------------ */
 
+/* An area tied to a shared monitor only counts while that monitor shows
+ * this screen. */
+static int area_on(const Screen *s, int i)
+{
+    return s->area_mon[i] < 0 || cfg.monitors[s->area_mon[i]].shared_on;
+}
+
+static int has_areas(const Screen *s)
+{
+    int i;
+    for (i = 0; i < s->narea; i++)
+        if (area_on(s, i)) return 1;
+    return 0;
+}
+
 /* Index of the area holding x,y; -1 if none.  No areas: all of it. */
 static int area_at(const Screen *s, double x, double y)
 {
     int i;
     for (i = 0; i < s->narea; i++) {
         const int *a = s->area[i];
+        if (!area_on(s, i)) continue;
         if (x >= a[0] && x <= a[0] + a[2] - 1 && y >= a[1] && y <= a[1] + a[3] - 1) return i;
     }
-    return s->narea ? -1 : 0;
+    return has_areas(s) ? -1 : 0;
 }
 
 static double clampd(double v, double lo, double hi)
@@ -329,12 +346,38 @@ static void fit_area(const Screen *s, double *x, double *y, double ox, double oy
     }
     for (i = 0; i < s->narea; i++) {            /* last resort: nearest area */
         const int *a = s->area[i];
+        if (!area_on(s, i)) continue;
         double cx = clampd(*x, a[0], a[0] + a[2] - 1), cy = clampd(*y, a[1], a[1] + a[3] - 1);
         double d = (cx - *x) * (cx - *x) + (cy - *y) * (cy - *y);
         if (best < 0 || d < best) { best = d; ox = cx; oy = cy; }
     }
     *x = ox;
     *y = oy;
+}
+
+/* Where the pointer lands on screen t when it arrives moving in direction
+ * dir: on the side it came in from, at the same fraction along the edge. */
+static void entry_point(const Screen *t, int dir, double fx, double fy, double *tx, double *ty)
+{
+    int r[4] = { 0, 0, t->w, t->h }, i, best = -1;
+
+    for (i = 0; i < t->narea; i++) {      /* the area that edge belongs to */
+        const int *a = t->area[i];
+        if (!area_on(t, i)) continue;
+        if (best < 0 ||
+            (dir == DIR_RIGHT && a[0] < t->area[best][0]) ||
+            (dir == DIR_LEFT && a[0] + a[2] > t->area[best][0] + t->area[best][2]) ||
+            (dir == DIR_DOWN && a[1] < t->area[best][1]) ||
+            (dir == DIR_UP && a[1] + a[3] > t->area[best][1] + t->area[best][3]))
+            best = i;
+    }
+    if (best >= 0) memcpy(r, t->area[best], sizeof r);
+    *tx = r[0] + fx * (r[2] - 1);
+    *ty = r[1] + fy * (r[3] - 1);
+    if (dir == DIR_LEFT) *tx = r[0] + r[2] - 3;
+    else if (dir == DIR_RIGHT) *tx = r[0] + 2;
+    else if (dir == DIR_UP) *ty = r[1] + r[3] - 3;
+    else *ty = r[1] + 2;
 }
 
 /* ---- switching ---------------------------------------------------------- */
@@ -484,7 +527,7 @@ void hub_motion(int dx, int dy)
 {
     Screen *s = active;
     double mag, gain, nx, ny;
-    int dir = 0;
+    int dir = 0, r[4];
     touched = 1;
 
     if (!s) return;
@@ -493,22 +536,27 @@ void hub_motion(int dx, int dy)
     nx = px + dx * gain;
     ny = py + dy * gain;
 
-    if (nx < 0) dir = DIR_LEFT;
-    else if (nx > s->w - 1) dir = DIR_RIGHT;
-    else if (ny < 0) dir = DIR_UP;
-    else if (ny > s->h - 1) dir = DIR_DOWN;
+    /* the rectangle the pointer is on: an area, or the whole screen */
+    {
+        int ai = area_at(s, px, py);
+        if (has_areas(s) && ai >= 0) { r[0] = s->area[ai][0]; r[1] = s->area[ai][1]; r[2] = s->area[ai][2]; r[3] = s->area[ai][3]; }
+        else { r[0] = 0; r[1] = 0; r[2] = s->w; r[3] = s->h; }
+    }
+    if (nx < 0 || ny < 0 || nx > s->w - 1 || ny > s->h - 1 || area_at(s, nx, ny) < 0) {
+        /* leaving the screen, or running off an area into a gap */
+        if (nx < r[0]) dir = DIR_LEFT;
+        else if (nx > r[0] + r[2] - 1) dir = DIR_RIGHT;
+        else if (ny < r[1]) dir = DIR_UP;
+        else if (ny > r[1] + r[3] - 1) dir = DIR_DOWN;
+    }
 
     if (dir && !buttons && !locked && active_mon) {
         Monitor *m = neighbor(active_mon, dir);
         if (m) {
-            Screen *t = m->cur;
-            double fx = px / (s->w > 1 ? s->w - 1 : 1), fy = py / (s->h > 1 ? s->h - 1 : 1);
-            double tx = fx * (t->w - 1), ty = fy * (t->h - 1);
-            if (dir == DIR_LEFT) tx = t->w - 3;
-            else if (dir == DIR_RIGHT) tx = 2;
-            else if (dir == DIR_UP) ty = t->h - 3;
-            else ty = 2;
-            switch_to(t, m, tx, ty);
+            double fx = (px - r[0]) / (r[2] > 1 ? r[2] - 1 : 1), fy = (py - r[1]) / (r[3] > 1 ? r[3] - 1 : 1);
+            double tx, ty;
+            entry_point(m->cur, dir, fx, fy, &tx, &ty);
+            switch_to(m->cur, m, tx, ty);
             return;
         }
     }
@@ -748,7 +796,8 @@ static void layout_json(Sbuf *b)
         sb_str(b, s->label[0] ? s->label : s->name);
         sb_printf(b, ",\"art\":");
         sb_str(b, s->art);
-        sb_printf(b, ",\"input\":%d,\"ready\":%d,\"w\":%d,\"h\":%d}", s->extron_input, ready(s), s->w, s->h);
+        sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"w\":%d,\"h\":%d}", s->extron_input,
+                  ready(s), !s->no_agent, s->w, s->h);
     }
     sb_printf(b, "],\"monitors\":[");
     for (i = 0; i < cfg.nmonitors; i++) {
@@ -760,7 +809,9 @@ static void layout_json(Sbuf *b)
         sb_printf(b, ",\"output\":%d,\"input\":%d,\"shows\":", m->extron_output,
                   m->fixed ? 0 : extron_input_for(m->extron_output));
         sb_str(b, m->cur ? m->cur->name : "");
-        sb_printf(b, "}");
+        sb_printf(b, ",\"shared\":");
+        sb_str(b, m->shared ? m->shared->name : "");
+        sb_printf(b, ",\"sharedOn\":%d,\"portrait\":%d}", m->shared_on, m->portrait);
     }
     sb_printf(b, "]}");
 }
@@ -823,7 +874,14 @@ static void run_panel_command(char *cmd, Conn *r)
         if (!s || !s->extron_input) ctl_printf(r, "error %s is not wired to the switcher\n", argv[1]);
         else if (!m || m->fixed) ctl_printf(r, "error %s is not a switched monitor\n", argv[2]);
         else if (!extron_online()) ctl_printf(r, "error the switcher is not connected\n");
-        else extron_tie(s->extron_input, m->extron_output);
+        else {
+            extron_tie(s->extron_input, m->extron_output);
+            if (m->shared_on) {                    /* it must be on its switcher input now */
+                m->shared_on = 0;
+                config_save_state();
+                relayout();
+            }
+        }
     } else if (!strcasecmp(argv[0], "untie") && argc == 2) {
         Monitor *m = monitor_by_name(argv[1]);
         if (!m || m->fixed) ctl_printf(r, "error %s is not a switched monitor\n", argv[1]);
@@ -845,6 +903,16 @@ static void run_panel_command(char *cmd, Conn *r)
         m->row = row;
         logmsg("panel: monitor %s moved to %d,%d", m->name, col, row);
         config_save_state();
+    } else if (!strcasecmp(argv[0], "share") && argc >= 2) {
+        /* share <monitor> [on|off]: which of its inputs the monitor shows */
+        Monitor *m = monitor_by_name(argv[1]);
+        if (!m || !m->shared) ctl_printf(r, "error %s has no second input\n", argv[1]);
+        else {
+            m->shared_on = argc >= 3 ? !strcasecmp(argv[2], "on") : !m->shared_on;
+            logmsg("panel: monitor %s now shows %s", m->name, m->shared_on ? m->shared->name : "the switcher");
+            config_save_state();
+            relayout();
+        }
     } else if (!strcasecmp(argv[0], "goto") && argc == 2) {
         Screen *s = screen_by_name(argv[1]);
         if (!s || !ready(s)) ctl_printf(r, "error %s is offline\n", argv[1]);
@@ -855,7 +923,7 @@ static void run_panel_command(char *cmd, Conn *r)
         ctl_printf(r, "pong\n");
     } else {
         ctl_printf(r, "error commands are layout, tie <screen> <monitor>, untie <monitor>, "
-                      "move <monitor> <col> <row>, goto <screen>, lock [on|off], ping\n");
+                      "move <monitor> <col> <row>, share <monitor> [on|off], goto <screen>, lock [on|off], ping\n");
     }
 }
 

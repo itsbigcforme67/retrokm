@@ -91,7 +91,7 @@ static void computeGrid() {
   }
   grid.cmin = c0; grid.rmin = r0;
   grid.ncol = c1 - c0 + 1; grid.nrow = r1 - r0 + 1;
-  float ch = std::min(190.0f, (float)AH / grid.nrow);
+  float ch = std::min(230.0f, (float)AH / grid.nrow);
   float cw = std::min({270.0f, (float)AW / grid.ncol, ch * 1.45f});
   ch = std::min(ch, cw / 1.2f);
   grid.cw = cw; grid.ch = ch;
@@ -104,21 +104,31 @@ struct MonGeo {
   Rect screen, bezel, all;
   int neckX, neckY, baseY, plugX, plugY, labelY;
 };
-static MonGeo monGeo(const Rect& c) {
+static MonGeo monGeo(const Rect& c, bool portrait = false) {
   MonGeo m;
   int mx = (int)(c.w * 0.07f);
   int sw = c.w - 2 * mx, sh = (int)(c.h * 0.56f);
+  if (portrait) {  // a monitor turned on its side
+    sh = (int)(c.h * 0.66f);
+    sw = (int)(sh * 0.6f);
+    mx = (c.w - sw) / 2;
+  }
   m.screen = {c.x + mx, c.y + (int)(c.h * 0.05f) + 5, sw, sh};
   m.bezel = {m.screen.x - 6, m.screen.y - 6, sw + 12, sh + 12};
   m.neckX = c.x + c.w / 2;
   m.neckY = m.bezel.y + m.bezel.h;
   m.baseY = m.neckY + (int)(c.h * 0.07f);
+  m.labelY = m.baseY + 18;
   m.plugX = m.neckX;
-  m.plugY = m.baseY + 6;
-  m.labelY = m.baseY + 27;
-  m.all = {m.bezel.x, m.bezel.y, m.bezel.w, m.labelY + 10 - m.bezel.y};
+  m.plugY = m.labelY + 34;  // below the name (and the "tap" hint), so cables miss the text
+  m.all = {m.bezel.x, m.bezel.y, m.bezel.w, m.plugY + 8 - m.bezel.y};
   return m;
 }
+
+static MonGeo geoOf(const Monitor& m, const Rect& cell) { return monGeo(cell, m.portrait); }
+static MonGeo geoOf(const Monitor& m) { return geoOf(m, grid.cell(m.col, m.row)); }
+// Its cable is not a switcher cable: wired straight in, or the shared input
+static bool directLink(const Monitor& m) { return !m.fixed.empty() || m.sharedOn; }
 
 static Rect cardRect(int i) {
   int n = std::max<int>(1, lay.machines.size());
@@ -143,8 +153,7 @@ static Rect lockBtn{0, 0, 0, 0};
 
 static int monitorAt(int x, int y) {
   for (size_t i = 0; i < lay.monitors.size(); i++) {
-    auto& m = lay.monitors[i];
-    MonGeo geo = monGeo(grid.cell(m.col, m.row));
+    MonGeo geo = geoOf(lay.monitors[i]);
     if (geo.all.has(x, y)) return (int)i;
   }
   return -1;
@@ -152,8 +161,8 @@ static int monitorAt(int x, int y) {
 static int plugAt(int x, int y) {  // a monitor's cable plug
   for (size_t i = 0; i < lay.monitors.size(); i++) {
     auto& m = lay.monitors[i];
-    if (!m.fixed.empty() || m.shows.empty()) continue;
-    MonGeo geo = monGeo(grid.cell(m.col, m.row));
+    if (directLink(m) || m.shows.empty()) continue;
+    MonGeo geo = geoOf(m);
     int dx = x - geo.plugX, dy = y - geo.plugY;
     if (dx * dx + dy * dy < 30 * 30) return (int)i;
   }
@@ -191,6 +200,10 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
     lay.monitors[fromMon].shows.clear();
   }
   hub.send("tie " + mc.name + " " + mon.name);
+  if (mon.sharedOn) {
+    mon.sharedOn = false;
+    say("Now set the " + mon.name + " monitor to its VGA input");
+  }
   mon.shows = mc.name;  // the hub confirms in a moment
 }
 
@@ -198,7 +211,8 @@ static void release() {
   switch (drag) {
   case D_PRESS_CARD: {
     Machine& m = lay.machines[dragIdx];
-    if (!m.ready) say(m.label + " is offline (its agent is not running)");
+    if (!m.agent) say(m.label + " is video only: no keyboard or mouse");
+    else if (!m.ready) say(m.label + " is offline (its agent is not running)");
     else { hub.send("goto " + m.name); lay.active = m.name; }
     break;
   }
@@ -229,6 +243,15 @@ static void release() {
     }
     gridFrozen = false;
     computeGrid();
+    break;
+  }
+  case D_PRESS_MON: {  // a tap: say which input a two-input monitor is on
+    Monitor& m = lay.monitors[dragIdx];
+    if (m.shared.empty()) break;
+    m.sharedOn = !m.sharedOn;
+    hub.send("share " + m.name + (m.sharedOn ? " on" : " off"));
+    if (m.sharedOn) { m.shows = m.shared; say("The " + m.name + " monitor shows " + labelOf(m.shared) + " (HDMI)"); }
+    else say("The " + m.name + " monitor shows the switcher, output " + std::to_string(m.output) + " (VGA)");
     break;
   }
   case D_PRESS_LOCK:
@@ -295,7 +318,7 @@ static void cable(int x0, int y0, int x1, int y1, uint32_t col, bool faint = fal
 }
 
 static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_t hl) {
-  MonGeo geo = monGeo(cell);
+  MonGeo geo = geoOf(m, cell);
   bool fixed = !m.fixed.empty();
   Machine* shown = lay.machine(m.shows);
   bool kbd = shown && shown->name == lay.active;
@@ -310,12 +333,15 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
   if (shown) {
     int mi = lay.machineIndex(shown->name);
     uint32_t col = machineColor(shown->art, mi);
-    uint32_t tint = mix(col, 0x0B0D11, shown->ready ? 0.78f : 0.9f);
+    bool lit = shown->ready || !shown->agent;
+    uint32_t tint = mix(col, 0x0B0D11, lit ? 0.78f : 0.9f);
     g.fillRect(s.x, s.y, s.w, s.h, C(tint));
     float sc = std::min(s.w / 160.0f, s.h / 120.0f) * 0.62f;
-    drawArt(g, shown->art, s.x + s.w / 2, s.y + s.h / 2 - s.h * 0.08f, sc, shown->ready ? 0 : 0.5f, tint);
-    text(shown->label.c_str(), s.x + s.w / 2, s.y + s.h - 12, shown->ready ? TEXT : MUTED,
-         &fonts::FreeSans9pt7b);
+    drawArt(g, shown->art, s.x + s.w / 2, s.y + s.h / 2 - s.h * 0.08f, sc, lit ? 0 : 0.5f, tint);
+    const lgfx::IFont* f = s.w < 150 ? (const lgfx::IFont*)&fonts::Font2 : &fonts::FreeSans9pt7b;
+    g.setFont(f);
+    if (g.textWidth(shown->label.c_str()) <= s.w - 6)  // a tall, narrow screen may not fit it
+      text(shown->label.c_str(), s.x + s.w / 2, s.y + s.h - 12, lit ? TEXT : MUTED, f);
   } else {
     g.fillRect(s.x, s.y, s.w, s.h, C(0x0B0D10));
     text(m.output ? "no signal" : "-", s.x + s.w / 2, s.y + s.h / 2, 0x4B5563, &fonts::FreeSans9pt7b);
@@ -333,13 +359,20 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
   // name and how it is wired
   char buf[64];
   if (fixed) snprintf(buf, sizeof buf, "%s  -  built in", m.name.c_str());
+  else if (m.sharedOn) snprintf(buf, sizeof buf, "%s  -  HDMI", m.name.c_str());
+  else if (!m.shared.empty()) snprintf(buf, sizeof buf, "%s  -  VGA, out %d", m.name.c_str(), m.output);
   else snprintf(buf, sizeof buf, "%s  -  out %d", m.name.c_str(), m.output);
   text(buf, geo.neckX, geo.labelY, fixed ? MUTED : 0xB8C0CC, &fonts::FreeSans9pt7b);
+  if (!m.shared.empty()) {  // tap to say which input it is on
+    g.setFont(&fonts::Font2);
+    const char* hint = "tap to switch input";
+    text(hint, geo.neckX, geo.labelY + 17, 0x6B7482, &fonts::Font2);
+  }
 }
 
 static void drawPlugSocket(const Monitor& m, const Rect& cell) {
-  MonGeo geo = monGeo(cell);
-  Machine* shown = lay.machine(m.shows);
+  MonGeo geo = geoOf(m, cell);
+  Machine* shown = m.sharedOn ? nullptr : lay.machine(m.shows);
   uint32_t col = shown ? machineColor(shown->art, lay.machineIndex(shown->name)) : 0x3A414C;
   if (!m.fixed.empty()) return;
   g.fillSmoothRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(shown ? col : 0x3A414C));
@@ -356,12 +389,13 @@ static void drawCard(int i, bool pressed) {
     for (int k = 0; k < 3; k++) g.drawRoundRect(r.x + k, r.y + k, r.w - 2 * k, r.h - 2 * k, 14 - k, C(ACCENT));
   else
     g.drawRoundRect(r.x, r.y, r.w, r.h, 14, C(LINE));
-  drawArt(g, m.art, r.x + r.w / 2, r.y + 84, std::min(1.0f, (r.w - 40) / 160.0f), m.ready ? 0 : 0.45f,
+  bool lit = m.ready || !m.agent;  // consoles have no agent to wait for
+  drawArt(g, m.art, r.x + r.w / 2, r.y + 84, std::min(1.0f, (r.w - 40) / 160.0f), lit ? 0 : 0.45f,
           pressed ? 0x262D37 : PANEL_BG);
-  text(m.label.c_str(), r.x + r.w / 2, r.y + 158, m.ready ? TEXT : MUTED, &fonts::FreeSansBold12pt7b);
+  text(m.label.c_str(), r.x + r.w / 2, r.y + 158, lit ? TEXT : MUTED, &fonts::FreeSansBold12pt7b);
   // status line
   int y = r.y + 188;
-  const char* st = m.ready ? (kbd ? "has the keyboard" : "online") : "offline";
+  const char* st = !m.agent ? "video only" : m.ready ? (kbd ? "keyboard" : "online") : "offline";
   char wire[24];
   bool own = false;
   for (auto& mon : lay.monitors) if (mon.fixed == m.name) own = true;
@@ -459,7 +493,7 @@ static void drawFrame() {
           if (abs(m.col - c) + abs(m.row - r) == 1) near = true;
         }
         if (!near && !taken) continue;
-        MonGeo geo = monGeo(cell);
+        MonGeo geo = monGeo(cell, lay.monitors[dragIdx].portrait);
         bool target = c == tc && r == tr;
         uint32_t col = target ? ACCENT : 0x39414D;
         for (int i = 0; i < (target ? 3 : 1); i++)
@@ -491,10 +525,10 @@ static void drawFrame() {
     int mi = lay.machineIndex(m.shows);
     if (mi < 0) continue;
     if ((drag == D_PLUG || drag == D_MON) && (int)ni == dragIdx) continue;
-    MonGeo geo = monGeo(grid.cell(m.col, m.row));
+    MonGeo geo = geoOf(m);
     int px, py;
     plugPos(mi, px, py);
-    cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), !m.fixed.empty());
+    cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), directLink(m));
   }
   for (size_t ni = 0; ni < lay.monitors.size(); ni++) {
     if (drag == D_MON && (int)ni == dragIdx) continue;
@@ -530,10 +564,10 @@ static void drawFrame() {
     Rect cell = {home.x + curX - pressX, home.y + curY - pressY, home.w, home.h};
     int mi = lay.machineIndex(m.shows);
     if (mi >= 0) {
-      MonGeo geo = monGeo(cell);
+      MonGeo geo = geoOf(m, cell);
       int px, py;
       plugPos(mi, px, py);
-      cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), !m.fixed.empty());
+      cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), directLink(m));
     }
     drawMonitor(m, cell, true, 0);
     drawPlugSocket(m, cell);

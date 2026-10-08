@@ -38,6 +38,9 @@ size = 1920x1080
 # lost in the gaps:
 #area = 1920x1080+0+0
 #area = 1080x1920+1920+0
+# An area can belong to a shared monitor (below): add its name, and the area
+# only counts while that monitor is set to this machine's input.
+#area = 1080x1920+1920+0 tall
 
 [screen octane]
 input = 1
@@ -54,6 +57,11 @@ remap = leftalt:leftmeta, leftmeta:leftalt
 
 [screen g4]
 input = 4
+
+# A console: video only, never gets the keyboard
+#[screen dreamcast]
+#input = 5
+#agent = no
 remap = leftalt:leftmeta, leftmeta:leftalt
 
 # ---- monitors, as they stand on the desk -------------------------------------
@@ -71,6 +79,15 @@ screen = laptop
 [monitor right]
 pos = 2,0
 output = 2
+
+# A monitor with two inputs: VGA from switcher output 3, HDMI from the
+# laptop.  The hub cannot see which input is selected, so the touch panel
+# says so (tap the monitor); it starts out on the shared machine.
+#[monitor tall]
+#pos = 3,0
+#output = 3
+#shared = laptop
+#portrait = yes         # drawn upright on the panel
 
 # ---- hotkeys ------------------------------------------------------------------
 # goto <screen>              control a machine, shown or not

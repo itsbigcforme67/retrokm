@@ -8,6 +8,7 @@ struct Machine {
   std::string name, label, art;
   int input = 0;          // switcher input, 0 = not on the switcher
   bool ready = false;     // its agent is connected
+  bool agent = true;      // false: video only (a console)
 };
 
 struct Monitor {
@@ -16,6 +17,9 @@ struct Monitor {
   std::string fixed;      // wired straight to this machine, or empty
   int output = 0;         // switcher output
   std::string shows;      // machine on it now, or empty
+  std::string shared;     // its other input shows this machine (or empty)
+  bool sharedOn = false;  // ... and that input is selected
+  bool portrait = false;
 };
 
 struct Layout {
@@ -55,6 +59,7 @@ struct Layout {
       m.art = s["art"] | "";
       m.input = s["input"] | 0;
       m.ready = s["ready"] | 0;
+      m.agent = s["agent"] | 1;
       l.machines.push_back(m);
     }
     for (JsonObject o : doc["monitors"].as<JsonArray>()) {
@@ -65,6 +70,9 @@ struct Layout {
       m.fixed = o["fixed"] | "";
       m.output = o["output"] | 0;
       m.shows = o["shows"] | "";
+      m.shared = o["shared"] | "";
+      m.sharedOn = o["sharedOn"] | 0;
+      m.portrait = o["portrait"] | 0;
       l.monitors.push_back(m);
     }
     *this = l;

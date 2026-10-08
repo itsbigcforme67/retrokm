@@ -11,6 +11,8 @@ Config cfg;
 static void load_state(void);
 
 static char mon_fixed[MAX_MONITORS][32];   /* resolved after the whole file is read */
+static char mon_shared[MAX_MONITORS][32];
+static char area_mon[MAX_SCREENS][MAX_AREAS][32];
 
 static char *trim(char *s)
 {
@@ -155,6 +157,7 @@ int config_load(const char *path)
             if (!strcasecmp(k, "local")) scr->local = truthy(v);
             else if (!strcasecmp(k, "label")) copy(scr->label, sizeof scr->label, v);
             else if (!strcasecmp(k, "art")) copy(scr->art, sizeof scr->art, v);
+            else if (!strcasecmp(k, "agent")) scr->no_agent = !truthy(v);
             else if (!strcasecmp(k, "size")) {
                 if (sscanf(v, "%dx%d", &scr->w, &scr->h) != 2) goto bad;
             }
@@ -167,10 +170,14 @@ int config_load(const char *path)
             }
             else if (!strcasecmp(k, "remap")) { if (parse_remap(scr, v) < 0) goto bad; }
             else if (!strcasecmp(k, "area")) {
+                /* area = WxH+X+Y [monitor]: with a monitor named, the area
+                 * only exists while that (shared) monitor shows this screen */
                 int *a = scr->area[scr->narea];
+                char mname[32] = "";
                 if (scr->narea >= MAX_AREAS ||
-                    sscanf(v, "%dx%d+%d+%d", &a[2], &a[3], &a[0], &a[1]) != 4 || a[2] < 1 || a[3] < 1)
+                    sscanf(v, "%dx%d+%d+%d %31s", &a[2], &a[3], &a[0], &a[1], mname) < 4 || a[2] < 1 || a[3] < 1)
                     goto bad;
+                copy(area_mon[scr - cfg.screens][scr->narea], sizeof area_mon[0][0], mname);
                 scr->narea++;
             }
             else goto bad;
@@ -182,6 +189,11 @@ int config_load(const char *path)
             else if (!strcasecmp(k, "output")) mon->extron_output = atoi(v);
             else if (!strcasecmp(k, "screen"))
                 copy(mon_fixed[mon - cfg.monitors], sizeof mon_fixed[0], v);
+            else if (!strcasecmp(k, "shared")) {
+                copy(mon_shared[mon - cfg.monitors], sizeof mon_shared[0], v);
+                mon->shared_on = 1;              /* until the panel says otherwise */
+            }
+            else if (!strcasecmp(k, "portrait")) mon->portrait = truthy(v);
             else goto bad;
             break;
         case S_HOTKEYS: {
@@ -217,6 +229,29 @@ bad:
             return -1;
         }
     }
+    for (i = 0; i < cfg.nmonitors; i++) {
+        Monitor *m = &cfg.monitors[i];
+        if (mon_shared[i][0] && !(m->shared = screen_by_name(mon_shared[i]))) {
+            fprintf(stderr, "%s: monitor %s shares with unknown screen %s\n", path, m->name, mon_shared[i]);
+            return -1;
+        }
+        if (!mon_shared[i][0]) m->shared_on = 0;
+    }
+    for (i = 0; i < cfg.nscreens; i++) {
+        Screen *s = &cfg.screens[i];
+        int k;
+        for (k = 0; k < s->narea; k++) {
+            Monitor *m = NULL;
+            s->area_mon[k] = -1;
+            if (!area_mon[i][k][0]) continue;
+            if (!(m = monitor_by_name(area_mon[i][k])) || !m->shared) {
+                fprintf(stderr, "%s: screen %s: area names %s, which is not a shared monitor\n",
+                        path, s->name, area_mon[i][k]);
+                return -1;
+            }
+            s->area_mon[k] = (int)(m - cfg.monitors);
+        }
+    }
     if (cfg.nscreens == 0) {
         fprintf(stderr, "%s: no [screen] sections\n", path);
         return -1;
@@ -231,7 +266,7 @@ static void load_state(void)
 {
     FILE *f = fopen(cfg.state_path, "r");
     char line[128], name[32];
-    int col, row;
+    int col, row, on;
 
     if (!f) return;
     while (fgets(line, sizeof line, f)) {
@@ -239,6 +274,8 @@ static void load_state(void)
         if (sscanf(line, "monitor %31s %d %d", name, &col, &row) == 3 && (m = monitor_by_name(name))) {
             m->col = col;
             m->row = row;
+        } else if (sscanf(line, "shared %31s %d", name, &on) == 2 && (m = monitor_by_name(name)) && m->shared) {
+            m->shared_on = on != 0;
         }
     }
     fclose(f);
@@ -258,6 +295,8 @@ int config_save_state(void)
     fprintf(f, "# monitor positions set from the touch panel; delete to go back to the config\n");
     for (i = 0; i < cfg.nmonitors; i++)
         fprintf(f, "monitor %s %d %d\n", cfg.monitors[i].name, cfg.monitors[i].col, cfg.monitors[i].row);
+    for (i = 0; i < cfg.nmonitors; i++)
+        if (cfg.monitors[i].shared) fprintf(f, "shared %s %d\n", cfg.monitors[i].name, cfg.monitors[i].shared_on);
     if (fclose(f) != 0 || rename(tmp, cfg.state_path) != 0) {
         logmsg("cannot save %s", cfg.state_path);
         return -1;

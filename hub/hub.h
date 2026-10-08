@@ -61,7 +61,9 @@ typedef struct Screen {
     unsigned char remap_from[MAX_REMAP], remap_to[MAX_REMAP];
     int nremap;
     int area[MAX_AREAS][4];      /* visible rectangles x,y,w,h; none = all of it */
+    int area_mon[MAX_AREAS];     /* only real while this monitor is shared; -1 always */
     int narea;
+    int no_agent;                /* video only (a console): never takes input */
 } Screen;
 
 typedef struct Monitor {
@@ -70,6 +72,9 @@ typedef struct Monitor {
     Screen *fixed;               /* always shows this screen, or ... */
     int extron_output;           /* ... whatever is tied to this output */
     Screen *cur;                 /* resolved: what it shows right now */
+    Screen *shared;              /* the monitor's other input shows this machine */
+    int shared_on;               /* ... and is the one selected on the monitor */
+    int portrait;                /* drawn tall on the panel */
 } Monitor;
 
 typedef struct Hotkey {

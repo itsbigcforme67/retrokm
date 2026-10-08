@@ -136,6 +136,26 @@ static void artOctane(Pen& p) {
   p.rect(-36, 56, 60, 3, 0x173F57);                              // plinth
 }
 
+// Sega Dreamcast: white console, round lid, orange swirl, four pad ports
+static void artDreamcast(Pen& p) {
+  p.ellipse(4, 34, 74, 7, 0x0B0C0E);
+  p.quad(-60, -6, 44, -6, 64, -26, -40, -26, 0xF1F1EE);         // top
+  p.quad(44, -6, 64, -26, 64, -2, 44, 22, 0xBDBDB8);             // side
+  p.rrect(-60, -8, 104, 30, 4, 0xDDDDD8);                        // front
+  p.ellipse(4, -16, 30, 8.5f, 0xE3E3DF);                         // lid
+  p.ellipse(4, -16, 26, 7, 0xF7F7F5);
+  for (int i = 0; i < 4; i++) p.rrect(-52 + i * 22, 6, 16, 9, 2, 0x55575C);  // pad ports
+  p.dot(36, 3, 3.5f, 0xB8B8B3);                                  // power
+  p.dot(36, 3, 1.4f, 0xF97316);
+  // the swirl, as shrinking arcs
+  float cx = p.cx + 4 * p.s, cy = p.cy - 16 * p.s;
+  for (int k = 0; k < 4; k++) {
+    float r1 = (5.5f - k * 1.1f) * p.s, r0 = r1 - 1.3f * p.s;
+    if (r0 < 0.5f) break;
+    p.g.fillArc((int)cx, (int)cy, r0, r1, 20 + k * 90, 250 + k * 90, p.c(0xF97316));
+  }
+}
+
 static void artGeneric(Pen& p) {
   p.ellipse(0, 52, 60, 5, 0x0B0C0E);
   p.rrect(-50, -40, 100, 90, 6, 0x6B7280);
@@ -150,13 +170,15 @@ static void drawArt(Gfx& g, const std::string& art, int cx, int cy, float scale,
   else if (art == "precision") artPrecision(p);
   else if (art == "armbox") artArmbox(p);
   else if (art == "octane") artOctane(p);
+  else if (art == "dreamcast") artDreamcast(p);
   else artGeneric(p);
 }
 
 // Cable colour for each machine
 static uint32_t machineColor(const std::string& art, int index) {
   if (art == "ideapad") return 0x4F8DF7;
-  if (art == "precision") return 0xF2A33A;
+  if (art == "precision") return 0xEAB308;
+  if (art == "dreamcast") return 0xF97316;
   if (art == "armbox") return 0xE5E7EB;
   if (art == "octane") return 0x2EC4B6;
   static const uint32_t pal[] = {0xF472B6, 0xA78BFA, 0xFB7185, 0x84CC16, 0xFACC15};
