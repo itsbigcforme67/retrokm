@@ -49,18 +49,35 @@ static const int CY = 482, CH = 204;                      // machine cards
 // The frame lives in the panel's own layout (720x1280 portrait, 565 not
 // byte-swapped), drawn on through setRotation(1), so it reaches the screen
 // as straight row copies (the trick from lil' C).
-static M5Canvas g(&M5.Display);
+static M5Canvas frame(&M5.Display);  // what goes to the screen
+static M5Canvas scene(&M5.Display);  // the desk without whatever is under the finger
+static M5Canvas* G = &frame;         // the one being drawn on
+
+// Lands on the screen in two layers, as in lil' C: the scene is redrawn only
+// when something changes (the layout, a drag starting or ending, a toast);
+// while a finger moves, only the patch under the dragged thing is restored
+// from the scene, redrawn, and sent to the panel.
+struct Box {
+  int x0 = 1 << 20, y0 = 1 << 20, x1 = -(1 << 20), y1 = -(1 << 20);
+  bool empty() const { return x0 > x1; }
+  void add(int ax, int ay, int bx, int by) {
+    x0 = std::min(x0, std::min(ax, bx)); y0 = std::min(y0, std::min(ay, by));
+    x1 = std::max(x1, std::max(ax, bx)); y1 = std::max(y1, std::max(ay, by));
+  }
+  void add(const Box& b) { if (!b.empty()) add(b.x0, b.y0, b.x1, b.y1); }
+};
+static Box ink;                      // what the finger layer covers this frame
+static bool sceneDirty = true, fingerDirty = false;
 
 static Layout lay;
 static HubLink hub;
-static bool dirty = true;
 static std::string toast;
 static uint32_t toastUntil = 0;
 
 static void say(const std::string& s) {
   toast = s;
   toastUntil = nowMs() + 3500;
-  dirty = true;
+  sceneDirty = true;
 }
 
 // ------------------------------------------------------------ geometry
@@ -274,7 +291,7 @@ static void release() {
   }
   drag = D_NONE;
   dragIdx = -1;
-  dirty = true;
+  sceneDirty = true;
 }
 
 static void touchInput(bool down, int x, int y) {
@@ -287,13 +304,13 @@ static void touchInput(bool down, int x, int y) {
     else if ((i = plugAt(x, y)) >= 0) { drag = D_PLUG; dragIdx = i; }
     else if ((i = monitorAt(x, y)) >= 0) { drag = D_PRESS_MON; dragIdx = i; }
     else if ((i = cardAt(x, y)) >= 0) { drag = D_PRESS_CARD; dragIdx = i; }
-    dirty = true;
+    sceneDirty = true;
   } else if (down && was) {  // move
-    if (x != curX || y != curY) dirty = drag != D_NONE;
+    if ((x != curX || y != curY) && drag != D_NONE) fingerDirty = true;
     curX = x; curY = y;
     bool far = abs(x - pressX) + abs(y - pressY) > 14;
-    if (drag == D_PRESS_CARD && far) drag = D_CABLE;
-    if (drag == D_PRESS_MON && far) { drag = D_MON; gridFrozen = true; }
+    if (drag == D_PRESS_CARD && far) { drag = D_CABLE; sceneDirty = true; }
+    if (drag == D_PRESS_MON && far) { drag = D_MON; gridFrozen = true; sceneDirty = true; }
   } else if (!down && was) {
     release();
   }
@@ -304,28 +321,37 @@ static void touchInput(bool down, int x, int y) {
 
 static void text(const char* s, int x, int y, uint32_t col, const lgfx::IFont* f,
                  textdatum_t d = middle_center) {
-  g.setFont(f);
-  g.setTextDatum(d);
-  g.setTextColor(lgfx::color565(col >> 16, (col >> 8) & 255, col & 255));  // uint16_t: rgb565
-  g.drawString(s, x, y);
+  G->setFont(f);
+  G->setTextDatum(d);
+  G->setTextColor(lgfx::color565(col >> 16, (col >> 8) & 255, col & 255));  // uint16_t: rgb565
+  G->drawString(s, x, y);
 }
 
-static void cable(int x0, int y0, int x1, int y1, uint32_t col, bool faint = false) {
+enum CableStyle { SOLID, FAINT, DOTTED };
+
+// A cable from a machine's knob (x0,y0) up to a monitor's plug (x1,y1).
+// DOTTED: a link that exists but is not the one selected (a shared
+// monitor's other input).  Adds what it covers to ink.
+static void cable(int x0, int y0, int x1, int y1, uint32_t col, CableStyle style = SOLID) {
   float k = std::max(70.0f, fabsf((float)(y0 - y1)) * 0.55f);
-  float px = x0, py = y0;
-  const int N = 28;
-  for (int pass = 0; pass < 2; pass++) {
-    px = x0; py = y0;
-    for (int i = 1; i <= N; i++) {
-      float t = (float)i / N, u = 1 - t;
-      // control points: straight up out of the machine, straight down into the monitor
-      float x = u * u * u * x0 + 3 * u * u * t * x0 + 3 * u * t * t * x1 + t * t * t * x1;
-      float y = u * u * u * y0 + 3 * u * u * t * (y0 - k) + 3 * u * t * t * (y1 + k) + t * t * t * y1;
-      if (pass == 0) g.drawWideLine(px, py, x, y, faint ? 3.5f : 5.0f, C(0x0A0C0F));
-      else g.drawWideLine(px, py, x, y, faint ? 1.5f : 3.0f, C(faint ? mix(col, BG, 0.55f) : col));
-      px = x; py = y;
-    }
+  const int N = style == DOTTED ? 36 : 20;
+  float xs[40], ys[40];
+  for (int i = 0; i <= N; i++) {
+    float t = (float)i / N, u = 1 - t;
+    // control points: straight up out of the machine, straight down into the monitor
+    xs[i] = u * u * u * x0 + 3 * u * u * t * x0 + 3 * u * t * t * x1 + t * t * t * x1;
+    ys[i] = u * u * u * y0 + 3 * u * u * t * (y0 - k) + 3 * u * t * t * (y1 + k) + t * t * t * y1;
+    ink.add((int)xs[i] - 7, (int)ys[i] - 7, (int)xs[i] + 7, (int)ys[i] + 7);
   }
+  if (style == DOTTED) {
+    uint32_t c = mix(col, BG, 0.25f);
+    for (int i = 0; i < N; i += 2) G->drawWideLine(xs[i], ys[i], xs[i + 1], ys[i + 1], 1.6f, C(c));
+    return;
+  }
+  bool faint = style == FAINT;
+  for (int i = 0; i < N; i++) G->drawWideLine(xs[i], ys[i], xs[i + 1], ys[i + 1], faint ? 3.5f : 5.0f, C(0x0A0C0F));
+  for (int i = 0; i < N; i++)
+    G->drawWideLine(xs[i], ys[i], xs[i + 1], ys[i + 1], faint ? 1.5f : 3.0f, C(faint ? mix(col, BG, 0.55f) : col));
 }
 
 static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_t hl) {
@@ -333,23 +359,23 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
   bool fixed = !m.fixed.empty();
   Machine* shown = lay.machine(m.shows);
   bool kbd = shown && shown->name == lay.active;
-  if (lifted) g.fillRoundRect(geo.bezel.x + 8, geo.bezel.y + 10, geo.bezel.w, geo.bezel.h, 10, C(0x08090B));
+  if (lifted) G->fillRoundRect(geo.bezel.x + 8, geo.bezel.y + 10, geo.bezel.w, geo.bezel.h, 10, C(0x08090B));
   if (m.capture) {  // capture box: dark body, preview window, record light
-    g.fillSmoothRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 12, C(0x202429));
-    g.fillSmoothRoundRect(geo.bezel.x + 3, geo.bezel.y + 3, geo.bezel.w - 6, 4, 2, C(0x2E333A));
+    G->fillSmoothRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 12, C(0x202429));
+    G->fillSmoothRoundRect(geo.bezel.x + 3, geo.bezel.y + 3, geo.bezel.w - 6, 4, 2, C(0x2E333A));
     int sy = geo.screen.y + geo.screen.h + 17;
-    g.fillSmoothCircle(geo.screen.x + 10, sy, 5, C(shown ? 0xEF4444 : 0x4B1D1D));
+    G->fillSmoothCircle(geo.screen.x + 10, sy, 5, C(shown ? 0xEF4444 : 0x4B1D1D));
     text(shown ? "REC" : "idle", geo.screen.x + 22, sy, shown ? 0xF3B4B4 : 0x6B7482, &fonts::Font2,
          middle_left);
     for (int i = 0; i < 3; i++)  // vents
-      g.fillRect(geo.screen.x + geo.screen.w - 30 + i * 10, sy - 5, 4, 10, C(0x15181C));
+      G->fillRect(geo.screen.x + geo.screen.w - 30 + i * 10, sy - 5, 4, 10, C(0x15181C));
   } else {
     // stand
     int nw = std::max(10, geo.screen.w / 12);
-    g.fillRect(geo.neckX - nw / 2, geo.neckY, nw, geo.baseY - geo.neckY, C(0x2A2F37));
-    g.fillSmoothRoundRect(geo.neckX - geo.screen.w / 5, geo.baseY, geo.screen.w * 2 / 5, 7, 3, C(0x353B45));
+    G->fillRect(geo.neckX - nw / 2, geo.neckY, nw, geo.baseY - geo.neckY, C(0x2A2F37));
+    G->fillSmoothRoundRect(geo.neckX - geo.screen.w / 5, geo.baseY, geo.screen.w * 2 / 5, 7, 3, C(0x353B45));
     // bezel
-    g.fillSmoothRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 8, C(fixed ? 0x2B2A2E : 0x262B33));
+    G->fillSmoothRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 8, C(fixed ? 0x2B2A2E : 0x262B33));
   }
   const Rect& s = geo.screen;
   if (shown) {
@@ -357,25 +383,25 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
     uint32_t col = machineColor(shown->art, mi);
     bool lit = shown->ready || !shown->agent;
     uint32_t tint = mix(col, 0x0B0D11, lit ? 0.78f : 0.9f);
-    g.fillRect(s.x, s.y, s.w, s.h, C(tint));
+    G->fillRect(s.x, s.y, s.w, s.h, C(tint));
     float sc = std::min(s.w / 160.0f, s.h / 120.0f) * 0.62f;
-    drawArt(g, shown->art, s.x + s.w / 2, s.y + s.h / 2 - s.h * 0.08f, sc, lit ? 0 : 0.5f, tint);
+    drawArt(*G, shown->art, s.x + s.w / 2, s.y + s.h / 2 - s.h * 0.08f, sc, lit ? 0 : 0.5f, tint);
     const lgfx::IFont* f = s.w < 150 ? (const lgfx::IFont*)&fonts::Font2 : &fonts::FreeSans9pt7b;
-    g.setFont(f);
-    if (g.textWidth(shown->label.c_str()) <= s.w - 6)  // a tall, narrow screen may not fit it
+    G->setFont(f);
+    if (G->textWidth(shown->label.c_str()) <= s.w - 6)  // a tall, narrow screen may not fit it
       text(shown->label.c_str(), s.x + s.w / 2, s.y + s.h - 12, lit ? TEXT : MUTED, f);
   } else {
-    g.fillRect(s.x, s.y, s.w, s.h, C(0x0B0D10));
+    G->fillRect(s.x, s.y, s.w, s.h, C(0x0B0D10));
     text(m.output ? "no signal" : "-", s.x + s.w / 2, s.y + s.h / 2, 0x4B5563, &fonts::FreeSans9pt7b);
   }
   if (kbd) {  // this is where the keyboard is
     for (int i = 0; i < 3; i++)
-      g.drawRoundRect(geo.bezel.x - 2 - i, geo.bezel.y - 2 - i, geo.bezel.w + 4 + 2 * i,
+      G->drawRoundRect(geo.bezel.x - 2 - i, geo.bezel.y - 2 - i, geo.bezel.w + 4 + 2 * i,
                       geo.bezel.h + 4 + 2 * i, 10, C(ACCENT));
   }
   if (hl) {
     for (int i = 0; i < 4; i++)
-      g.drawRoundRect(geo.bezel.x - 6 - i, geo.bezel.y - 6 - i, geo.bezel.w + 12 + 2 * i,
+      G->drawRoundRect(geo.bezel.x - 6 - i, geo.bezel.y - 6 - i, geo.bezel.w + 12 + 2 * i,
                       geo.bezel.h + 12 + 2 * i, 12, C(hl));
   }
   // name and how it is wired
@@ -387,7 +413,7 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
   else snprintf(buf, sizeof buf, "%s  -  out %d", nm, m.output);
   text(buf, geo.neckX, geo.labelY, fixed ? MUTED : 0xB8C0CC, &fonts::FreeSans9pt7b);
   if (!m.shared.empty()) {  // tap to say which input it is on
-    g.setFont(&fonts::Font2);
+    G->setFont(&fonts::Font2);
     const char* hint = m.ddc == 1 ? "tap to switch input" : "tap to say which input";
     text(hint, geo.neckX, geo.labelY + 17, 0x6B7482, &fonts::Font2);
   }
@@ -398,8 +424,8 @@ static void drawPlugSocket(const Monitor& m, const Rect& cell) {
   Machine* shown = m.sharedOn ? nullptr : lay.machine(m.shows);
   uint32_t col = shown ? machineColor(shown->art, lay.machineIndex(shown->name)) : 0x3A414C;
   if (!m.fixed.empty()) return;
-  g.fillSmoothRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(shown ? col : 0x3A414C));
-  g.drawRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(0x0A0C0F));
+  G->fillSmoothRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(shown ? col : 0x3A414C));
+  G->drawRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(0x0A0C0F));
 }
 
 static void drawCard(int i, bool pressed) {
@@ -407,13 +433,13 @@ static void drawCard(int i, bool pressed) {
   Rect r = cardRect(i);
   uint32_t col = machineColor(m.art, i);
   bool kbd = m.name == lay.active;
-  g.fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(pressed ? 0x262D37 : PANEL_BG));
+  G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(pressed ? 0x262D37 : PANEL_BG));
   if (kbd)
-    for (int k = 0; k < 3; k++) g.drawRoundRect(r.x + k, r.y + k, r.w - 2 * k, r.h - 2 * k, 14 - k, C(ACCENT));
+    for (int k = 0; k < 3; k++) G->drawRoundRect(r.x + k, r.y + k, r.w - 2 * k, r.h - 2 * k, 14 - k, C(ACCENT));
   else
-    g.drawRoundRect(r.x, r.y, r.w, r.h, 14, C(LINE));
+    G->drawRoundRect(r.x, r.y, r.w, r.h, 14, C(LINE));
   bool lit = m.ready || !m.agent;  // consoles have no agent to wait for
-  drawArt(g, m.art, r.x + r.w / 2, r.y + 84, std::min(1.0f, (r.w - 40) / 160.0f), lit ? 0 : 0.45f,
+  drawArt(*G, m.art, r.x + r.w / 2, r.y + 84, std::min(1.0f, (r.w - 40) / 160.0f), lit ? 0 : 0.45f,
           pressed ? 0x262D37 : PANEL_BG);
   text(m.label.c_str(), r.x + r.w / 2, r.y + 158, lit ? TEXT : MUTED, &fonts::FreeSansBold12pt7b);
   // status line
@@ -424,35 +450,35 @@ static void drawCard(int i, bool pressed) {
   for (auto& mon : lay.monitors) if (mon.fixed == m.name) own = true;
   if (m.input) snprintf(wire, sizeof wire, "in %d", m.input);
   else snprintf(wire, sizeof wire, own ? "own screen" : "not wired");
-  g.setFont(&fonts::FreeSans9pt7b);
-  int w1 = g.textWidth(st), w2 = g.textWidth(wire);
+  G->setFont(&fonts::FreeSans9pt7b);
+  int w1 = G->textWidth(st), w2 = G->textWidth(wire);
   int x = r.x + r.w / 2 - (14 + w1 + 22 + w2 + 16) / 2;
-  g.fillSmoothCircle(x + 5, y, 5, C(m.ready ? OK_C : 0x59606B));
+  G->fillSmoothCircle(x + 5, y, 5, C(m.ready ? OK_C : 0x59606B));
   text(st, x + 14, y, m.ready ? 0xC9D1DB : MUTED, &fonts::FreeSans9pt7b, middle_left);
   int cx = x + 14 + w1 + 22;
-  g.fillSmoothRoundRect(cx - 8, y - 11, w2 + 16, 22, 11, C(0x2B323C));
+  G->fillSmoothRoundRect(cx - 8, y - 11, w2 + 16, 22, 11, C(0x2B323C));
   text(wire, cx, y, 0xC9D1DB, &fonts::FreeSans9pt7b, middle_left);
   // the knob the cables come out of
   int px, py;
   plugPos(i, px, py);
-  g.fillSmoothCircle(px, py, 12, C(0x0A0C0F));
-  g.fillSmoothCircle(px, py, 9, C(m.input ? col : 0x4B5563));
+  G->fillSmoothCircle(px, py, 12, C(0x0A0C0F));
+  G->fillSmoothCircle(px, py, 9, C(m.input ? col : 0x4B5563));
 }
 
 static int chip(int right, int y, const char* s, uint32_t dot, uint32_t fg = 0xC9D1DB, Rect* out = nullptr) {
-  g.setFont(&fonts::FreeSans9pt7b);
-  int w = g.textWidth(s) + (dot ? 34 : 24);
+  G->setFont(&fonts::FreeSans9pt7b);
+  int w = G->textWidth(s) + (dot ? 34 : 24);
   int x = right - w;
-  g.fillSmoothRoundRect(x, y - 15, w, 30, 15, C(0x232932));
-  if (dot) g.fillSmoothCircle(x + 15, y, 5, C(dot));
+  G->fillSmoothRoundRect(x, y - 15, w, 30, 15, C(0x232932));
+  if (dot) G->fillSmoothCircle(x + 15, y, 5, C(dot));
   text(s, x + (dot ? 26 : 12), y, fg, &fonts::FreeSans9pt7b, middle_left);
   if (out) *out = {x, y - 15, w, 30};
   return x - 10;
 }
 
 static void drawHeader() {
-  g.fillRect(0, 0, SW, HEAD_H, C(0x101317));
-  g.drawFastHLine(0, HEAD_H, SW, C(LINE));
+  G->fillRect(0, 0, SW, HEAD_H, C(0x101317));
+  G->drawFastHLine(0, HEAD_H, SW, C(LINE));
   text("RetroKM", 24, HEAD_H / 2, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
   text("desk", 140, HEAD_H / 2 + 1, MUTED, &fonts::FreeSans12pt7b, middle_left);
   int x = SW - 20, y = HEAD_H / 2;
@@ -468,17 +494,27 @@ static void drawHeader() {
     x = chip(x, y, "no hub", BAD_C);
   }
   if (!toast.empty() && nowMs() < toastUntil) {
-    g.setFont(&fonts::FreeSans12pt7b);
-    int w = g.textWidth(toast.c_str()) + 40;
+    G->setFont(&fonts::FreeSans12pt7b);
+    int w = G->textWidth(toast.c_str()) + 40;
     int tx = std::max(250, std::min(SW / 2 - w / 2, x - w));
-    g.fillSmoothRoundRect(tx, 9, w, HEAD_H - 18, 19, C(0x3B2F14));
+    G->fillSmoothRoundRect(tx, 9, w, HEAD_H - 18, 19, C(0x3B2F14));
     text(toast.c_str(), tx + w / 2, HEAD_H / 2, 0xFDE68A, &fonts::FreeSans12pt7b);
   }
 }
 
-static void drawFrame() {
+// Machine on a shared monitor's other input (the one not selected)
+static int otherInputMachine(const Monitor& m) {
+  if (m.shared.empty()) return -1;
+  if (!m.sharedOn) return lay.machineIndex(m.shared);
+  for (size_t i = 0; i < lay.machines.size(); i++)
+    if (m.input && lay.machines[i].input == m.input) return (int)i;
+  return -1;
+}
+
+static void drawScene() {
+  G = &scene;
   computeGrid();
-  g.fillScreen( C(BG));
+  G->fillScreen( C(BG));
   drawHeader();
 
   if (!lay.valid) {
@@ -495,16 +531,14 @@ static void drawFrame() {
   }
 
   // desk surface
-  g.fillSmoothRoundRect(AX - 8, AY - 4, AW + 16, AH + 8, 16, C(0x181C22));
-  g.fillSmoothRoundRect(AX - 8, CY - 22, AW + 16, CH + 30, 16, C(0x12151A));
+  G->fillSmoothRoundRect(AX - 8, AY - 4, AW + 16, AH + 8, 16, C(0x181C22));
+  G->fillSmoothRoundRect(AX - 8, CY - 22, AW + 16, CH + 30, 16, C(0x12151A));
   text("drag a machine onto a monitor   |   pull a plug off to unplug   |   "
        "drag monitors to rearrange   |   tap a machine for the keyboard",
        SW / 2, SH - 9, 0x5B6573, &fonts::FreeSans9pt7b);
 
   // drop slots next to the monitors while one is being moved
   if (drag == D_MON) {
-    int tc, tr;
-    grid.at(curX, curY, tc, tr);
     for (int r = grid.rmin - 1; r <= grid.rmin + grid.nrow; r++)
       for (int c = grid.cmin - 1; c <= grid.cmin + grid.ncol; c++) {
         Rect cell = grid.cell(c, r);
@@ -517,25 +551,15 @@ static void drawFrame() {
         }
         if (!near && !taken) continue;
         MonGeo geo = geoOf(lay.monitors[dragIdx], cell);
-        bool target = c == tc && r == tr;
-        uint32_t col = target ? ACCENT : 0x39414D;
-        for (int i = 0; i < (target ? 3 : 1); i++)
-          g.drawRoundRect(geo.bezel.x - i, geo.bezel.y - i, geo.bezel.w + 2 * i, geo.bezel.h + 2 * i, 8, C(col));
+        G->drawRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 8, C(0x39414D));
       }
   }
 
   // monitors
-  int hover = (drag == D_CABLE || drag == D_PLUG) ? monitorAt(curX, curY) : -1;
   for (size_t ni = 0; ni < lay.monitors.size(); ni++) {
     auto& m = lay.monitors[ni];
     if (drag == D_MON && (int)ni == dragIdx) continue;
     uint32_t hl = 0;
-    if ((int)ni == hover) {
-      int mi = drag == D_CABLE ? dragIdx : lay.machineIndex(lay.monitors[dragIdx].shows);
-      bool okDrop = m.fixed.empty() && mi >= 0 && lay.machines[mi].input && lay.switcherOnline;
-      if (drag == D_PLUG && (int)ni == dragIdx) okDrop = true;
-      hl = okDrop ? ACCENT : BAD_C;
-    }
     Monitor shown = m;
     if (drag == D_PLUG && (int)ni == dragIdx) shown.shows.clear();  // being unplugged
     Rect cell = grid.cell(m.col, m.row);
@@ -551,7 +575,17 @@ static void drawFrame() {
     MonGeo geo = geoOf(m);
     int px, py;
     plugPos(mi, px, py);
-    cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), directLink(m));
+    cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), directLink(m) ? FAINT : SOLID);
+  }
+  // a shared monitor's other input, dotted, into the side of its plug
+  for (size_t ni = 0; ni < lay.monitors.size(); ni++) {
+    auto& m = lay.monitors[ni];
+    int oi = otherInputMachine(m);
+    if (oi < 0 || (drag == D_MON && (int)ni == dragIdx)) continue;
+    MonGeo geo = geoOf(m);
+    int px, py;
+    plugPos(oi, px, py);
+    cable(px, py, geo.plugX + 16, geo.plugY, machineColor(lay.machines[oi].art, oi), DOTTED);
   }
   for (size_t ni = 0; ni < lay.monitors.size(); ni++) {
     if (drag == D_MON && (int)ni == dragIdx) continue;
@@ -564,13 +598,43 @@ static void drawFrame() {
   for (size_t i = 0; i < lay.machines.size(); i++)
     drawCard(i, (drag == D_PRESS_CARD || drag == D_CABLE) && (int)i == dragIdx);
 
-  // whatever is in the finger
+}
+
+static void outline(const MonGeo& geo, uint32_t col) {  // around a monitor, on the finger layer
+  for (int i = 0; i < 4; i++)
+    G->drawRoundRect(geo.bezel.x - 6 - i, geo.bezel.y - 6 - i, geo.bezel.w + 12 + 2 * i,
+                     geo.bezel.h + 12 + 2 * i, 12, C(col));
+  ink.add(geo.bezel.x - 12, geo.bezel.y - 12, geo.bezel.x + geo.bezel.w + 12, geo.bezel.y + geo.bezel.h + 12);
+}
+
+// Whatever is under the finger, drawn over the scene; ink collects its extent
+static void drawFinger() {
+  G = &frame;
+  if (!lay.valid) return;
+  if (drag == D_CABLE || drag == D_PLUG) {  // the monitor it would land on
+    int ni = monitorAt(curX, curY);
+    if (ni >= 0) {
+      auto& m = lay.monitors[ni];
+      int mi = drag == D_CABLE ? dragIdx : lay.machineIndex(lay.monitors[dragIdx].shows);
+      bool okDrop = m.fixed.empty() && mi >= 0 && lay.machines[mi].input && lay.switcherOnline;
+      if (drag == D_PLUG && ni == dragIdx) okDrop = true;
+      outline(geoOf(m), okDrop ? ACCENT : BAD_C);
+    }
+  }
+  if (drag == D_MON) {  // the slot it would land in
+    int tc, tr;
+    grid.at(curX, curY, tc, tr);
+    Rect cell = grid.cell(tc, tr);
+    if (cell.x >= AX - 4 && cell.y >= AY - 4 && cell.x + cell.w <= AX + AW + 4 && cell.y + cell.h <= AY + AH + 4)
+      outline(geoOf(lay.monitors[dragIdx], cell), ACCENT);
+  }
   if (drag == D_CABLE) {
     int px, py;
     plugPos(dragIdx, px, py);
     auto& mc = lay.machines[dragIdx];
     cable(px, py, curX, curY, machineColor(mc.art, dragIdx));
-    g.fillSmoothRoundRect(curX - 10, curY - 6, 20, 12, 3, C(machineColor(mc.art, dragIdx)));
+    G->fillSmoothRoundRect(curX - 10, curY - 6, 20, 12, 3, C(machineColor(mc.art, dragIdx)));
+    ink.add(curX - 12, curY - 8, curX + 12, curY + 8);
   } else if (drag == D_PLUG) {
     auto& from = lay.monitors[dragIdx];
     int mi = lay.machineIndex(from.shows);
@@ -579,7 +643,8 @@ static void drawFrame() {
       plugPos(mi, px, py);
       uint32_t col = machineColor(lay.machines[mi].art, mi);
       cable(px, py, curX, curY, col);
-      g.fillSmoothRoundRect(curX - 10, curY - 6, 20, 12, 3, C(col));
+      G->fillSmoothRoundRect(curX - 10, curY - 6, 20, 12, 3, C(col));
+      ink.add(curX - 12, curY - 8, curX + 12, curY + 8);
     }
   } else if (drag == D_MON) {
     auto& m = lay.monitors[dragIdx];
@@ -590,17 +655,98 @@ static void drawFrame() {
       MonGeo geo = geoOf(m, cell);
       int px, py;
       plugPos(mi, px, py);
-      cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), directLink(m));
+      cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), directLink(m) ? FAINT : SOLID);
     }
     drawMonitor(m, cell, true, 0);
     drawPlugSocket(m, cell);
+    ink.add(cell.x - 12, cell.y - 12, cell.x + cell.w + 20, cell.y + cell.h + 50);
   }
 }
 
-static void pushFrame() {
-  M5.Display.setRotation(0);  // unrotated, same pixel format: row copies
-  g.pushSprite(&M5.Display, 0, 0);
+// The sprites are portrait (the panel's own layout) and drawn on through
+// setRotation(1); learn where a landscape pixel lands in the buffer.
+static int bIdx0, bStepX, bStepY;
+static void learnLayout() {
+  uint16_t* buf = (uint16_t*)frame.getBuffer();
+  auto find = [&](int x, int y) {
+    frame.fillScreen(TFT_BLACK);
+    frame.drawPixel(x, y, TFT_WHITE);
+    for (int i = 0; i < SW * SH; i++) if (buf[i]) return i;
+    return 0;
+  };
+  bIdx0 = find(0, 0);
+  bStepX = find(1, 0) - bIdx0;
+  bStepY = find(0, 1) - bIdx0;
+}
+
+// A landscape box -> the matching rectangle in the portrait buffer
+static bool bufRect(const Box& b, int& bx, int& by, int& bw, int& bh) {
+  int x0 = std::max(0, b.x0), y0 = std::max(0, b.y0), x1 = std::min(SW - 1, b.x1), y1 = std::min(SH - 1, b.y1);
+  if (x0 > x1 || y0 > y1) return false;
+  int i1 = bIdx0 + x0 * bStepX + y0 * bStepY, i2 = bIdx0 + x1 * bStepX + y1 * bStepY;
+  const int pw = SH;  // the buffer is portrait: SH pixels per row
+  int ax = i1 % pw, ay = i1 / pw, cx = i2 % pw, cy = i2 / pw;
+  bx = std::min(ax, cx); by = std::min(ay, cy);
+  bw = abs(cx - ax) + 1; bh = abs(cy - ay) + 1;
+  return true;
+}
+
+static void restore(const Box& b) {  // scene -> frame, inside b
+  int bx, by, bw, bh;
+  if (!bufRect(b, bx, by, bw, bh)) return;
+  uint16_t* d = (uint16_t*)frame.getBuffer();
+  const uint16_t* s = (const uint16_t*)scene.getBuffer();
+  for (int y = by; y < by + bh; y++) memcpy(d + y * SH + bx, s + y * SH + bx, bw * 2);
+}
+
+static void push(const Box* b) {  // frame -> panel (null: all of it)
+  int bx = 0, by = 0, bw = SH, bh = SW;
+  if (b && !bufRect(*b, bx, by, bw, bh)) return;
+  M5.Display.setRotation(0);  // unrotated, same pixel format: the library copies rows
+  M5.Display.setClipRect(bx, by, bw, bh);
+  frame.pushSprite(&M5.Display, 0, 0);
+  M5.Display.clearClipRect();
   M5.Display.setRotation(1);
+}
+
+static Box lastInk;
+static void render() {
+  static bool frameStale = true;  // frame does not hold the scene yet
+  bool under = drag == D_CABLE || drag == D_PLUG || drag == D_MON;
+  if (sceneDirty) {  // the whole thing
+    sceneDirty = fingerDirty = false;
+    drawScene();
+    ink = Box();
+    if (!under) {  // nothing over it: show the scene as it is, copy it later if needed
+      M5Canvas* f = &scene;
+      M5.Display.setRotation(0);
+      f->pushSprite(&M5.Display, 0, 0);
+      M5.Display.setRotation(1);
+      frameStale = true;
+      G = &scene;  // (screenshots read G)
+      lastInk = ink;
+      return;
+    }
+    memcpy(frame.getBuffer(), scene.getBuffer(), SW * SH * 2);
+    frameStale = false;
+    drawFinger();
+    push(nullptr);
+  } else if (fingerDirty) {  // only around the finger
+    fingerDirty = false;
+    if (frameStale) {
+      memcpy(frame.getBuffer(), scene.getBuffer(), SW * SH * 2);
+      frameStale = false;
+    }
+    restore(lastInk);
+    ink = Box();
+    drawFinger();
+    Box both = ink;
+    both.add(lastInk);
+    push(&both);
+  } else {
+    return;
+  }
+  lastInk = ink;
 }
 
 // ------------------------------------------------------------ test scripts
@@ -624,7 +770,7 @@ static void savePpm(const std::string& name) {
   fprintf(f, "P6\n%d %d\n255\n", SW, SH);
   for (int y = 0; y < SH; y++)
     for (int x = 0; x < SW; x++) {
-      auto c = g.readPixelRGB(x, y);
+      auto c = G->readPixelRGB(x, y);
       unsigned char px[3] = {c.R8(), c.G8(), c.B8()};
       fwrite(px, 1, 3, f);
     }
@@ -644,7 +790,7 @@ static bool scriptStep() {  // false when there is no script
   if (op == 'd' || op == 'm') { sscanf(st.c_str(), " %*c %d %d", &a, &b); sDown = true; sX = a; sY = b; }
   else if (op == 'u') sDown = false;
   else if (op == 'w') { sscanf(st.c_str(), " %*c %d", &a); scriptWait = nowMs() + a; }
-  else if (op == 's') { sscanf(st.c_str(), " %*c %63s", name); shotName = name; dirty = true; }
+  else if (op == 's') { sscanf(st.c_str(), " %*c %63s", name); shotName = name; sceneDirty = true; }
   else if (op == 'q') exit(0);
   return true;
 }
@@ -656,10 +802,13 @@ void setup() {
   M5.begin();
   M5.Display.setRotation(1);
   M5.Display.setBrightness(140);
-  g.setPsram(true);
-  g.setColorDepth(lgfx::color_depth_t::rgb565_nonswapped);
-  g.createSprite(SH, SW);  // portrait, like the panel
-  g.setRotation(1);
+  for (M5Canvas* c : {&frame, &scene}) {
+    c->setPsram(true);
+    c->setColorDepth(lgfx::color_depth_t::rgb565_nonswapped);
+    c->createSprite(SH, SW);  // portrait, like the panel
+    c->setRotation(1);
+  }
+  learnLayout();
 #if defined(PANEL_NATIVE)
   if (const char* s = getenv("PANEL_SCRIPT")) {
     std::string all = s;
@@ -694,7 +843,7 @@ void setup() {
         bool sameMachines = l.machines.size() == lay.machines.size();
         lay = l;
         if (!sameMachines) drag = D_NONE;
-        dirty = true;
+        sceneDirty = true;
       }
     } else if (line.rfind("error ", 0) == 0) {
       say(line.substr(6));
@@ -719,22 +868,32 @@ void loop() {
 #endif
   {
     auto t = M5.Touch.getDetail();
-    touchInput(t.isPressed(), t.x, t.y);
+    if (t.wasPressed() && !t.isPressed()) {  // a tap shorter than one pass of the loop
+      touchInput(true, t.x, t.y);
+      touchInput(false, t.x, t.y);
+    } else {
+      touchInput(t.isPressed(), t.x, t.y);
+    }
   }
 
   if (hub.connected() != wasConnected) {
     wasConnected = hub.connected();
     if (!wasConnected) { lay.valid = false; drag = D_NONE; gridFrozen = false; }
-    dirty = true;
+    sceneDirty = true;
   }
-  if (!toast.empty() && now > toastUntil) { toast.clear(); dirty = true; }
-  if (now - lastDraw > 1000) dirty = true;
+  if (!toast.empty() && now > toastUntil) { toast.clear(); sceneDirty = true; }
+  if (!lay.valid && now - lastDraw > 1000) sceneDirty = true;  // "joining WiFi..." etc.
 
-  if (dirty) {
-    dirty = false;
+  if (sceneDirty || fingerDirty) {
+    bool full = sceneDirty;
     lastDraw = now;
-    drawFrame();
-    pushFrame();
+    uint32_t t0 = nowMs();
+    render();
+    static uint32_t reported = 0;
+    if (nowMs() - reported > 1000) {
+      reported = nowMs();
+      printf("[panel] %s frame %u ms\n", full ? "full" : "finger", (unsigned)(nowMs() - t0));
+    }
 #if defined(PANEL_NATIVE)
     if (!shotName.empty()) { savePpm(shotName); shotName.clear(); }
 #endif

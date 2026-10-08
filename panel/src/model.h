@@ -17,6 +17,7 @@ struct Monitor {
   std::string fixed;      // wired straight to this machine, or empty
   int output = 0;         // switcher output
   std::string shows;      // machine on it now, or empty
+  int input = 0;          // switcher input tied to its output (even when not shown)
   std::string shared;     // its other input shows this machine (or empty)
   bool sharedOn = false;  // ... and that input is selected
   bool portrait = false;
@@ -73,6 +74,7 @@ struct Layout {
       m.fixed = o["fixed"] | "";
       m.output = o["output"] | 0;
       m.shows = o["shows"] | "";
+      m.input = o["input"] | 0;
       m.shared = o["shared"] | "";
       m.sharedOn = o["sharedOn"] | 0;
       m.portrait = o["portrait"] | 0;
