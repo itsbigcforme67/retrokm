@@ -262,8 +262,8 @@ static void resolve_monitors(void)
 static Monitor *monitor_showing(const Screen *s)
 {
     int i;
-    for (i = 0; s && i < cfg.nmonitors; i++)
-        if (cfg.monitors[i].cur == s) return &cfg.monitors[i];
+    for (i = 0; s && i < cfg.nmonitors; i++)   /* capture cards are not on the desk */
+        if (cfg.monitors[i].cur == s && !cfg.monitors[i].capture) return &cfg.monitors[i];
     return NULL;
 }
 
@@ -274,7 +274,7 @@ static Monitor *neighbor(const Monitor *m, int dir)
 
     for (i = 0; i < cfg.nmonitors; i++) {
         Monitor *k = &cfg.monitors[i];
-        if (k == m || !ready(k->cur) || k->cur == active) continue;
+        if (k == m || k->capture || !ready(k->cur) || k->cur == active) continue;
         switch (dir) {
         case DIR_LEFT:
             if (k->row == m->row && k->col < m->col && (!best || k->col > best->col)) best = k;
@@ -733,6 +733,21 @@ static void run_command(char *cmd, Conn *r)
         int u = key_by_name(argv[1]);
         if (u < 0) ctl_printf(r, "error: unknown key %s\n", argv[1]);
         else { hub_key(hid_to_evdev(u), u, atoi(argv[2])); ctl_printf(r, "ok\n"); }
+    } else if (!strcasecmp(argv[0], "ddc")) {
+        /* ddc: what each DDC monitor reports; ddc <monitor> <input>: switch it */
+        int i, v;
+        if (argc == 3) {
+            Monitor *m = monitor_by_name(argv[1]);
+            if (!m || ddc_state(m, NULL) < 0) ctl_printf(r, "error: no DDC link to %s\n", argv[1]);
+            else { ddc_set_input(m, atoi(argv[2])); ctl_printf(r, "ok\n"); }
+        } else {
+            for (i = 0; i < cfg.nmonitors; i++) {
+                int st = ddc_state(&cfg.monitors[i], &v);
+                if (st < 0) continue;
+                ctl_printf(r, "ddc %s: %s, input %d\n", cfg.monitors[i].name, st ? "answering" : "silent", v);
+            }
+            ctl_printf(r, "ok\n");
+        }
     } else if (!strcasecmp(argv[0], "quit")) {
         quit = 1;
     } else {
@@ -811,7 +826,10 @@ static void layout_json(Sbuf *b)
         sb_str(b, m->cur ? m->cur->name : "");
         sb_printf(b, ",\"shared\":");
         sb_str(b, m->shared ? m->shared->name : "");
-        sb_printf(b, ",\"sharedOn\":%d,\"portrait\":%d}", m->shared_on, m->portrait);
+        sb_printf(b, ",\"sharedOn\":%d,\"portrait\":%d,\"capture\":%d,\"ddc\":%d,\"label\":", m->shared_on,
+                  m->portrait, m->capture, ddc_state(m, NULL));
+        sb_str(b, m->label[0] ? m->label : m->name);
+        sb_printf(b, "}");
     }
     sb_printf(b, "]}");
 }
@@ -878,6 +896,7 @@ static void run_panel_command(char *cmd, Conn *r)
             extron_tie(s->extron_input, m->extron_output);
             if (m->shared_on) {                    /* it must be on its switcher input now */
                 m->shared_on = 0;
+                ddc_set_input(m, m->ddc_switcher);
                 config_save_state();
                 relayout();
             }
@@ -909,6 +928,7 @@ static void run_panel_command(char *cmd, Conn *r)
         if (!m || !m->shared) ctl_printf(r, "error %s has no second input\n", argv[1]);
         else {
             m->shared_on = argc >= 3 ? !strcasecmp(argv[2], "on") : !m->shared_on;
+            ddc_set_input(m, m->shared_on ? m->ddc_shared : m->ddc_switcher);
             logmsg("panel: monitor %s now shows %s", m->name, m->shared_on ? m->shared->name : "the switcher");
             config_save_state();
             relayout();
@@ -1171,6 +1191,24 @@ static void housekeeping(void)
     }
 }
 
+/* The monitor reported (or was found on) another input: if that input is
+ * the shared machine's or the switcher's, follow it. */
+static void ddc_changed(Monitor *m, int ok, int input)
+{
+    int on;
+    if (!ok) { logmsg("ddc: %s stopped answering", m->name); return; }
+    if (!m->shared || (input != m->ddc_shared && input != m->ddc_switcher)) {
+        logmsg("ddc: %s is on input %d", m->name, input);
+        return;
+    }
+    on = input == m->ddc_shared;
+    if (on == m->shared_on) return;
+    m->shared_on = on;
+    logmsg("ddc: %s switched to %s", m->name, on ? m->shared->name : "the switcher");
+    config_save_state();
+    relayout();
+}
+
 static void on_signal(int sig)
 {
     (void)sig;
@@ -1211,19 +1249,21 @@ int main(int argc, char **argv)
     if (cfg.ctl_port > 0 && (cfd = listen_on("127.0.0.1", cfg.ctl_port)) < 0) return 1;
     if (cfg.panel_port > 0 && (pfd_listen = listen_on(cfg.listen, cfg.panel_port)) < 0) return 1;
     extron_init();
+    ddc_init();
     input_init();
     logmsg("hub ready: agents on %s:%d, control on 127.0.0.1:%d", cfg.listen, cfg.port, cfg.ctl_port);
     if (pfd_listen >= 0) logmsg("touch panel on %s:%d", cfg.listen, cfg.panel_port);
     relayout();
 
     while (!quit) {
-        struct pollfd pfd[MAX_CONNS + MAX_DEVICES + 5];
-        Conn *pc[MAX_CONNS + MAX_DEVICES + 5];
-        int infds[MAX_DEVICES], nin, n = 0, timeout = 100, base_in, xfd, xi = -1, ci = -1, pi = -1;
+        struct pollfd pfd[MAX_CONNS + MAX_DEVICES + 6];
+        Conn *pc[MAX_CONNS + MAX_DEVICES + 6];
+        int infds[MAX_DEVICES], nin, n = 0, timeout = 100, base_in, xfd, xi = -1, ci = -1, pi = -1, di = -1;
 
         pfd[n].fd = lfd; pfd[n].events = POLLIN; pc[n++] = NULL;
         if (cfd >= 0) { ci = n; pfd[n].fd = cfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
         if (pfd_listen >= 0) { pi = n; pfd[n].fd = pfd_listen; pfd[n].events = POLLIN; pc[n++] = NULL; }
+        if (ddc_fd() >= 0) { di = n; pfd[n].fd = ddc_fd(); pfd[n].events = POLLIN; pc[n++] = NULL; }
         xfd = extron_fd();
         if (xfd >= 0) { xi = n; pfd[n].fd = xfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
         base_in = n;
@@ -1245,6 +1285,7 @@ int main(int argc, char **argv)
         if (pfd[0].revents & POLLIN) accept_conn(lfd, CONN_AGENT);
         if (ci >= 0 && (pfd[ci].revents & POLLIN)) accept_conn(cfd, CONN_CTL);
         if (pi >= 0 && (pfd[pi].revents & POLLIN)) accept_conn(pfd_listen, CONN_PANEL);
+        if (di >= 0 && (pfd[di].revents & POLLIN)) ddc_readable(ddc_changed);
         if (xi >= 0 && pfd[xi].revents) extron_readable();
         for (i = 0; i < nin; i++)
             if (pfd[base_in + i].revents) input_readable(infds[i]);

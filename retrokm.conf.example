@@ -88,6 +88,20 @@ output = 2
 #output = 3
 #shared = laptop
 #portrait = yes         # drawn upright on the panel
+# With DDC/CI (commands over the video cable) the hub can read and switch the
+# monitor's input itself.  ddc = a DRM connector (card1-HDMI-A-1), the
+# monitor's model name as it reports it (model:DELL P2414H), or /dev/i2c-N.
+#ddc = model:DELL P2414H
+#ddc_shared = dvi       # its input for the shared machine: vga, dvi, dp, hdmi or a number
+#ddc_switcher = vga     # its input for the switcher
+
+# A capture card on a switcher output: shown on the panel, never part of
+# the desk, so the pointer does not go there
+#[monitor capture]
+#label = Capture A
+#pos = 4,0
+#output = 7
+#capture = yes
 
 # ---- hotkeys ------------------------------------------------------------------
 # goto <screen>              control a machine, shown or not

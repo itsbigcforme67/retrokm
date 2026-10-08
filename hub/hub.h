@@ -75,6 +75,10 @@ typedef struct Monitor {
     Screen *shared;              /* the monitor's other input shows this machine */
     int shared_on;               /* ... and is the one selected on the monitor */
     int portrait;                /* drawn tall on the panel */
+    int capture;                 /* a capture card, not a screen on the desk */
+    char label[48];              /* shown on the touch panel */
+    char ddc[64];                /* DRM connector (or /dev/i2c-N) reaching it, for DDC/CI */
+    int ddc_shared, ddc_switcher;   /* its input codes for the shared machine / switcher */
 } Monitor;
 
 typedef struct Hotkey {
@@ -153,6 +157,13 @@ int extron_input_for(int output);       /* 0 = unknown */
 void extron_tie(int input, int output);  /* input 0 = disconnect */
 int extron_online(void);
 void extron_watch(int output);
+
+/* ddc.c */
+int ddc_init(void);
+int ddc_fd(void);                       /* readable when there is news; -1 unused */
+void ddc_set_input(Monitor *m, int input);
+int ddc_state(const Monitor *m, int *input);   /* 1 answering, 0 silent, -1 none */
+void ddc_readable(void (*changed)(Monitor *m, int ok, int input));
 
 /* text.c */
 unsigned char *text_to_utf8(const unsigned char *in, size_t n, int charset, size_t *outn);

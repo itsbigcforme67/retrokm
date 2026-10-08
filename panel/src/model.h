@@ -20,6 +20,9 @@ struct Monitor {
   std::string shared;     // its other input shows this machine (or empty)
   bool sharedOn = false;  // ... and that input is selected
   bool portrait = false;
+  bool capture = false;   // a capture card rather than a screen
+  int ddc = -1;           // the hub can switch its input: 1 yes, 0 not answering, -1 no
+  std::string label;
 };
 
 struct Layout {
@@ -73,6 +76,9 @@ struct Layout {
       m.shared = o["shared"] | "";
       m.sharedOn = o["sharedOn"] | 0;
       m.portrait = o["portrait"] | 0;
+      m.capture = o["capture"] | 0;
+      m.ddc = o["ddc"] | -1;
+      m.label = o["label"] | "";
       l.monitors.push_back(m);
     }
     *this = l;

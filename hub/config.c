@@ -34,6 +34,20 @@ static void copy(char *dst, size_t n, const char *src)
     dst[n - 1] = 0;
 }
 
+/* A monitor input, by name or MCCS number (VCP 0x60 values) */
+static int input_code(const char *v)
+{
+    static const struct { const char *name; int code; } names[] = {
+        { "vga", 1 }, { "vga2", 2 }, { "dvi", 3 }, { "dvi2", 4 }, { "composite", 5 },
+        { "svideo", 7 }, { "component", 12 }, { "dp", 15 }, { "displayport", 15 },
+        { "dp2", 16 }, { "hdmi", 17 }, { "hdmi2", 18 },
+    };
+    size_t i;
+    for (i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (!strcasecmp(v, names[i].name)) return names[i].code;
+    return (int)strtol(v, NULL, 0);
+}
+
 static int parse_remap(Screen *s, char *v)
 {
     char *tok, *save = NULL;
@@ -194,6 +208,15 @@ int config_load(const char *path)
                 mon->shared_on = 1;              /* until the panel says otherwise */
             }
             else if (!strcasecmp(k, "portrait")) mon->portrait = truthy(v);
+            else if (!strcasecmp(k, "capture")) mon->capture = truthy(v);
+            else if (!strcasecmp(k, "ddc")) copy(mon->ddc, sizeof mon->ddc, v);
+            else if (!strcasecmp(k, "ddc_shared") || !strcasecmp(k, "ddc_switcher")) {
+                int code = input_code(v);
+                if (code <= 0) goto bad;
+                if (!strcasecmp(k, "ddc_shared")) mon->ddc_shared = code;
+                else mon->ddc_switcher = code;
+            }
+            else if (!strcasecmp(k, "label")) copy(mon->label, sizeof mon->label, v);
             else goto bad;
             break;
         case S_HOTKEYS: {

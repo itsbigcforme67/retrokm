@@ -104,7 +104,7 @@ struct MonGeo {
   Rect screen, bezel, all;
   int neckX, neckY, baseY, plugX, plugY, labelY;
 };
-static MonGeo monGeo(const Rect& c, bool portrait = false) {
+static MonGeo monGeo(const Rect& c, bool portrait = false, bool capture = false) {
   MonGeo m;
   int mx = (int)(c.w * 0.07f);
   int sw = c.w - 2 * mx, sh = (int)(c.h * 0.56f);
@@ -113,11 +113,20 @@ static MonGeo monGeo(const Rect& c, bool portrait = false) {
     sw = (int)(sh * 0.6f);
     mx = (c.w - sw) / 2;
   }
+  if (capture) {  // a small box with a preview window
+    sw = (int)(c.w * 0.62f);
+    sh = (int)(sw * 0.56f);
+    mx = (c.w - sw) / 2;
+  }
   m.screen = {c.x + mx, c.y + (int)(c.h * 0.05f) + 5, sw, sh};
   m.bezel = {m.screen.x - 6, m.screen.y - 6, sw + 12, sh + 12};
   m.neckX = c.x + c.w / 2;
   m.neckY = m.bezel.y + m.bezel.h;
   m.baseY = m.neckY + (int)(c.h * 0.07f);
+  if (capture) {  // no stand; the box is the bezel plus a strip below the preview
+    m.bezel = {m.screen.x - 10, m.screen.y - 10, sw + 20, sh + 44};
+    m.neckY = m.baseY = m.bezel.y + m.bezel.h;
+  }
   m.labelY = m.baseY + 18;
   m.plugX = m.neckX;
   m.plugY = m.labelY + 34;  // below the name (and the "tap" hint), so cables miss the text
@@ -125,7 +134,7 @@ static MonGeo monGeo(const Rect& c, bool portrait = false) {
   return m;
 }
 
-static MonGeo geoOf(const Monitor& m, const Rect& cell) { return monGeo(cell, m.portrait); }
+static MonGeo geoOf(const Monitor& m, const Rect& cell) { return monGeo(cell, m.portrait, m.capture); }
 static MonGeo geoOf(const Monitor& m) { return geoOf(m, grid.cell(m.col, m.row)); }
 // Its cable is not a switcher cable: wired straight in, or the shared input
 static bool directLink(const Monitor& m) { return !m.fixed.empty() || m.sharedOn; }
@@ -202,7 +211,8 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
   hub.send("tie " + mc.name + " " + mon.name);
   if (mon.sharedOn) {
     mon.sharedOn = false;
-    say("Now set the " + mon.name + " monitor to its VGA input");
+    if (mon.ddc == 1) say("Switching the " + mon.name + " monitor to VGA");
+    else say("Now set the " + mon.name + " monitor to its VGA input");
   }
   mon.shows = mc.name;  // the hub confirms in a moment
 }
@@ -250,8 +260,9 @@ static void release() {
     if (m.shared.empty()) break;
     m.sharedOn = !m.sharedOn;
     hub.send("share " + m.name + (m.sharedOn ? " on" : " off"));
-    if (m.sharedOn) { m.shows = m.shared; say("The " + m.name + " monitor shows " + labelOf(m.shared) + " (HDMI)"); }
-    else say("The " + m.name + " monitor shows the switcher, output " + std::to_string(m.output) + " (VGA)");
+    std::string verb = m.ddc == 1 ? "Switching the " + m.name + " monitor to " : "The " + m.name + " monitor shows ";
+    if (m.sharedOn) { m.shows = m.shared; say(verb + labelOf(m.shared) + " (HDMI)"); }
+    else say(verb + "the switcher, output " + std::to_string(m.output) + " (VGA)");
     break;
   }
   case D_PRESS_LOCK:
@@ -323,12 +334,23 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
   Machine* shown = lay.machine(m.shows);
   bool kbd = shown && shown->name == lay.active;
   if (lifted) g.fillRoundRect(geo.bezel.x + 8, geo.bezel.y + 10, geo.bezel.w, geo.bezel.h, 10, C(0x08090B));
-  // stand
-  int nw = std::max(10, geo.screen.w / 12);
-  g.fillRect(geo.neckX - nw / 2, geo.neckY, nw, geo.baseY - geo.neckY, C(0x2A2F37));
-  g.fillSmoothRoundRect(geo.neckX - geo.screen.w / 5, geo.baseY, geo.screen.w * 2 / 5, 7, 3, C(0x353B45));
-  // bezel and screen
-  g.fillSmoothRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 8, C(fixed ? 0x2B2A2E : 0x262B33));
+  if (m.capture) {  // capture box: dark body, preview window, record light
+    g.fillSmoothRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 12, C(0x202429));
+    g.fillSmoothRoundRect(geo.bezel.x + 3, geo.bezel.y + 3, geo.bezel.w - 6, 4, 2, C(0x2E333A));
+    int sy = geo.screen.y + geo.screen.h + 17;
+    g.fillSmoothCircle(geo.screen.x + 10, sy, 5, C(shown ? 0xEF4444 : 0x4B1D1D));
+    text(shown ? "REC" : "idle", geo.screen.x + 22, sy, shown ? 0xF3B4B4 : 0x6B7482, &fonts::Font2,
+         middle_left);
+    for (int i = 0; i < 3; i++)  // vents
+      g.fillRect(geo.screen.x + geo.screen.w - 30 + i * 10, sy - 5, 4, 10, C(0x15181C));
+  } else {
+    // stand
+    int nw = std::max(10, geo.screen.w / 12);
+    g.fillRect(geo.neckX - nw / 2, geo.neckY, nw, geo.baseY - geo.neckY, C(0x2A2F37));
+    g.fillSmoothRoundRect(geo.neckX - geo.screen.w / 5, geo.baseY, geo.screen.w * 2 / 5, 7, 3, C(0x353B45));
+    // bezel
+    g.fillSmoothRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 8, C(fixed ? 0x2B2A2E : 0x262B33));
+  }
   const Rect& s = geo.screen;
   if (shown) {
     int mi = lay.machineIndex(shown->name);
@@ -358,14 +380,15 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
   }
   // name and how it is wired
   char buf[64];
-  if (fixed) snprintf(buf, sizeof buf, "%s  -  built in", m.name.c_str());
-  else if (m.sharedOn) snprintf(buf, sizeof buf, "%s  -  HDMI", m.name.c_str());
-  else if (!m.shared.empty()) snprintf(buf, sizeof buf, "%s  -  VGA, out %d", m.name.c_str(), m.output);
-  else snprintf(buf, sizeof buf, "%s  -  out %d", m.name.c_str(), m.output);
+  const char* nm = m.label.empty() ? m.name.c_str() : m.label.c_str();
+  if (fixed) snprintf(buf, sizeof buf, "%s  -  built in", nm);
+  else if (m.sharedOn) snprintf(buf, sizeof buf, "%s  -  HDMI", nm);
+  else if (!m.shared.empty()) snprintf(buf, sizeof buf, "%s  -  VGA, out %d", nm, m.output);
+  else snprintf(buf, sizeof buf, "%s  -  out %d", nm, m.output);
   text(buf, geo.neckX, geo.labelY, fixed ? MUTED : 0xB8C0CC, &fonts::FreeSans9pt7b);
   if (!m.shared.empty()) {  // tap to say which input it is on
     g.setFont(&fonts::Font2);
-    const char* hint = "tap to switch input";
+    const char* hint = m.ddc == 1 ? "tap to switch input" : "tap to say which input";
     text(hint, geo.neckX, geo.labelY + 17, 0x6B7482, &fonts::Font2);
   }
 }
@@ -493,7 +516,7 @@ static void drawFrame() {
           if (abs(m.col - c) + abs(m.row - r) == 1) near = true;
         }
         if (!near && !taken) continue;
-        MonGeo geo = monGeo(cell, lay.monitors[dragIdx].portrait);
+        MonGeo geo = geoOf(lay.monitors[dragIdx], cell);
         bool target = c == tc && r == tr;
         uint32_t col = target ? ACCENT : 0x39414D;
         for (int i = 0; i < (target ? 3 : 1); i++)
