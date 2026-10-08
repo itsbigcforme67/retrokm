@@ -1,2 +1,3 @@
 include/secrets.h
 .pio/
+src/idf_component.yml.orig
