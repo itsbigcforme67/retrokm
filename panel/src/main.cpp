@@ -214,6 +214,15 @@ static const char* labelOf(const std::string& name) {
 static void plugInto(int mi, int ni, int fromMon = -1) {
   Machine& mc = lay.machines[mi];
   Monitor& mon = lay.monitors[ni];
+  if (mon.shared == mc.name) {  // it is on the monitor's other input: switch the monitor over
+    if (mon.sharedOn) { say(mc.label + " is already on the " + mon.name + " monitor"); return; }
+    hub.send("share " + mon.name + " on");
+    mon.sharedOn = true;
+    mon.shows = mc.name;
+    say((mon.ddc == 1 ? "Switching the " + mon.name + " monitor to " : "The " + mon.name + " monitor shows ") +
+        mc.label);
+    return;
+  }
   if (!mon.fixed.empty()) {
     say(mon.fixed == mc.name ? std::string("That monitor is already ") + mc.label + "'s own screen"
                              : std::string("That monitor is wired straight to ") + labelOf(mon.fixed));
@@ -617,6 +626,7 @@ static void drawFinger() {
       auto& m = lay.monitors[ni];
       int mi = drag == D_CABLE ? dragIdx : lay.machineIndex(lay.monitors[dragIdx].shows);
       bool okDrop = m.fixed.empty() && mi >= 0 && lay.machines[mi].input && lay.switcherOnline;
+      if (mi >= 0 && m.shared == lay.machines[mi].name) okDrop = true;  // its other input
       if (drag == D_PLUG && ni == dragIdx) okDrop = true;
       outline(geoOf(m), okDrop ? ACCENT : BAD_C);
     }
