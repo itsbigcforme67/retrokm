@@ -14,6 +14,11 @@ on_tie = follow
 #port = 24850
 #control_port = 24851  # text commands on 127.0.0.1; 0 disables
 #panel_port = 24852    # Tab5 touch panel, on the LAN (see panel/README.md)
+# Colour an RGB keyboard after the machine it is typing on (Fnatic Streak /
+# miniStreak so far).  Each [screen] can set "color = #RRGGBB"; otherwise
+# its picture picks one (the same colours as the touch panel).
+#keyboard_lights = yes
+#lights_brightness = 80
 #state = retrokm.conf.state   # where monitor moves from the panel are saved
 
 [extron]

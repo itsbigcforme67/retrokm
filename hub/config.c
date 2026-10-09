@@ -89,6 +89,8 @@ int config_load(const char *path)
     cfg.extron_poll = 5;
     cfg.extron_tie_cmd = '!';
     cfg.extron_read_cmd = '%';
+    cfg.lights = 1;
+    cfg.lights_brightness = 80;
     cfg.extron_inputs = 8;
     cfg.extron_outputs = 8;
     snprintf(cfg.state_path, sizeof cfg.state_path, "%s.state", path);
@@ -123,6 +125,7 @@ int config_load(const char *path)
                 scr->min_move_ms = 8;
                 scr->w = 1024;
                 scr->h = 768;
+                scr->color = -1;
             } else if (!strcasecmp(kind, "monitor")) {
                 if (!*name || cfg.nmonitors >= MAX_MONITORS) goto bad;
                 sec = S_MONITOR;
@@ -144,6 +147,8 @@ int config_load(const char *path)
             else if (!strcasecmp(k, "port")) cfg.port = atoi(v);
             else if (!strcasecmp(k, "control_port")) cfg.ctl_port = atoi(v);
             else if (!strcasecmp(k, "panel_port")) cfg.panel_port = atoi(v);
+            else if (!strcasecmp(k, "keyboard_lights")) cfg.lights = truthy(v);
+            else if (!strcasecmp(k, "lights_brightness")) cfg.lights_brightness = atoi(v);
             else if (!strcasecmp(k, "state")) copy(cfg.state_path, sizeof cfg.state_path, v);
             else if (!strcasecmp(k, "grab")) cfg.grab = truthy(v);
             else if (!strcasecmp(k, "speed")) cfg.speed = atof(v);
@@ -172,6 +177,7 @@ int config_load(const char *path)
             else if (!strcasecmp(k, "label")) copy(scr->label, sizeof scr->label, v);
             else if (!strcasecmp(k, "art")) copy(scr->art, sizeof scr->art, v);
             else if (!strcasecmp(k, "agent")) scr->no_agent = !truthy(v);
+            else if (!strcasecmp(k, "color")) scr->color = strtol(v[0] == '#' ? v + 1 : v, NULL, 16);
             else if (!strcasecmp(k, "size")) {
                 if (sscanf(v, "%dx%d", &scr->w, &scr->h) != 2) goto bad;
             }

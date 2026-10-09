@@ -466,6 +466,7 @@ static void switch_to(Screen *t, Monitor *m, double x, double y)
     t->move_pending = 0;
     t->rel_dx = t->rel_dy = 0;
     logmsg("-> %s%s%s", t->name, m ? " on monitor " : "", m ? m->name : "");
+    lights_set(lights_color(t));
     do_enter(t);
 }
 
@@ -504,6 +505,7 @@ static void relayout(void)
         logmsg("%s: did not come back", active->name);
         active = NULL;                          /* nothing to say goodbye to */
         active_mon = NULL;
+        lights_set(0xFFFFFFFF);
     }
     if (active) active_lost_ms = 0;
     if (active_mon && active && active_mon->cur != active) {
@@ -762,6 +764,12 @@ static void run_command(char *cmd, Conn *r)
             }
             ctl_printf(r, "ok\n");
         }
+    } else if (!strcasecmp(argv[0], "lights") && argc == 2) {
+        /* lights #rrggbb | off (keyboard's own) | auto (the active machine's) */
+        if (!strcasecmp(argv[1], "off")) lights_set(0xFFFFFFFF);
+        else if (!strcasecmp(argv[1], "auto")) lights_set(active ? lights_color(active) : 0xFFFFFFFF);
+        else lights_set(strtoul(argv[1][0] == '#' ? argv[1] + 1 : argv[1], NULL, 16));
+        ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "quit")) {
         quit = 1;
     } else {
@@ -1325,6 +1333,7 @@ int main(int argc, char **argv)
             now_ms() - active->last_move_ms >= active->min_move_ms)
             flush_move(active);
         input_tick();
+        lights_tick();
         extron_tick();
         housekeeping();
         reap();
@@ -1332,6 +1341,7 @@ int main(int argc, char **argv)
     }
 
     if (active) do_leave(active);
+    lights_set(0xFFFFFFFF);                     /* the keyboard's own lighting again */
     for (i = 0; i < MAX_CONNS; i++)
         if (conns[i].kind != CONN_FREE) { conn_flush(&conns[i]); close(conns[i].fd); }
     logmsg("hub stopped");

@@ -1,7 +1,7 @@
 # RetroKM hub.  Needs only a C compiler and Linux headers.
 CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra
-OBJS    = main.o config.o keymap.o evdev.o uinput.o extron.o ddc.o text.o rkm_proto.o
+OBJS    = main.o config.o keymap.o evdev.o uinput.o extron.o ddc.o lights.o text.o rkm_proto.o
 
 retrokm-hub: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) -lm -lpthread

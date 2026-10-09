@@ -65,6 +65,7 @@ typedef struct Screen {
     int area_mon[MAX_AREAS];     /* only real while this monitor is shared; -1 always */
     int narea;
     int no_agent;                /* video only (a console): never takes input */
+    long color;                  /* keyboard lighting 0xRRGGBB, -1 = from its picture */
 } Screen;
 
 typedef struct Monitor {
@@ -98,6 +99,8 @@ typedef struct Config {
     int grab;
     double speed, accel;
     int follow_tie;              /* active screen follows the monitor on a tie */
+    int lights;                  /* colour the keyboard after the active machine */
+    int lights_brightness;       /* percent */
     char extron_dev[128];
     int extron_baud, extron_poll;
     int extron_inputs, extron_outputs;   /* size of the matrix */
@@ -165,6 +168,11 @@ int ddc_fd(void);                       /* readable when there is news; -1 unuse
 void ddc_set_input(Monitor *m, int input);
 int ddc_state(const Monitor *m, int *input);   /* 1 answering, 0 silent, -1 none */
 void ddc_readable(void (*changed)(Monitor *m, int ok, int input));
+
+/* lights.c */
+void lights_set(unsigned long rgb);     /* 0xFFFFFFFF: the keyboard's own lighting */
+void lights_tick(void);
+unsigned long lights_color(const Screen *s);
 
 /* text.c */
 unsigned char *text_to_utf8(const unsigned char *in, size_t n, int charset, size_t *outn);
