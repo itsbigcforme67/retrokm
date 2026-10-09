@@ -40,6 +40,8 @@ static unsigned char mods;       /* physical modifier state, HID bit order */
 static int buttons;              /* physical mouse buttons held (bit per button) */
 static int locked;               /* edge switching disabled */
 static int touched;              /* any input yet; until then the first screen wins */
+static long long active_lost_ms; /* the active screen's agent dropped: when */
+#define REJOIN_MS 4000           /* how long to wait for it to come back */
 static unsigned char swallowed[256];
 
 static unsigned char *clip;      /* UTF-8, LF line endings */
@@ -492,9 +494,18 @@ static void relayout(void)
 {
     resolve_monitors();
     if (active && !ready(active)) {
+        /* Agents reconnect (WiFi blips, a hardware keyboard re-joining): keep
+         * the keyboard where it is for a moment rather than yank it away. */
+        if (!active_lost_ms) {
+            active_lost_ms = now_ms();
+            logmsg("%s: dropped, waiting %d s for it to come back", active->name, REJOIN_MS / 1000);
+        }
+        if (now_ms() - active_lost_ms < REJOIN_MS) return;
+        logmsg("%s: did not come back", active->name);
         active = NULL;                          /* nothing to say goodbye to */
         active_mon = NULL;
     }
+    if (active) active_lost_ms = 0;
     if (active_mon && active && active_mon->cur != active) {
         Screen *t = active_mon->cur;
         if (cfg.follow_tie && ready(t)) {
@@ -1179,6 +1190,7 @@ static void housekeeping(void)
     long long now = now_ms();
     int i;
 
+    if (active_lost_ms && active && !ready(active) && now - active_lost_ms >= REJOIN_MS) relayout();
     if (now - last_ping < 1000) return;
     for (i = 0; i < MAX_CONNS; i++) {
         Conn *c = &conns[i];

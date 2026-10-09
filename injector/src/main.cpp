@@ -11,6 +11,7 @@
 // USB device, with a settings console on the serial port:
 //   show | name <screen> | label <board name> | hub <host> | swap | reboot
 #include <Arduino.h>
+#include <errno.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -270,7 +271,16 @@ static void onFrame(void*, int type, const unsigned char* p, unsigned len) {
 static void pollHub() {
   uint32_t now = millis();
   if (WiFi.status() != WL_CONNECTED) { welcomed = false; return; }
-  if (!hub.connected()) {
+  // WiFiClient::connected() peeks with a 0-byte recv, which does not set
+  // errno, then reads errno: a stale error from the log or settings sockets
+  // made it report a live link as dead.  Clear it first; a dead hub is
+  // caught by its pings stopping (below) or by a failed read.
+  errno = 0;
+  static bool wasUp;
+  bool up = hub.connected();
+  if (wasUp && !up) logf("hub: link lost");
+  wasUp = up;
+  if (!up) {
     welcomed = false;
     if (now - lastTry < 2000) return;
     lastTry = now;
@@ -291,10 +301,10 @@ static void pollHub() {
   while (hub.available()) {
     int n = hub.read(buf, sizeof buf);
     if (n <= 0) break;
-    if (rkm_feed(&parser, buf, n, onFrame, nullptr) < 0) { hub.stop(); return; }
+    if (rkm_feed(&parser, buf, n, onFrame, nullptr) < 0) { logf("hub: bad frame, reconnecting"); hub.stop(); return; }
   }
   if (now - lastRx > 30000) {  // the hub pings every few seconds
-    Serial.println("hub went quiet, reconnecting");
+    logf("hub: went quiet, reconnecting");
     hub.stop();
   }
 }
