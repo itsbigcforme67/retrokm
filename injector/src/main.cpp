@@ -9,7 +9,7 @@
 // At power-up it looks at the USB pins: a PS/2 port holds them high, a
 // USB port (the laptop) holds them low.  On the laptop it stays a normal
 // USB device, with a settings console on the serial port:
-//   show | name <screen> | hub <host> | swap | reboot
+//   show | name <screen> | label <board name> | hub <host> | swap | reboot
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -27,7 +27,7 @@ static const int USB_DM = 12, USB_DP = 13;  // the USB-C data pins = PS/2 data /
 static const int LED = 7;                   // NanoC6 blue LED
 
 static Preferences prefs;
-static String name, hubHost;
+static String name, hubHost, label;  // label: this board's own name (octanekb.local)
 static bool swapPins;
 
 static Ps2Line line;
@@ -225,6 +225,7 @@ static void loadSettings() {
   name = prefs.getString("name", RKM_DEFAULT_NAME);
   hubHost = prefs.getString("hub", HUB_HOST);
   swapPins = prefs.getBool("swap", false);
+  label = prefs.isKey("label") ? prefs.getString("label") : name + "kb";
 }
 
 static void console() {
@@ -235,14 +236,15 @@ static void console() {
     in.trim();
     if (in.startsWith("name ")) { name = in.substring(5); prefs.putString("name", name); }
     else if (in.startsWith("hub ")) { hubHost = in.substring(4); prefs.putString("hub", hubHost); }
+    else if (in.startsWith("label ")) { label = in.substring(6); prefs.putString("label", label); }
     else if (in == "swap") { swapPins = !swapPins; prefs.putBool("swap", swapPins); }
     else if (in == "reboot") ESP.restart();
     if (in.length()) {
-      Serial.printf("name=%s hub=%s pins=%s wifi=%s hub link=%s\n", name.c_str(), hubHost.c_str(),
+      Serial.printf("label=%s name=%s hub=%s pins=%s wifi=%s hub link=%s\n", label.c_str(), name.c_str(), hubHost.c_str(),
                     swapPins ? "swapped (D-=clock)" : "normal (D+=clock)",
                     WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "joining",
                     welcomed ? "up" : "down");
-      Serial.println("commands: show | name <screen> | hub <host> | swap | reboot");
+      Serial.println("commands: show | name <screen> | label <board name> | hub <host> | swap | reboot");
     }
     in = "";
   }
@@ -261,7 +263,8 @@ void setup() {
   if (!ps2Mode) Serial.setDebugOutput(true);  // library errors to the console too
   pinMode(LED, OUTPUT);
   digitalWrite(LED, LOW);
-  logf("boot: %s mode, name %s", ps2Mode ? "PS/2" : "USB", name.c_str());
+  logf("boot: %s (%s), %s mode, screen %s", label.c_str(), WiFi.macAddress().c_str(),
+       ps2Mode ? "PS/2" : "USB", name.c_str());
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // power saving would make keys late
@@ -269,7 +272,8 @@ void setup() {
   WiFi.setTxPower(WIFI_POWER_8_5dBm);  // gentle on a PS/2 port's power; plenty across a room
 
   // updates over WiFi:  pio run -t upload --upload-port <ip>  (env:ota)
-  ArduinoOTA.setHostname(("rkm-kbd-" + name).c_str());
+  ArduinoOTA.setHostname(label.c_str());  // reachable as <label>.local
+  WiFi.setHostname(label.c_str());
   ArduinoOTA.onStart([] { logf("ota: updating"); flushLog(); });
   ArduinoOTA.begin();
 }

@@ -27,9 +27,25 @@ device, so it can be flashed and configured there.
     pio device monitor                               # settings console
 
 Console commands: `show`, `name <screen>` (the hub `[screen]` it types
-into, default from secrets.h), `hub <host>`, `swap` (if keys come out as
+into, default from secrets.h), `label <board name>` (its own name on the
+network, default `<screen>kb`), `hub <host>`, `swap` (if keys come out as
 garbage: the adapter has clock and data the other way round), `reboot`.
 Settings are kept in flash.
+
+## Updating it where it is plugged in
+
+After the first USB flash, updates go over WiFi:
+
+    ./update.sh octanekb      # its label, found as octanekb.local
+    ./update.sh octane        # or the hub screen it types into
+    ./update.sh 192.168.1.120 # or its address
+
+## Log
+
+In PS/2 mode the USB port is busy, so the board sends its log (mode, every
+byte to and from the computer) as UDP to the hub's host, port 24853:
+
+    nc -klu 24853
 
 The blue LED blinks while it looks for WiFi and the hub, and stays on once
 the hub has accepted it.
