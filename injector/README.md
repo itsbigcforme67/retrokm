@@ -26,10 +26,12 @@ device, so it can be flashed and configured there.
     pio run -t upload                                # NanoC6 plugged into the laptop
     pio device monitor                               # settings console
 
-Console commands: `show`, `name <screen>` (the hub `[screen]` it types
+Console commands (also over the network: `echo show | nc -u -w1 <ip> 24854`): `show`, `name <screen>` (the hub `[screen]` it types
 into, default from secrets.h), `label <board name>` (its own name on the
 network, default `<screen>kb`), `hub <host>`, `swap` (if keys come out as
-garbage: the adapter has clock and data the other way round), `reboot`.
+garbage: the adapter has clock and data the other way round; normal is
+D+ = clock), `trace` (record every change on the lines for 2 minutes),
+`drive` (check both lines can be pulled low), `reboot`.
 Settings are kept in flash.
 
 ## Updating it where it is plugged in
@@ -70,5 +72,10 @@ ask for make/break on every key) are both supported; the computer picks.
   C6 is a 3.3 V part. The firmware only ever pulls the lines low (open
   drain), and the pull-ups limit the current, but this is outside the
   chip's rating. A BSS138 level shifter is the proper fix.
-- Not yet tried on real hardware (as of the first version).
+- Works on an SGI Octane (IP30): it identifies, switches to scan code
+  set 3 and passes the PROM's keyboard check.
+- On the C6, `Serial.begin()` switches the USB pads back on, which takes
+  the pins away from GPIO (and puts a 1.5k pull-up on D+). In PS/2 mode the
+  firmware never starts Serial and switches the pads off if anything turns
+  them on. `drive` on the console checks both lines can be pulled low.
 - Keyboard only. Mouse emulation would be a second board on the mouse port.

@@ -55,20 +55,24 @@ class Ps2Line {
   }
 
   // Read the command the computer is sending (call when hostWantsToSend).
-  // The byte, or -1 on a framing or parity error.
-  int receive() {
+  // The byte, or -1 on a parity error.  bits gets what was seen, for the log.
+  int receive(uint16_t* bits = nullptr) {
     int v = 0, ones = 0, ok = 1;
+    uint16_t seen = 0;
     portENTER_CRITICAL(&mux_);
+    // Some computers (the Octane) take a while after letting go of the clock
+    // before they are ready to shift bits out; the spec allows us 15 ms
+    ets_delay_us(RX_WAIT);
     for (int i = 0; i < 10; i++) {  // 8 data bits, parity, stop
-      ets_delay_us(HALF / 2);
       gpio_set_level(clk_, 0);  // the computer changes data while the clock is low
-      ets_delay_us(HALF);
+      ets_delay_us(RX_HALF);
       gpio_set_level(clk_, 1);
-      ets_delay_us(HALF / 2);  // and we read it while the clock is high
+      ets_delay_us(RX_HALF - 8);  // read late in the high half: slow hosts change late
       int bit = datHigh();
+      seen |= bit << i;
       if (i < 8) v |= bit << i;
       if (i < 9) ones += bit;
-      if (i == 9 && !bit) ok = 0;  // stop bit should be 1
+      ets_delay_us(8);
     }
     // acknowledge: hold data low for one more clock
     gpio_set_level(dat_, 0);
@@ -79,12 +83,15 @@ class Ps2Line {
     ets_delay_us(HALF / 2);
     gpio_set_level(dat_, 1);
     portEXIT_CRITICAL(&mux_);
-    if (!(ones & 1)) ok = 0;  // odd parity over data + parity bit
+    if (bits) *bits = seen;
+    if (!(ones & 1)) ok = 0;  // odd parity over data + parity bit (a bad stop bit is let pass)
     return ok ? v : -1;
   }
 
  private:
-  static const int HALF = 40;  // µs: clock low and high are 30-50 µs each
+  static const int HALF = 40;     // µs: clock low and high are 30-50 µs each
+  static const int RX_HALF = 48;  // slower while the computer is sending to us
+  static const int RX_WAIT = 1000;
   gpio_num_t clk_, dat_;
   portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
 };

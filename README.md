@@ -55,7 +55,7 @@ This was built without access to the real hardware. Be clear-eyed about it:
 | `rkm_clip.py` | Tested with stand-in commands, not with wl-clipboard itself |
 | Windows agent | Built with Open Watcom (`agents/win32/build-watcom.sh`); works on Windows 2000 (Dell Precision 410); not yet run on 98 SE |
 | Tab5 touch panel (`panel/`) | Tested in its Linux build against the hub and the Extron simulator; builds for the Tab5, not yet run on it |
-| NanoC6 PS/2 keyboard (`injector/`) | Builds; scan code tables and command replies unit-tested; hub routing tested with a simulated board; not yet run on hardware |
+| NanoC6 PS/2 keyboard (`injector/`) | Works on an SGI Octane: passes the PROM keyboard check in scan code set 3; updates over WiFi |
 | Classic Mac agent | Written and syntax-checked against stub headers only; never compiled with Retro68 or run |
 
 Expect the Mac agent to need a debugging pass on real machines.
