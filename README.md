@@ -56,6 +56,7 @@ This was built without access to the real hardware. Be clear-eyed about it:
 | Windows agent | Built with Open Watcom (`agents/win32/build-watcom.sh`); works on Windows 2000 (Dell Precision 410); not yet run on 98 SE |
 | Tab5 touch panel (`panel/`) | Tested in its Linux build against the hub and the Extron simulator; builds for the Tab5, not yet run on it |
 | NanoC6 PS/2 keyboard (`injector/`) | Works on an SGI Octane: passes the PROM keyboard check in scan code set 3; updates over WiFi |
+| Keyboard lighting (`hub/lights.c`) | Works on a Fnatic Gear Streak: the keyboard takes the colour of the machine in use |
 | Classic Mac agent | Written and syntax-checked against stub headers only; never compiled with Retro68 or run |
 
 Expect the Mac agent to need a debugging pass on real machines.
