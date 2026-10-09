@@ -145,7 +145,10 @@ static void pollHub() {
     welcomed = false;
     if (now - lastTry < 2000) return;
     lastTry = now;
-    if (!hub.connect(hubHost.c_str(), RKM_PORT, 1500)) return;
+    if (!hub.connect(hubHost.c_str(), RKM_PORT, 3000)) {
+      Serial.printf("cannot reach the hub at %s:%d\n", hubHost.c_str(), RKM_PORT);
+      return;
+    }
     hub.setNoDelay(true);
     rkm_parser_init(&parser);
     unsigned char hello[10 + RKM_NAME_MAX];
@@ -203,6 +206,7 @@ void setup() {
   ps2Mode = onPs2Port();
   if (!ps2Mode) usbPads(true);  // on the laptop: be a USB device again
   Serial.begin(115200);
+  if (!ps2Mode) Serial.setDebugOutput(true);  // library errors to the console too
   pinMode(LED, OUTPUT);
   digitalWrite(LED, LOW);
   loadSettings();
