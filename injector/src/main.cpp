@@ -39,7 +39,12 @@ static Ps2Keyboard kbd;
 static SemaphoreHandle_t lock;
 static bool ps2Mode;
 
-static WiFiClient hub;
+// The hub link is a plain non-blocking lwIP socket: WiFiClient's
+// connected()/available() misjudged a healthy link as dead (stale errno).
+#include <lwip/sockets.h>
+#include <lwip/netdb.h>
+static int hubFd = -1;
+static bool hubUp;  // connect finished
 static rkm_parser parser;
 static uint32_t lastTry, lastRx;
 static bool welcomed;
@@ -232,10 +237,27 @@ static void ps2Task(void*) {
 
 // ------------------------------------------------------------ hub side
 
+static void hubClose(const char* why) {
+  if (hubFd >= 0) {
+    close(hubFd);
+    if (why) logf("hub: %s", why);
+  }
+  hubFd = -1;
+  hubUp = false;
+  welcomed = false;
+}
+
 static void sendFrame(int type, const unsigned char* p, unsigned len) {
   unsigned char buf[RKM_HDR + RKM_MAX_PAYLOAD];
   unsigned n = rkm_pack(buf, type, p, len);
-  if (hub.connected()) hub.write(buf, n);
+  if (!hubUp) return;
+  for (unsigned off = 0; off < n;) {
+    int k = send(hubFd, buf + off, n - off, 0);
+    if (k > 0) { off += k; continue; }
+    if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { delay(1); continue; }
+    hubClose("send failed, reconnecting");
+    return;
+  }
 }
 
 static void onFrame(void*, int type, const unsigned char* p, unsigned len) {
@@ -270,43 +292,63 @@ static void onFrame(void*, int type, const unsigned char* p, unsigned len) {
 
 static void pollHub() {
   uint32_t now = millis();
-  if (WiFi.status() != WL_CONNECTED) { welcomed = false; return; }
-  // WiFiClient::connected() peeks with a 0-byte recv, which does not set
-  // errno, then reads errno: a stale error from the log or settings sockets
-  // made it report a live link as dead.  Clear it first; a dead hub is
-  // caught by its pings stopping (below) or by a failed read.
-  errno = 0;
-  static bool wasUp;
-  bool up = hub.connected();
-  if (wasUp && !up) logf("hub: link lost");
-  wasUp = up;
-  if (!up) {
-    welcomed = false;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (hubFd >= 0) hubClose("WiFi lost");
+    return;
+  }
+  if (hubFd < 0) {  // start connecting
     if (now - lastTry < 2000) return;
     lastTry = now;
-    if (!hub.connect(hubHost.c_str(), RKM_PORT, 3000)) {
-      Serial.printf("cannot reach the hub at %s:%d\n", hubHost.c_str(), RKM_PORT);
-      return;
+    sockaddr_in sa = {};
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(RKM_PORT);
+    if (inet_pton(AF_INET, hubHost.c_str(), &sa.sin_addr) != 1) {
+      hostent* he = gethostbyname(hubHost.c_str());
+      if (!he) return;
+      memcpy(&sa.sin_addr, he->h_addr_list[0], sizeof sa.sin_addr);
     }
-    hub.setNoDelay(true);
-    rkm_parser_init(&parser);
-    unsigned char hello[10 + RKM_NAME_MAX];
-    unsigned n = rkm_hello(hello, RKM_CAP_KEYS, RKM_CS_UTF8, RKM_EOL_LF, 0, 0, 0, name.c_str());
-    sendFrame(RKM_HELLO, hello, n);
-    lastRx = now;
-    logf("hub: connected to %s as \"%s\" (%s mode)", hubHost.c_str(), name.c_str(), ps2Mode ? "PS/2" : "USB");
+    hubFd = socket(AF_INET, SOCK_STREAM, 0);
+    if (hubFd < 0) return;
+    int one = 1;
+    setsockopt(hubFd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    fcntl(hubFd, F_SETFL, fcntl(hubFd, F_GETFL, 0) | O_NONBLOCK);
+    if (connect(hubFd, (sockaddr*)&sa, sizeof sa) < 0 && errno != EINPROGRESS) { hubClose(nullptr); return; }
+    return;
+  }
+  if (!hubUp) {  // connecting
+    fd_set w;
+    FD_ZERO(&w);
+    FD_SET(hubFd, &w);
+    timeval tv = {0, 0};
+    if (select(hubFd + 1, nullptr, &w, nullptr, &tv) > 0) {
+      int err = 0;
+      socklen_t len = sizeof err;
+      getsockopt(hubFd, SOL_SOCKET, SO_ERROR, &err, &len);
+      if (err) { hubClose(nullptr); return; }
+      hubUp = true;
+      rkm_parser_init(&parser);
+      unsigned char hello[10 + RKM_NAME_MAX];
+      unsigned n = rkm_hello(hello, RKM_CAP_KEYS, RKM_CS_UTF8, RKM_EOL_LF, 0, 0, 0, name.c_str());
+      sendFrame(RKM_HELLO, hello, n);
+      lastRx = now;
+      logf("hub: connected to %s as \"%s\" (%s mode)", hubHost.c_str(), name.c_str(), ps2Mode ? "PS/2" : "USB");
+    } else if (now - lastTry > 4000) {
+      hubClose(nullptr);
+    }
     return;
   }
   unsigned char buf[512];
-  while (hub.available()) {
-    int n = hub.read(buf, sizeof buf);
-    if (n <= 0) break;
-    if (rkm_feed(&parser, buf, n, onFrame, nullptr) < 0) { logf("hub: bad frame, reconnecting"); hub.stop(); return; }
+  for (;;) {
+    int n = recv(hubFd, buf, sizeof buf, MSG_DONTWAIT);
+    if (n > 0) {
+      if (rkm_feed(&parser, buf, n, onFrame, nullptr) < 0) { hubClose("bad frame, reconnecting"); return; }
+      continue;
+    }
+    if (n == 0) { hubClose("hub closed the link, reconnecting"); return; }
+    if (errno != EAGAIN && errno != EWOULDBLOCK) { hubClose("link error, reconnecting"); return; }
+    break;
   }
-  if (now - lastRx > 30000) {  // the hub pings every few seconds
-    logf("hub: went quiet, reconnecting");
-    hub.stop();
-  }
+  if (now - lastRx > 30000) hubClose("hub went quiet, reconnecting");  // it pings every 5 s
 }
 
 // ------------------------------------------------------------ settings
