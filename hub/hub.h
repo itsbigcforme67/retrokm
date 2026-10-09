@@ -51,6 +51,7 @@ typedef struct Screen {
     double speed;                /* per-screen pointer speed multiplier */
     int min_move_ms;             /* motion rate limit */
     Conn *in;                    /* connection with RKM_CAP_INPUT */
+    Conn *kbd;                   /* hardware keyboard (RKM_CAP_KEYS): takes the keys */
     Conn *clip;                  /* connection with RKM_CAP_CLIP */
     unsigned clip_gen;           /* hub clipboard generation this screen has */
     double last_x, last_y;       /* where the pointer was when we left */

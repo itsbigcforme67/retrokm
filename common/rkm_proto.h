@@ -41,6 +41,9 @@
 #define RKM_CAP_INPUT  0x01  /* can inject mouse and keyboard                     */
 #define RKM_CAP_CLIP   0x02  /* can read and write the clipboard                  */
 #define RKM_CAP_REL    0x04  /* pointer is relative only (hardware injectors)     */
+#define RKM_CAP_KEYS   0x08  /* a hardware keyboard: gets ENTER, LEAVE, KEY and   */
+                             /* RESET only; the machine's agent (if any) keeps    */
+                             /* the pointer and clipboard                         */
 
 /* HELLO charset: encoding the agent uses for clipboard text */
 #define RKM_CS_UTF8     0

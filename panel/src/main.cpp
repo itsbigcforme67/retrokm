@@ -453,7 +453,11 @@ static void drawCard(int i, bool pressed) {
   text(m.label.c_str(), r.x + r.w / 2, r.y + 158, lit ? TEXT : MUTED, &fonts::FreeSansBold12pt7b);
   // status line
   int y = r.y + 188;
-  const char* st = !m.agent ? "video only" : m.ready ? (kbd ? "keyboard" : "online") : "offline";
+  const char* st = !m.agent ? "video only"
+                 : !m.ready ? "offline"
+                 : kbd ? "keyboard"
+                 : m.kbd && !m.soft ? "PS/2 only"   // booting, or no agent: keys still work
+                 : m.kbd ? "online + PS/2" : "online";
   char wire[24];
   bool own = false;
   for (auto& mon : lay.monitors) if (mon.fixed == m.name) own = true;

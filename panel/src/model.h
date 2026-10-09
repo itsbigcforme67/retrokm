@@ -9,6 +9,8 @@ struct Machine {
   int input = 0;          // switcher input, 0 = not on the switcher
   bool ready = false;     // its agent is connected
   bool agent = true;      // false: video only (a console)
+  bool kbd = false;       // a hardware (PS/2) keyboard is plugged into it
+  bool soft = false;      // its software agent is running
 };
 
 struct Monitor {
@@ -64,6 +66,8 @@ struct Layout {
       m.input = s["input"] | 0;
       m.ready = s["ready"] | 0;
       m.agent = s["agent"] | 1;
+      m.kbd = s["kbd"] | 0;
+      m.soft = s["soft"] | 0;
       l.machines.push_back(m);
     }
     for (JsonObject o : doc["monitors"].as<JsonArray>()) {

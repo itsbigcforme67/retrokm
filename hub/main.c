@@ -88,7 +88,7 @@ Monitor *monitor_by_name(const char *name)
 
 static int ready(const Screen *s)
 {
-    return s && !s->no_agent && (s->local || s->in);
+    return s && !s->no_agent && (s->local || s->in || s->kbd);
 }
 
 static int is_rel(const Screen *s)
@@ -414,6 +414,7 @@ static void do_leave(Screen *s)
     else send_frame(s->in, RKM_LEAVE, NULL, 0);
     /* a separate clipboard helper uses LEAVE as its cue to report changes */
     if (s->clip && s->clip != s->in) send_frame(s->clip, RKM_LEAVE, NULL, 0);
+    send_frame(s->kbd, RKM_LEAVE, NULL, 0);        /* lets go of any keys it holds */
 }
 
 static void do_enter(Screen *s)
@@ -430,6 +431,7 @@ static void do_enter(Screen *s)
         RKM_PUT16(p + 2, (unsigned)py);
         p[4] = remap_mods(s, mods);
         send_frame(s->in, RKM_ENTER, p, 5);
+        send_frame(s->kbd, RKM_ENTER, p, 5);
         if (is_rel(s)) {
             /* No absolute positioning: slam into the top-left corner, then
              * walk out to the entry point. */
@@ -653,12 +655,12 @@ void hub_key(int evcode, int usage, int state)
     s = active;
     if (!s) return;
     if (s->local) { uinput_key(evcode, state); return; }
-    if (!usage || !s->in) return;
+    if (!usage || !(s->kbd || s->in)) return;
     flush_move(s);
     p[0] = remap_usage(s, (unsigned char)usage);
     p[1] = (unsigned char)state;
     p[2] = remap_mods(s, mods);
-    send_frame(s->in, RKM_KEY, p, 3);
+    send_frame(s->kbd ? s->kbd : s->in, RKM_KEY, p, 3);   /* a hardware keyboard wins */
 }
 
 /* ---- commands (hotkeys and the control socket) -------------------------- */
@@ -677,6 +679,7 @@ static void cmd_status(Conn *r)
                    ready(s) ? "ready  " : "offline",
                    s->local ? "uinput" : s->in ? s->in->peer : "-",
                    s->clip ? s->clip->peer : "-");
+        if (s->kbd) ctl_printf(r, " keyboard=%s", s->kbd->peer);
         if (s->extron_input) ctl_printf(r, " extron-in=%d", s->extron_input);
         ctl_printf(r, "\n");
     }
@@ -811,8 +814,8 @@ static void layout_json(Sbuf *b)
         sb_str(b, s->label[0] ? s->label : s->name);
         sb_printf(b, ",\"art\":");
         sb_str(b, s->art);
-        sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"w\":%d,\"h\":%d}", s->extron_input,
-                  ready(s), !s->no_agent, s->w, s->h);
+        sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d}",
+                  s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h);
     }
     sb_printf(b, "],\"monitors\":[");
     for (i = 0; i < cfg.nmonitors; i++) {
@@ -954,6 +957,7 @@ static void conn_detach(Conn *c)
     Screen *s = c->screen;
     if (!s) return;
     if (s->in == c) s->in = NULL;
+    if (s->kbd == c) s->kbd = NULL;
     if (s->clip == c) s->clip = NULL;
     c->screen = NULL;
     logmsg("%s: disconnected (%s)", s->name, c->peer);
@@ -964,6 +968,7 @@ static void kick(Conn *old)
 {
     Screen *s = old->screen;
     if (s && s->in == old) s->in = NULL;
+    if (s && s->kbd == old) s->kbd = NULL;
     if (s && s->clip == old) s->clip = NULL;
     old->screen = NULL;
     old->dead = 1;
@@ -1000,6 +1005,11 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     c->clipmax_kb = RKM_GET16(p + 8);
     c->screen = s;
     if (s->local) c->caps &= ~RKM_CAP_INPUT;   /* the hub injects locally itself */
+    if (c->caps & RKM_CAP_KEYS) {               /* a hardware keyboard: keys only */
+        c->caps &= ~(RKM_CAP_INPUT | RKM_CAP_CLIP);
+        if (s->kbd && s->kbd != c) kick(s->kbd);
+        s->kbd = c;
+    }
 
     if (c->caps & RKM_CAP_INPUT) {
         if (s->in && s->in != c) kick(s->in);       /* same machine came back */
@@ -1019,12 +1029,12 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     }
     w[1] = RKM_OK;
     send_frame(c, RKM_WELCOME, w, 2);
-    logmsg("%s: connected from %s, %dx%d%s%s%s", s->name, c->peer, s->w, s->h,
+    logmsg("%s: connected from %s, %dx%d%s%s%s%s", s->name, c->peer, s->w, s->h,
            c->caps & RKM_CAP_INPUT ? " input" : "", c->caps & RKM_CAP_CLIP ? " clipboard" : "",
-           c->caps & RKM_CAP_REL ? " relative" : "");
+           c->caps & RKM_CAP_REL ? " relative" : "", c->caps & RKM_CAP_KEYS ? " hardware-keyboard" : "");
 
     if (s == active) {
-        if (c->caps & RKM_CAP_INPUT) do_enter(s);   /* agent restarted under the pointer */
+        if (c->caps & (RKM_CAP_INPUT | RKM_CAP_KEYS)) do_enter(s);   /* agent restarted under the pointer */
         else clip_sync(s);
     }
     relayout();
