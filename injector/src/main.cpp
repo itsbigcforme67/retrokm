@@ -13,6 +13,8 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
 #include <soc/usb_serial_jtag_reg.h>
 #include "secrets.h"
 extern "C" {
@@ -40,6 +42,46 @@ static bool welcomed;
 
 // ------------------------------------------------------------ USB or PS/2?
 
+// ------------------------------------------------------------ log over WiFi
+
+// In PS/2 mode the USB port is busy being a keyboard, so the log goes to
+// the hub's host as UDP (port 24853):  nc -klu 24853
+static WiFiUDP logUdp;
+static char logBuf[2048];
+static int logLen;
+static portMUX_TYPE logMux = portMUX_INITIALIZER_UNLOCKED;
+
+static void logf(const char* fmt, ...) {
+  char line[160];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(line, sizeof line - 1, fmt, ap);
+  va_end(ap);
+  if (n < 0) return;
+  if (n > (int)sizeof line - 2) n = sizeof line - 2;
+  line[n++] = '\n';
+  portENTER_CRITICAL(&logMux);
+  if (logLen + n <= (int)sizeof logBuf) { memcpy(logBuf + logLen, line, n); logLen += n; }
+  portEXIT_CRITICAL(&logMux);
+}
+
+static void flushLog() {
+  static char out[sizeof logBuf];
+  int n;
+  portENTER_CRITICAL(&logMux);
+  n = logLen;
+  memcpy(out, logBuf, n);
+  logLen = 0;
+  portEXIT_CRITICAL(&logMux);
+  if (!n) return;
+  Serial.write((const uint8_t*)out, n);
+  if (WiFi.status() == WL_CONNECTED) {
+    logUdp.beginPacket(hubHost.c_str(), 24853);
+    logUdp.write((const uint8_t*)out, n);
+    logUdp.endPacket();
+  }
+}
+
 static void usbPads(bool on) {
   if (on) SET_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
   else CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE |
@@ -54,12 +96,15 @@ static bool onPs2Port() {
     gpio_set_pull_mode((gpio_num_t)p, GPIO_FLOATING);
   }
   delay(20);
+  // A USB port's 15k resistors hold both lines low.  A PS/2 port's pull-ups
+  // hold them high, though the computer may be holding the clock low to
+  // keep the keyboard quiet while it boots: so either line high = PS/2.
   int highs = 0;
-  for (int i = 0; i < 20; i++) {  // a PS/2 port's pull-ups hold both high
-    highs += gpio_get_level((gpio_num_t)USB_DM) && gpio_get_level((gpio_num_t)USB_DP);
+  for (int i = 0; i < 20; i++) {
+    highs += gpio_get_level((gpio_num_t)USB_DM) || gpio_get_level((gpio_num_t)USB_DP);
     delay(1);
   }
-  return highs >= 18;
+  return highs >= 15;
 }
 
 // ------------------------------------------------------------ PS/2 side
@@ -67,7 +112,8 @@ static bool onPs2Port() {
 // Runs on its own: answers the computer and sends queued scan codes.
 static void ps2Task(void*) {
   line.begin(swapPins ? USB_DM : USB_DP, swapPins ? USB_DP : USB_DM);
-  delay(300);  // a keyboard's self-test takes a moment; then it says AA
+  logf("ps2: start, clock=%d data=%d", line.clkHigh(), line.datHigh());
+  delay(100);  // a keyboard's self-test takes a moment; then it says AA
   xSemaphoreTake(lock, portMAX_DELAY);
   kbd.powerOn();
   xSemaphoreGive(lock);
@@ -76,8 +122,8 @@ static void ps2Task(void*) {
     if (line.hostWantsToSend()) {
       int b = line.receive();
       xSemaphoreTake(lock, portMAX_DELAY);
-      if (b < 0) kbd.out.push(0xFE);  // garbled: ask again
-      else kbd.hostByte((uint8_t)b);
+      if (b < 0) { kbd.out.push(0xFE); logf("ps2: <- garbled byte"); }  // ask again
+      else { kbd.hostByte((uint8_t)b); logf("ps2: <- %02X", b); }
       xSemaphoreGive(lock);
       busy = true;
     } else {
@@ -87,6 +133,8 @@ static void ps2Task(void*) {
       xSemaphoreGive(lock);
       if (n) {
         int r = line.send(next);
+        if (r == 1) logf("ps2: -> %02X", next);
+        else if (r < 0) logf("ps2: -> %02X interrupted", next);
         if (r == 1) {
           xSemaphoreTake(lock, portMAX_DELAY);
           kbd.sent(next);
@@ -155,7 +203,7 @@ static void pollHub() {
     unsigned n = rkm_hello(hello, RKM_CAP_KEYS, RKM_CS_UTF8, RKM_EOL_LF, 0, 0, 0, name.c_str());
     sendFrame(RKM_HELLO, hello, n);
     lastRx = now;
-    Serial.printf("connected to hub %s as \"%s\"\n", hubHost.c_str(), name.c_str());
+    logf("hub: connected to %s as \"%s\" (%s mode)", hubHost.c_str(), name.c_str(), ps2Mode ? "PS/2" : "USB");
     return;
   }
   unsigned char buf[512];
@@ -203,23 +251,37 @@ static void console() {
 // ------------------------------------------------------------ main
 
 void setup() {
+  // The computer checks its keyboard very early: start the PS/2 side first
   ps2Mode = onPs2Port();
-  if (!ps2Mode) usbPads(true);  // on the laptop: be a USB device again
+  loadSettings();
+  lock = xSemaphoreCreateMutex();
+  if (ps2Mode) xTaskCreate(ps2Task, "ps2", 4096, nullptr, configMAX_PRIORITIES - 2, nullptr);
+  else usbPads(true);  // on the laptop: be a USB device again
   Serial.begin(115200);
   if (!ps2Mode) Serial.setDebugOutput(true);  // library errors to the console too
   pinMode(LED, OUTPUT);
   digitalWrite(LED, LOW);
-  loadSettings();
-  lock = xSemaphoreCreateMutex();
-  if (ps2Mode) xTaskCreate(ps2Task, "ps2", 4096, nullptr, configMAX_PRIORITIES - 2, nullptr);
+  logf("boot: %s mode, name %s", ps2Mode ? "PS/2" : "USB", name.c_str());
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // power saving would make keys late
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   WiFi.setTxPower(WIFI_POWER_8_5dBm);  // gentle on a PS/2 port's power; plenty across a room
+
+  // updates over WiFi:  pio run -t upload --upload-port <ip>  (env:ota)
+  ArduinoOTA.setHostname(("rkm-kbd-" + name).c_str());
+  ArduinoOTA.onStart([] { logf("ota: updating"); flushLog(); });
+  ArduinoOTA.begin();
 }
 
 void loop() {
+  static bool announced;
+  if (WiFi.status() == WL_CONNECTED && !announced) {
+    announced = true;
+    logf("wifi: %s", WiFi.localIP().toString().c_str());
+  }
+  ArduinoOTA.handle();
+  flushLog();
   pollHub();
   if (!ps2Mode) console();
   // LED: steady when the hub knows us, blinking while joining
