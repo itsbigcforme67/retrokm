@@ -66,6 +66,7 @@ typedef struct Screen {
     int narea;
     int no_agent;                /* video only (a console): never takes input */
     long color;                  /* keyboard lighting 0xRRGGBB, -1 = from its picture */
+    long config_color;           /* what the config file said (panel picks are saved apart) */
 } Screen;
 
 typedef struct Monitor {

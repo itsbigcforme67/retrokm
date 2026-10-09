@@ -285,6 +285,7 @@ bad:
         fprintf(stderr, "%s: no [screen] sections\n", path);
         return -1;
     }
+    for (i = 0; i < cfg.nscreens; i++) cfg.screens[i].config_color = cfg.screens[i].color;
     load_state();
     return 0;
 }
@@ -305,6 +306,11 @@ static void load_state(void)
             m->row = row;
         } else if (sscanf(line, "shared %31s %d", name, &on) == 2 && (m = monitor_by_name(name)) && m->shared) {
             m->shared_on = on != 0;
+        } else {
+            unsigned rgb;
+            Screen *s;
+            if (sscanf(line, "color %31s %x", name, &rgb) == 2 && (s = screen_by_name(name)))
+                s->color = (long)(rgb & 0xFFFFFF);
         }
     }
     fclose(f);
@@ -326,6 +332,9 @@ int config_save_state(void)
         fprintf(f, "monitor %s %d %d\n", cfg.monitors[i].name, cfg.monitors[i].col, cfg.monitors[i].row);
     for (i = 0; i < cfg.nmonitors; i++)
         if (cfg.monitors[i].shared) fprintf(f, "shared %s %d\n", cfg.monitors[i].name, cfg.monitors[i].shared_on);
+    for (i = 0; i < cfg.nscreens; i++)
+        if (cfg.screens[i].color != cfg.screens[i].config_color && cfg.screens[i].color >= 0)
+            fprintf(f, "color %s %06lx\n", cfg.screens[i].name, (unsigned long)cfg.screens[i].color);
     if (fclose(f) != 0 || rename(tmp, cfg.state_path) != 0) {
         logmsg("cannot save %s", cfg.state_path);
         return -1;

@@ -833,8 +833,10 @@ static void layout_json(Sbuf *b)
         sb_str(b, s->label[0] ? s->label : s->name);
         sb_printf(b, ",\"art\":");
         sb_str(b, s->art);
-        sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d}",
-                  s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h);
+        sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d,"
+                  "\"color\":%lu,\"colorSet\":%d}",
+                  s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h,
+                  lights_color(s), s->color >= 0);
     }
     sb_printf(b, "],\"monitors\":[");
     for (i = 0; i < cfg.nmonitors; i++) {
@@ -955,6 +957,13 @@ static void run_panel_command(char *cmd, Conn *r)
             config_save_state();
             relayout();
         }
+    } else if (!strcasecmp(argv[0], "color") && argc == 3) {
+        /* color <screen> <RRGGBB | default>: its colour on the panel and keyboard */
+        Screen *s = screen_by_name(argv[1]);
+        if (!s) { ctl_printf(r, "error no screen %s\n", argv[1]); return; }
+        s->color = !strcasecmp(argv[2], "default") ? s->config_color : (long)(strtoul(argv[2], NULL, 16) & 0xFFFFFF);
+        config_save_state();
+        if (s == active) lights_set(lights_color(s));
     } else if (!strcasecmp(argv[0], "goto") && argc == 2) {
         Screen *s = screen_by_name(argv[1]);
         if (!s || !ready(s)) ctl_printf(r, "error %s is offline\n", argv[1]);
@@ -965,7 +974,8 @@ static void run_panel_command(char *cmd, Conn *r)
         ctl_printf(r, "pong\n");
     } else {
         ctl_printf(r, "error commands are layout, tie <screen> <monitor>, untie <monitor>, "
-                      "move <monitor> <col> <row>, share <monitor> [on|off], goto <screen>, lock [on|off], ping\n");
+                      "move <monitor> <col> <row>, share <monitor> [on|off], color <screen> <RRGGBB|default>, "
+                      "goto <screen>, lock [on|off], ping\n");
     }
 }
 

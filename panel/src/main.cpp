@@ -17,6 +17,7 @@
 #include "art.h"
 #if !defined(PANEL_NATIVE)
 #include <WiFi.h>
+#include <ArduinoOTA.h>
 // ESP32-C6 WiFi co-processor on SDIO (M5Stack Tab5 docs)
 #define WIFI_SDIO_PINS 12, 13, 11, 10, 9, 8, 15
 #endif
@@ -156,6 +157,13 @@ static MonGeo geoOf(const Monitor& m) { return geoOf(m, grid.cell(m.col, m.row))
 // Its cable is not a switcher cable: wired straight in, or the shared input
 static bool directLink(const Monitor& m) { return !m.fixed.empty() || m.sharedOn; }
 
+// A machine's colour: what the hub says (picked by hand, or its default)
+static uint32_t colorOf(int i) {
+  if (i < 0 || i >= (int)lay.machines.size()) return 0x3A414C;
+  const Machine& m = lay.machines[i];
+  return m.color ? m.color : machineColor(m.art, i);
+}
+
 static Rect cardRect(int i) {
   int n = std::max<int>(1, lay.machines.size());
   int gap = 16;
@@ -171,7 +179,11 @@ static void plugPos(int i, int& x, int& y) {
 
 // ------------------------------------------------------------ touch
 
-enum DragKind { D_NONE, D_PRESS_CARD, D_CABLE, D_PRESS_MON, D_MON, D_PLUG, D_PRESS_LOCK };
+enum DragKind { D_NONE, D_PRESS_CARD, D_CABLE, D_PRESS_MON, D_MON, D_PLUG, D_PRESS_LOCK,
+                D_LONG,        // the long press that opened the options: ignore until let go
+                D_MENU_TAP,    // a press on an options button (dragIdx = which)
+                D_PICK_SV, D_PICK_HUE };
+static uint32_t pressAt;  // when the finger went down
 static DragKind drag = D_NONE;
 static int dragIdx = -1;          // machine (cable) or monitor (mon, plug)
 static int pressX, pressY, curX, curY;
@@ -243,6 +255,90 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
   mon.shows = mc.name;  // the hub confirms in a moment
 }
 
+// ------------------------------------------------------------ machine options
+
+// Long-press a machine: a sheet with its colour (a hue bar and a
+// saturation/brightness square) and a button to give it the keyboard.
+static int menuIdx = -1;
+static float pickH, pickS, pickV;
+static uint32_t lastColorSend;
+static const Rect MENU{250, 100, 780, 520};
+static const Rect SV{290, 250, 300, 210};
+static const Rect HUE{290, 486, 300, 30};
+static const Rect PREVIEW{640, 250, 350, 96};
+static const Rect BTN_DEFAULT{640, 372, 166, 54};
+static const Rect BTN_USE{824, 372, 166, 54};
+static const Rect BTN_DONE{640, 462, 350, 54};
+enum { B_DEFAULT = 1, B_USE, B_DONE };
+
+static uint32_t hsv(float h, float s, float v) {
+  float c = v * s, x = c * (1 - fabsf(fmodf(h / 60.0f, 2) - 1)), m = v - c, r, g, b;
+  if (h < 60) { r = c; g = x; b = 0; } else if (h < 120) { r = x; g = c; b = 0; }
+  else if (h < 180) { r = 0; g = c; b = x; } else if (h < 240) { r = 0; g = x; b = c; }
+  else if (h < 300) { r = x; g = 0; b = c; } else { r = c; g = 0; b = x; }
+  auto q = [&](float f) { return (uint32_t)((f + m) * 255 + 0.5f); };
+  return q(r) << 16 | q(g) << 8 | q(b);
+}
+
+static void toHsv(uint32_t rgb, float& h, float& s, float& v) {
+  float r = ((rgb >> 16) & 255) / 255.0f, g = ((rgb >> 8) & 255) / 255.0f, b = (rgb & 255) / 255.0f;
+  float mx = std::max({r, g, b}), mn = std::min({r, g, b}), d = mx - mn;
+  v = mx;
+  s = mx > 0 ? d / mx : 0;
+  if (d == 0) h = 0;
+  else if (mx == r) h = 60 * fmodf((g - b) / d, 6);
+  else if (mx == g) h = 60 * ((b - r) / d + 2);
+  else h = 60 * ((r - g) / d + 4);
+  if (h < 0) h += 360;
+}
+
+static void openMenu(int i) {
+  menuIdx = i;
+  toHsv(colorOf(i), pickH, pickS, pickV);
+  sceneDirty = true;
+}
+
+static std::string hex6(uint32_t rgb) {
+  char b[8];
+  snprintf(b, sizeof b, "%06X", (unsigned)(rgb & 0xFFFFFF));
+  return b;
+}
+
+// Apply the picked colour: locally at once, to the hub at most ~8 times a second
+static void pickTo(int x, int y, bool final) {
+  if (drag == D_PICK_SV) {
+    pickS = std::min(1.0f, std::max(0.0f, (x - SV.x) / (float)(SV.w - 1)));
+    pickV = std::min(1.0f, std::max(0.0f, 1 - (y - SV.y) / (float)(SV.h - 1)));
+  } else if (drag == D_PICK_HUE) {
+    pickH = std::min(359.9f, std::max(0.0f, (x - HUE.x) * 360.0f / HUE.w));
+  }
+  Machine& m = lay.machines[menuIdx];
+  m.color = hsv(pickH, pickS, pickV);
+  m.colorSet = true;
+  if (final || nowMs() - lastColorSend > 120) {
+    lastColorSend = nowMs();
+    hub.send("color " + m.name + " " + hex6(m.color));
+  }
+  sceneDirty = true;
+}
+
+static void menuButton(int b) {
+  Machine& m = lay.machines[menuIdx];
+  if (b == B_DEFAULT) {
+    hub.send("color " + m.name + " default");
+    m.color = 0;  // the hub sends the real one back
+    m.colorSet = false;
+    toHsv(colorOf(menuIdx), pickH, pickS, pickV);
+  } else if (b == B_USE) {
+    if (!m.agent) say(m.label + " is video only: no keyboard or mouse");
+    else if (!m.ready) say(m.label + " is offline");
+    else { hub.send("goto " + m.name); lay.active = m.name; menuIdx = -1; }
+  } else if (b == B_DONE) {
+    menuIdx = -1;
+  }
+  sceneDirty = true;
+}
+
 static void release() {
   switch (drag) {
   case D_PRESS_CARD: {
@@ -295,6 +391,15 @@ static void release() {
     hub.send("lock");
     lay.locked = !lay.locked;
     break;
+  case D_MENU_TAP: {  // still on the button it went down on?
+    const Rect& r = dragIdx == B_DEFAULT ? BTN_DEFAULT : dragIdx == B_USE ? BTN_USE : BTN_DONE;
+    if (r.has(curX, curY)) menuButton(dragIdx);
+    break;
+  }
+  case D_PICK_SV:
+  case D_PICK_HUE:
+    pickTo(curX, curY, true);
+    break;
   default:
     break;
   }
@@ -308,15 +413,26 @@ static void touchInput(bool down, int x, int y) {
   if (down && !was) {  // press
     pressX = curX = x; pressY = curY = y;
     int i;
+    pressAt = nowMs();
     if (!hub.connected() || !lay.valid) drag = D_NONE;
+    else if (menuIdx >= 0) {  // the options sheet takes every touch while it is open
+      if (SV.has(x, y)) { drag = D_PICK_SV; pickTo(x, y, false); }
+      else if (Rect{HUE.x, HUE.y - 10, HUE.w, HUE.h + 20}.has(x, y)) { drag = D_PICK_HUE; pickTo(x, y, false); }
+      else if (BTN_DEFAULT.has(x, y)) { drag = D_MENU_TAP; dragIdx = B_DEFAULT; }
+      else if (BTN_USE.has(x, y)) { drag = D_MENU_TAP; dragIdx = B_USE; }
+      else if (BTN_DONE.has(x, y)) { drag = D_MENU_TAP; dragIdx = B_DONE; }
+      else if (!MENU.has(x, y)) { menuIdx = -1; drag = D_NONE; }  // tap outside: close
+      else drag = D_NONE;
+    }
     else if (lockBtn.has(x, y)) drag = D_PRESS_LOCK;
     else if ((i = plugAt(x, y)) >= 0) { drag = D_PLUG; dragIdx = i; }
     else if ((i = monitorAt(x, y)) >= 0) { drag = D_PRESS_MON; dragIdx = i; }
     else if ((i = cardAt(x, y)) >= 0) { drag = D_PRESS_CARD; dragIdx = i; }
     sceneDirty = true;
   } else if (down && was) {  // move
-    if ((x != curX || y != curY) && drag != D_NONE) fingerDirty = true;
+    if ((x != curX || y != curY) && drag != D_NONE && drag != D_LONG && drag != D_MENU_TAP) fingerDirty = true;
     curX = x; curY = y;
+    if (drag == D_PICK_SV || drag == D_PICK_HUE) { pickTo(x, y, false); fingerDirty = false; }
     bool far = abs(x - pressX) + abs(y - pressY) > 14;
     if (drag == D_PRESS_CARD && far) { drag = D_CABLE; sceneDirty = true; }
     if (drag == D_PRESS_MON && far) { drag = D_MON; gridFrozen = true; sceneDirty = true; }
@@ -389,7 +505,7 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
   const Rect& s = geo.screen;
   if (shown) {
     int mi = lay.machineIndex(shown->name);
-    uint32_t col = machineColor(shown->art, mi);
+    uint32_t col = colorOf(mi);
     bool lit = shown->ready || !shown->agent;
     uint32_t tint = mix(col, 0x0B0D11, lit ? 0.78f : 0.9f);
     G->fillRect(s.x, s.y, s.w, s.h, C(tint));
@@ -431,7 +547,7 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
 static void drawPlugSocket(const Monitor& m, const Rect& cell) {
   MonGeo geo = geoOf(m, cell);
   Machine* shown = m.sharedOn ? nullptr : lay.machine(m.shows);
-  uint32_t col = shown ? machineColor(shown->art, lay.machineIndex(shown->name)) : 0x3A414C;
+  uint32_t col = shown ? colorOf(lay.machineIndex(shown->name)) : 0x3A414C;
   if (!m.fixed.empty()) return;
   G->fillSmoothRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(shown ? col : 0x3A414C));
   G->drawRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(0x0A0C0F));
@@ -440,7 +556,7 @@ static void drawPlugSocket(const Monitor& m, const Rect& cell) {
 static void drawCard(int i, bool pressed) {
   Machine& m = lay.machines[i];
   Rect r = cardRect(i);
-  uint32_t col = machineColor(m.art, i);
+  uint32_t col = colorOf(i);
   bool kbd = m.name == lay.active;
   G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(pressed ? 0x262D37 : PANEL_BG));
   if (kbd)
@@ -524,6 +640,8 @@ static int otherInputMachine(const Monitor& m) {
   return -1;
 }
 
+static void drawMenu();
+
 static void drawScene() {
   G = &scene;
   computeGrid();
@@ -588,7 +706,7 @@ static void drawScene() {
     MonGeo geo = geoOf(m);
     int px, py;
     plugPos(mi, px, py);
-    cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), directLink(m) ? FAINT : SOLID);
+    cable(px, py, geo.plugX, geo.plugY, colorOf(mi), directLink(m) ? FAINT : SOLID);
   }
   // a shared monitor's other input, dotted, into the side of its plug
   for (size_t ni = 0; ni < lay.monitors.size(); ni++) {
@@ -598,7 +716,7 @@ static void drawScene() {
     MonGeo geo = geoOf(m);
     int px, py;
     plugPos(oi, px, py);
-    cable(px, py, geo.plugX + 16, geo.plugY, machineColor(lay.machines[oi].art, oi), DOTTED);
+    cable(px, py, geo.plugX + 16, geo.plugY, colorOf(oi), DOTTED);
   }
   for (size_t ni = 0; ni < lay.monitors.size(); ni++) {
     if (drag == D_MON && (int)ni == dragIdx) continue;
@@ -609,8 +727,55 @@ static void drawScene() {
 
   // machines
   for (size_t i = 0; i < lay.machines.size(); i++)
-    drawCard(i, (drag == D_PRESS_CARD || drag == D_CABLE) && (int)i == dragIdx);
+    drawCard(i, (drag == D_PRESS_CARD || drag == D_CABLE || drag == D_LONG) && (int)i == dragIdx);
+  drawMenu();
 
+}
+
+static void button(const Rect& r, const char* label, uint32_t bg, uint32_t fg) {
+  G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 12, C(bg));
+  text(label, r.x + r.w / 2, r.y + r.h / 2, fg, &fonts::FreeSansBold12pt7b);
+}
+
+static void drawMenu() {
+  if (menuIdx < 0 || menuIdx >= (int)lay.machines.size()) { menuIdx = -1; return; }
+  Machine& m = lay.machines[menuIdx];
+  uint32_t col = colorOf(menuIdx);
+  // shade the desk behind it: every other row and column
+  for (int y = HEAD_H + 1; y < SH; y += 2) G->drawFastHLine(0, y, SW, C(0x07080A));
+  for (int x = 0; x < SW; x += 2) G->drawFastVLine(x, HEAD_H + 1, SH - HEAD_H - 1, C(0x07080A));
+  G->fillSmoothRoundRect(MENU.x + 8, MENU.y + 10, MENU.w, MENU.h, 20, C(0x050608));
+  G->fillSmoothRoundRect(MENU.x, MENU.y, MENU.w, MENU.h, 20, C(PANEL_BG));
+  G->drawRoundRect(MENU.x, MENU.y, MENU.w, MENU.h, 20, C(col));
+  drawArt(*G, m.art, MENU.x + 80, MENU.y + 70, 0.55f, 0, PANEL_BG);
+  text(m.label.c_str(), MENU.x + 150, MENU.y + 52, TEXT, &fonts::FreeSansBold18pt7b, middle_left);
+  text(m.name.c_str(), MENU.x + 152, MENU.y + 92, MUTED, &fonts::FreeSans12pt7b, middle_left);
+  text("colour", SV.x, SV.y - 22, MUTED, &fonts::FreeSans12pt7b, middle_left);
+  // saturation (across) by brightness (down) for the picked hue
+  for (int y = 0; y < SV.h; y++) {
+    float v = 1 - y / (float)(SV.h - 1);
+    for (int x = 0; x < SV.w; x++) G->drawPixel(SV.x + x, SV.y + y, C(hsv(pickH, x / (float)(SV.w - 1), v)));
+  }
+  for (int x = 0; x < HUE.w; x++)
+    G->drawFastVLine(HUE.x + x, HUE.y, HUE.h, C(hsv(x * 360.0f / HUE.w, 1, 1)));
+  // where the pick is
+  int cx = SV.x + (int)(pickS * (SV.w - 1)), cy = SV.y + (int)((1 - pickV) * (SV.h - 1));
+  G->drawCircle(cx, cy, 9, C(0x000000));
+  G->drawCircle(cx, cy, 10, C(0xFFFFFF));
+  int hx = HUE.x + (int)(pickH / 360 * HUE.w);
+  G->fillRect(hx - 3, HUE.y - 6, 6, HUE.h + 12, C(0xFFFFFF));
+  G->drawRect(hx - 4, HUE.y - 7, 8, HUE.h + 14, C(0x000000));
+  // preview: what the cables and the keyboard will look like
+  G->fillSmoothRoundRect(PREVIEW.x, PREVIEW.y, PREVIEW.w, PREVIEW.h, 14, C(col));
+  std::string hx6 = "#" + hex6(col);
+  uint32_t ink = ((col >> 16 & 255) * 3 + (col >> 8 & 255) * 6 + (col & 255)) / 10 > 140 ? 0x111111 : 0xFFFFFF;
+  text(hx6.c_str(), PREVIEW.x + PREVIEW.w / 2, PREVIEW.y + 34, ink, &fonts::FreeSansBold18pt7b);
+  text(m.colorSet ? "picked" : "default", PREVIEW.x + PREVIEW.w / 2, PREVIEW.y + 70, ink, &fonts::FreeSans9pt7b);
+  bool usable = m.agent && m.ready;
+  button(BTN_DEFAULT, "default", 0x2B323C, m.colorSet ? TEXT : MUTED);
+  button(BTN_USE, m.name == lay.active ? "in use" : "use it", usable ? 0x1F4D3A : 0x2B323C,
+         usable ? TEXT : MUTED);
+  button(BTN_DONE, "done", 0x2B323C, TEXT);
 }
 
 static void outline(const MonGeo& geo, uint32_t col) {  // around a monitor, on the finger layer
@@ -646,8 +811,8 @@ static void drawFinger() {
     int px, py;
     plugPos(dragIdx, px, py);
     auto& mc = lay.machines[dragIdx];
-    cable(px, py, curX, curY, machineColor(mc.art, dragIdx));
-    G->fillSmoothRoundRect(curX - 10, curY - 6, 20, 12, 3, C(machineColor(mc.art, dragIdx)));
+    cable(px, py, curX, curY, colorOf(dragIdx));
+    G->fillSmoothRoundRect(curX - 10, curY - 6, 20, 12, 3, C(colorOf(dragIdx)));
     ink.add(curX - 12, curY - 8, curX + 12, curY + 8);
   } else if (drag == D_PLUG) {
     auto& from = lay.monitors[dragIdx];
@@ -655,7 +820,7 @@ static void drawFinger() {
     if (mi >= 0) {
       int px, py;
       plugPos(mi, px, py);
-      uint32_t col = machineColor(lay.machines[mi].art, mi);
+      uint32_t col = colorOf(mi);
       cable(px, py, curX, curY, col);
       G->fillSmoothRoundRect(curX - 10, curY - 6, 20, 12, 3, C(col));
       ink.add(curX - 12, curY - 8, curX + 12, curY + 8);
@@ -669,7 +834,7 @@ static void drawFinger() {
       MonGeo geo = geoOf(m, cell);
       int px, py;
       plugPos(mi, px, py);
-      cable(px, py, geo.plugX, geo.plugY, machineColor(lay.machines[mi].art, mi), directLink(m) ? FAINT : SOLID);
+      cable(px, py, geo.plugX, geo.plugY, colorOf(mi), directLink(m) ? FAINT : SOLID);
     }
     drawMonitor(m, cell, true, 0);
     drawPlugSocket(m, cell);
@@ -844,6 +1009,16 @@ void setup() {
   WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   hub.begin(HUB_HOST, HUB_PORT);
+  // updates over WiFi:  pio run -e tab5-ota -t upload   (finds rkm-panel.local)
+  ArduinoOTA.setHostname("rkm-panel");
+  ArduinoOTA.onStart([] {
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.setFont(&fonts::FreeSansBold18pt7b);
+    M5.Display.drawString("updating...", M5.Display.width() / 2, M5.Display.height() / 2);
+  });
+  ArduinoOTA.begin();
 #endif
   hub.onLine = [](const std::string& line) {
     if (line.rfind("layout ", 0) == 0) {
@@ -877,6 +1052,7 @@ void loop() {
   else
 #else
   hub.poll(WiFi.status() == WL_CONNECTED);
+  ArduinoOTA.handle();
   static uint32_t lastJoin = 0;
   if (WiFi.status() != WL_CONNECTED && now - lastJoin > 10000) { lastJoin = now; WiFi.reconnect(); }
 #endif
@@ -888,6 +1064,12 @@ void loop() {
     } else {
       touchInput(t.isPressed(), t.x, t.y);
     }
+  }
+
+  // a long press on a machine opens its options
+  if (drag == D_PRESS_CARD && nowMs() - pressAt > 550) {
+    openMenu(dragIdx);
+    drag = D_LONG;
   }
 
   if (hub.connected() != wasConnected) {

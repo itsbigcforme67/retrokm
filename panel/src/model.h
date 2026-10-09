@@ -11,6 +11,8 @@ struct Machine {
   bool agent = true;      // false: video only (a console)
   bool kbd = false;       // a hardware (PS/2) keyboard is plugged into it
   bool soft = false;      // its software agent is running
+  uint32_t color = 0;     // its colour (cables, card, keyboard lights); 0 = not sent
+  bool colorSet = false;  // picked by hand rather than the default
 };
 
 struct Monitor {
@@ -68,6 +70,8 @@ struct Layout {
       m.agent = s["agent"] | 1;
       m.kbd = s["kbd"] | 0;
       m.soft = s["soft"] | 0;
+      m.color = s["color"] | 0u;
+      m.colorSet = s["colorSet"] | 0;
       l.machines.push_back(m);
     }
     for (JsonObject o : doc["monitors"].as<JsonArray>()) {
