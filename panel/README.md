@@ -9,6 +9,16 @@ A 1280x720 touch screen that shows the desk:
   machine onto a monitor and the Extron switches that monitor to it. Pull a
   cable's plug off a monitor to unplug it. Tap a machine to give it the
   keyboard and mouse.
+- Each monitor has a **number** on its corner (screens left to right, then
+  capture cards), so "monitor 2" means the same thing to you and to lil' C.
+
+## Inside lil' C
+
+The panel is a component, `lib/rkm_panel` (`rkm_panel.h`). This firmware
+(`src/main.cpp`) runs it full time. lil' C's Tab5 firmware links the same
+folder in and opens it from the bottom bar of his desktop, with a "lil' C"
+button in the header to go back. Desktop test of that mode:
+`PANEL_EMBEDDED=1` (the button then quits).
 
 ## Hub side
 
@@ -25,7 +35,8 @@ which input it is on. `desk.conf.example`
 has a full desk behind an Extron MVX 88.
 
 The panel port takes `layout`, `tie <screen> <monitor>`, `untie <monitor>`,
-`move <monitor> <col> <row>`, `share <monitor> [on|off]`, `goto <screen>`, `lock` and `ping`, and pushes
+`move <monitor> <col> <row>`, `share <monitor> [on|off]`, `goto <screen>`, `lock`,
+`activity`, `buddy <screen> show|hide [label]` and `ping`, and pushes
 `layout {json}` whenever anything changes. It cannot type keys or move the
 pointer. Like the rest of RetroKM it has no password, so keep it on your
 own network.

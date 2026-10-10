@@ -1,25 +1,24 @@
-// RetroKM touch panel for the M5Stack Tab5 (1280x720).
+// RetroKM touch panel for the M5Stack Tab5 (1280x720): the desk map.
 //
 // Top: the monitors as they stand on the desk.  Drag one to move it; the
 // hub's screen edges follow.  Bottom: the machines.  Drag from a machine to
 // a monitor to switch the Extron so that monitor shows it; drag a cable's
 // plug off a monitor to unplug it.  Tap a machine to give it the keyboard.
 //
-// The same code runs in a window on Linux (env:native, SDL2) for testing.
+// A component (rkm_panel.h): the panel's own firmware (src/main.cpp) runs it
+// full time, and lil' C's Tab5 firmware opens it from his desktop.  The same
+// code runs in a window on Linux (env:native, SDL2) for testing.
 #include <M5Unified.h>
 #include <chrono>
 #include <cmath>
 #include <string>
 #include <vector>
-#include "secrets.h"
+#include "rkm_panel.h"
 #include "model.h"
 #include "net.h"
 #include "art.h"
 #if !defined(PANEL_NATIVE)
 #include <WiFi.h>
-#include <ArduinoOTA.h>
-// ESP32-C6 WiFi co-processor on SDIO (M5Stack Tab5 docs)
-#define WIFI_SDIO_PINS 12, 13, 11, 10, 9, 8, 15
 #endif
 
 uint32_t nowMs() {
@@ -72,6 +71,7 @@ static bool sceneDirty = true, fingerDirty = false;
 
 static Layout lay;
 static HubLink hub;
+static bool embedded = false, wantBack = false;  // inside lil' C: a back button
 static std::string toast;
 static uint32_t toastUntil = 0;
 
@@ -179,7 +179,7 @@ static void plugPos(int i, int& x, int& y) {
 
 // ------------------------------------------------------------ touch
 
-enum DragKind { D_NONE, D_PRESS_CARD, D_CABLE, D_PRESS_MON, D_MON, D_PLUG, D_PRESS_LOCK,
+enum DragKind { D_NONE, D_PRESS_CARD, D_CABLE, D_PRESS_MON, D_MON, D_PLUG, D_PRESS_LOCK, D_PRESS_BACK,
                 D_LONG,        // the long press that opened the options: ignore until let go
                 D_MENU_TAP,    // a press on an options button (dragIdx = which)
                 D_PICK_SV, D_PICK_HUE };
@@ -188,6 +188,7 @@ static DragKind drag = D_NONE;
 static int dragIdx = -1;          // machine (cable) or monitor (mon, plug)
 static int pressX, pressY, curX, curY;
 static Rect lockBtn{0, 0, 0, 0};
+static Rect backBtn{0, 0, 0, 0};
 
 static int monitorAt(int x, int y) {
   for (size_t i = 0; i < lay.monitors.size(); i++) {
@@ -391,6 +392,9 @@ static void release() {
     hub.send("lock");
     lay.locked = !lay.locked;
     break;
+  case D_PRESS_BACK:
+    if (backBtn.has(curX, curY)) wantBack = true;
+    break;
   case D_MENU_TAP: {  // still on the button it went down on?
     const Rect& r = dragIdx == B_DEFAULT ? BTN_DEFAULT : dragIdx == B_USE ? BTN_USE : BTN_DONE;
     if (r.has(curX, curY)) menuButton(dragIdx);
@@ -414,7 +418,8 @@ static void touchInput(bool down, int x, int y) {
     pressX = curX = x; pressY = curY = y;
     int i;
     pressAt = nowMs();
-    if (!hub.connected() || !lay.valid) drag = D_NONE;
+    if (embedded && backBtn.has(x, y)) drag = D_PRESS_BACK;
+    else if (!hub.connected() || !lay.valid) drag = D_NONE;
     else if (menuIdx >= 0) {  // the options sheet takes every touch while it is open
       if (SV.has(x, y)) { drag = D_PICK_SV; pickTo(x, y, false); }
       else if (Rect{HUE.x, HUE.y - 10, HUE.w, HUE.h + 20}.has(x, y)) { drag = D_PICK_HUE; pickTo(x, y, false); }
@@ -479,6 +484,20 @@ static void cable(int x0, int y0, int x1, int y1, uint32_t col, CableStyle style
     G->drawWideLine(xs[i], ys[i], xs[i + 1], ys[i + 1], faint ? 1.5f : 3.0f, C(faint ? mix(col, BG, 0.55f) : col));
 }
 
+// Monitors are numbered for talking about them ("put the Octane on monitor
+// 2"): screens left to right, then the capture cards.  lil' C's bridge counts
+// the same way.
+static int monitorNumber(const Monitor& m) {
+  int n = 1;
+  for (auto& o : lay.monitors) {
+    if (&o == &m || o.name == m.name) continue;
+    bool before = o.capture != m.capture ? !o.capture
+                : o.row != m.row ? o.row < m.row : o.col < m.col;
+    if (before) n++;
+  }
+  return n;
+}
+
 static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_t hl) {
   MonGeo geo = geoOf(m, cell);
   bool fixed = !m.fixed.empty();
@@ -528,6 +547,14 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
     for (int i = 0; i < 4; i++)
       G->drawRoundRect(geo.bezel.x - 6 - i, geo.bezel.y - 6 - i, geo.bezel.w + 12 + 2 * i,
                       geo.bezel.h + 12 + 2 * i, 12, C(hl));
+  }
+  {  // its number, on the bezel's corner
+    char nb[4];
+    snprintf(nb, sizeof nb, "%d", monitorNumber(m));
+    int bx = geo.bezel.x + 2, by = geo.bezel.y + 2;
+    G->fillSmoothCircle(bx, by, 13, C(0x0A0C0F));
+    G->fillSmoothCircle(bx, by, 11, C(0x39414D));
+    text(nb, bx, by + 1, TEXT, &fonts::FreeSansBold9pt7b);
   }
   // name and how it is wired
   char buf[64];
@@ -608,8 +635,23 @@ static int chip(int right, int y, const char* s, uint32_t dot, uint32_t fg = 0xC
 static void drawHeader() {
   G->fillRect(0, 0, SW, HEAD_H, C(0x101317));
   G->drawFastHLine(0, HEAD_H, SW, C(LINE));
-  text("RetroKM", 24, HEAD_H / 2, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
-  text("desk", 140, HEAD_H / 2 + 1, MUTED, &fonts::FreeSans12pt7b, middle_left);
+  int tx0 = 24;
+  if (embedded) {  // back to lil' C's desktop
+    backBtn = {10, 8, 136, HEAD_H - 16};
+    G->fillSmoothRoundRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h, 20,
+                           C(drag == D_PRESS_BACK ? 0x3A4250 : 0x262C35));
+    // a tiny pair of xeyes
+    for (int e = 0; e < 2; e++) {
+      int ex = backBtn.x + 26 + e * 17, ey = backBtn.y + backBtn.h / 2;
+      G->fillEllipse(ex, ey, 8, 11, C(0x000000));
+      G->fillEllipse(ex, ey, 6, 9, C(0xFFFFFF));
+      G->fillEllipse(ex - 2, ey + 1, 2, 3, C(0x000000));
+    }
+    text("lil' C", backBtn.x + 62, HEAD_H / 2, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
+    tx0 = backBtn.x + backBtn.w + 18;
+  }
+  text("RetroKM", tx0, HEAD_H / 2, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
+  text("desk", tx0 + 116, HEAD_H / 2 + 1, MUTED, &fonts::FreeSans12pt7b, middle_left);
   int x = SW - 20, y = HEAD_H / 2;
   if (hub.connected() && lay.valid) {
     x = chip(x, y, lay.locked ? "edges locked" : "edges free", 0, lay.locked ? 0xFBBF24 : 0xC9D1DB, &lockBtn);
@@ -625,7 +667,7 @@ static void drawHeader() {
   if (!toast.empty() && nowMs() < toastUntil) {
     G->setFont(&fonts::FreeSans12pt7b);
     int w = G->textWidth(toast.c_str()) + 40;
-    int tx = std::max(250, std::min(SW / 2 - w / 2, x - w));
+    int tx = std::max(embedded ? 420 : 250, std::min(SW / 2 - w / 2, x - w));
     G->fillSmoothRoundRect(tx, 9, w, HEAD_H - 18, 19, C(0x3B2F14));
     text(toast.c_str(), tx + w / 2, HEAD_H / 2, 0xFDE68A, &fonts::FreeSans12pt7b);
   }
@@ -655,7 +697,7 @@ static void drawScene() {
 #else
     bool wifi = WiFi.status() == WL_CONNECTED;
 #endif
-    if (!wifi) snprintf(buf, sizeof buf, "Joining WiFi \"%s\"...", WIFI_SSID);
+    if (!wifi) snprintf(buf, sizeof buf, "Joining WiFi...");
     else snprintf(buf, sizeof buf, "Looking for the hub at %s:%d...", hub.host().c_str(), hub.port());
     text(buf, SW / 2, SH / 2, MUTED, &fonts::FreeSans12pt7b);
     return;
@@ -975,12 +1017,10 @@ static bool scriptStep() {  // false when there is no script
 }
 #endif
 
-// ------------------------------------------------------------ main
+// ------------------------------------------------------------ the component
 
-void setup() {
-  M5.begin();
-  M5.Display.setRotation(1);
-  M5.Display.setBrightness(140);
+void rkmPanelBegin(const char* host, int port, bool inside) {
+  embedded = inside;
   for (M5Canvas* c : {&frame, &scene}) {
     c->setPsram(true);
     c->setColorDepth(lgfx::color_depth_t::rgb565_nonswapped);
@@ -1000,26 +1040,8 @@ void setup() {
       p = q + 1;
     }
   }
-  const char* host = getenv("PANEL_HUB") ? getenv("PANEL_HUB") : HUB_HOST;
-  int port = getenv("PANEL_PORT") ? atoi(getenv("PANEL_PORT")) : HUB_PORT;
-  hub.begin(host, port);
-#else
-  WiFi.setPins(WIFI_SDIO_PINS);
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  hub.begin(HUB_HOST, HUB_PORT);
-  // updates over WiFi:  pio run -e tab5-ota -t upload   (finds rkm-panel.local)
-  ArduinoOTA.setHostname("rkm-panel");
-  ArduinoOTA.onStart([] {
-    M5.Display.fillScreen(TFT_BLACK);
-    M5.Display.setTextColor(TFT_WHITE);
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.setFont(&fonts::FreeSansBold18pt7b);
-    M5.Display.drawString("updating...", M5.Display.width() / 2, M5.Display.height() / 2);
-  });
-  ArduinoOTA.begin();
 #endif
+  hub.begin(host, port);
   hub.onLine = [](const std::string& line) {
     if (line.rfind("layout ", 0) == 0) {
       Layout l;
@@ -1040,21 +1062,34 @@ void setup() {
   };
 }
 
-void loop() {
-  M5.update();
-  uint32_t now = nowMs();
+void rkmPanelPoll(bool netReady) {
   static bool wasConnected = false;
+  hub.poll(netReady);
+  if (hub.connected() != wasConnected) {
+    wasConnected = hub.connected();
+    if (!wasConnected) { lay.valid = false; drag = D_NONE; gridFrozen = false; }
+    sceneDirty = true;
+  }
+}
+
+bool rkmPanelConnected() { return hub.connected() && lay.valid; }
+
+void rkmPanelShow() {
+  drag = D_NONE;
+  dragIdx = -1;
+  menuIdx = -1;
+  gridFrozen = false;
+  wantBack = false;
+  sceneDirty = true;
+}
+
+bool rkmPanelLoop() {
+  uint32_t now = nowMs();
   static uint32_t lastDraw = 0;
 
 #if defined(PANEL_NATIVE)
-  hub.poll(true);
   if (scriptStep()) touchInput(sDown, sX, sY);
   else
-#else
-  hub.poll(WiFi.status() == WL_CONNECTED);
-  ArduinoOTA.handle();
-  static uint32_t lastJoin = 0;
-  if (WiFi.status() != WL_CONNECTED && now - lastJoin > 10000) { lastJoin = now; WiFi.reconnect(); }
 #endif
   {
     auto t = M5.Touch.getDetail();
@@ -1065,6 +1100,10 @@ void loop() {
       touchInput(t.isPressed(), t.x, t.y);
     }
   }
+  if (wantBack) {
+    wantBack = false;
+    return false;
+  }
 
   // a long press on a machine opens its options
   if (drag == D_PRESS_CARD && nowMs() - pressAt > 550) {
@@ -1072,11 +1111,6 @@ void loop() {
     drag = D_LONG;
   }
 
-  if (hub.connected() != wasConnected) {
-    wasConnected = hub.connected();
-    if (!wasConnected) { lay.valid = false; drag = D_NONE; gridFrozen = false; }
-    sceneDirty = true;
-  }
   if (!toast.empty() && now > toastUntil) { toast.clear(); sceneDirty = true; }
   if (!lay.valid && now - lastDraw > 1000) sceneDirty = true;  // "joining WiFi..." etc.
 
@@ -1094,18 +1128,5 @@ void loop() {
     if (!shotName.empty()) { savePpm(shotName); shotName.clear(); }
 #endif
   }
-#if defined(PANEL_NATIVE)
-  lgfx::delay(8);
-#else
-  delay(2);
-#endif
+  return true;
 }
-
-#if defined(PANEL_NATIVE)
-int user_func(bool* running) {
-  setup();
-  do { loop(); } while (*running);
-  return 0;
-}
-int main(int, char**) { return lgfx::Panel_sdl::main(user_func, 128); }
-#endif
