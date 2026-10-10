@@ -37,7 +37,14 @@ LOCATE_DEFAULTS = {
     "rate": 48000,
     "chirp_ms": 60, "gap_ms": 340, "lead_ms": 400,
     "lo_hz": 2000, "hi_hz": 12000, "level": 25,
-    "speakers": {},                       # e.g. {"0": [-90, 30, 80], ...}: x, y, z cm
+    # where each speaker is: [x, y, z] in desk cm (lilc_place.py: x right, y up
+    # from the desk top, z away from the chair; x = 0 in front of the tall
+    # monitor). Rough guesses from the user's photo of the desk (2026-10-10):
+    # the fronts sit high on the hutch tops, the rears on the front corners of
+    # the two wings, the centre on the shelf above the Extron. Measure them
+    # for better positions.
+    "speakers": {"0": [-110, 95, 40], "1": [150, 95, 40], "2": [20, 55, 75],
+                 "4": [-120, 10, -40], "5": [160, 10, -40]},
     "mic_spacing_cm": 0,                  # between the two microphones, if known
     "device_y_cm": 8,                     # the device's microphones above the desk
 }
