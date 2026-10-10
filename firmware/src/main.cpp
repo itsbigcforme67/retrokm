@@ -1603,6 +1603,9 @@ void loop() {
       }
       break;
   }
+#if HAS_KVM
+  if (mode == KVM) return;  // just opened the desk map: it draws from the next pass
+#endif
 
   // the neck pans; big turns (hops, leaving) at a set pace whatever the frame rate
   head.update(mode == HOP || mode == AWAY ? 1 - expf(-dt * 3.0f) : 0.07f);
