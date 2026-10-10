@@ -10,5 +10,5 @@ export WATCOM PATH="$WATCOM/binl64:$WATCOM/binl:$PATH" INCLUDE="$WATCOM/h:$WATCO
 cd "$(dirname "$0")/../.."
 mkdir -p build
 wcl386 -q -w4 -l=nt_win -bt=nt -i=common -fo=build/ -fe=build/rkm-win32.exe \
-    agents/win32/rkm_win32.c common/rkm_proto.c user32.lib shell32.lib wsock32.lib
+    agents/win32/rkm_win32.c common/rkm_proto.c user32.lib shell32.lib wsock32.lib winmm.lib
 echo "built build/rkm-win32.exe"

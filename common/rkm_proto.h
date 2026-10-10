@@ -39,6 +39,9 @@
 
 #define RKM_BUDDY      0x30  /* H->A cmd,label..  show/hide lil' C's window       */
 #define RKM_BUDDY_EVENT 0x31 /* A->H event  someone clicked him / called him      */
+#define RKM_SOUND      0x32  /* H->A id16,rate32,chirp16,gap16,lo16,hi16,level,   */
+                             /*      lead16,n,channel[n]  play a chirp sequence   */
+#define RKM_SOUND_EVENT 0x33 /* A->H id16,status,channels,rate32                  */
 
 /* HELLO caps */
 #define RKM_CAP_INPUT  0x01  /* can inject mouse and keyboard                     */
@@ -48,6 +51,7 @@
                              /* RESET only; the machine's agent (if any) keeps    */
                              /* the pointer and clipboard                         */
 #define RKM_CAP_BUDDY  0x10  /* can show the desk buddy window (RKM_BUDDY)        */
+#define RKM_CAP_SOUND  0x20  /* can play test chirps on its speakers (RKM_SOUND)  */
 
 /* HELLO charset: encoding the agent uses for clipboard text */
 #define RKM_CS_UTF8     0
@@ -99,6 +103,17 @@
 #define RKM_BUDDY_SHOW   1
 #define RKM_BUDDY_CLICK  1   /* his window was clicked                          */
 #define RKM_BUDDY_SUMMON 2   /* called from the machine (tray icon, hotkey)     */
+
+/* RKM_SOUND channels (WAVE order) and RKM_SOUND_EVENT status */
+#define RKM_CH_FL 0
+#define RKM_CH_FR 1
+#define RKM_CH_FC 2
+#define RKM_CH_LFE 3
+#define RKM_CH_RL 4
+#define RKM_CH_RR 5
+#define RKM_SOUND_PLAYING 0  /* started; channels = how many the card opened    */
+#define RKM_SOUND_DONE    1
+#define RKM_SOUND_FAILED  2
 
 /* ---- byte helpers ------------------------------------------------------ */
 #define RKM_GET16(p)  ((unsigned int)(((unsigned int)(p)[0] << 8) | (p)[1]))
