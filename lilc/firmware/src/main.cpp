@@ -133,6 +133,7 @@ static int stLen = 0, stTotal = 0, stRate = 48000;
 static volatile bool stStarted = false, stUpload = false;
 static int stLastId = 0;
 static float stYaw = 0, stPitch = 0;     // where the head (and its mics) pointed
+static volatile bool movedWanted = false;  // picked up and put down: tell the bridge
 
 // ------------------------------------------------------------ network
 
@@ -338,6 +339,14 @@ static void netTask(void*) {
     if (summonWanted) {
       summonWanted = false;
       sendSummon();
+    }
+    if (movedWanted) {  // picked up and put down: the bridge re-checks where we are
+      movedWanted = false;
+      HTTPClient http;
+      if (httpBegin(http, "/api/moved")) {
+        http.POST("{}");
+        http.end();
+      }
     }
     if (stStarted) {  // the recording has begun: the bridge starts the sounds
       stStarted = false;
@@ -937,6 +946,50 @@ static void pumpMic() {
   }
 }
 
+// Picked up and put down? The accelerometer's total (|a|, 1 g at rest) only
+// changes when the device itself is carried: the Stack-chan's own neck
+// turns the sensor but leaves the total alone, and a tap on the screen is too
+// short to count. A carry, then 3 s of stillness: tell the bridge.
+static void watchMotion(uint32_t now) {
+  static uint32_t last = 0;
+  if (now - last < 20 || !M5.Imu.isEnabled()) return;  // ~50 Hz
+  last = now;
+  float ax, ay, az;
+  M5.Imu.update();
+  if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
+  float mag = sqrtf(ax * ax + ay * ay + az * az);
+  static float rest = 1.0f;  // |a| at rest, learnt slowly (sensors read a bit off 1 g)
+  static int shaken = 0;     // rises while |a| is off its rest value
+  static bool carried = false;
+  static uint32_t stillSince = 0;
+  float dev = fabsf(mag - rest);
+  if (dev < 0.03f) rest += (mag - rest) * 0.02f;
+  static float neckX = 0, neckY = 0;  // a quick neck turn jolts the sensor: not a carry
+  bool neckMoving = fabsf(head.x - neckX) + fabsf(head.y - neckY) > 0.4f;
+  neckX = head.x;
+  neckY = head.y;
+  if (dev > 0.12f && !neckMoving) shaken = min(shaken + 2, 100);
+  else if (shaken > 0) shaken--;
+  if (shaken > 24 && !carried) {  // about half a second of handling
+    carried = true;
+    Serial.printf("[lilc] picked up\n");
+  }
+  if (carried) {
+    if (dev < 0.04f) {
+      if (!stillSince) stillSince = now;
+      if (now - stillSince > 3000) {
+        carried = false;
+        stillSince = 0;
+        shaken = 0;
+        movedWanted = true;
+        Serial.printf("[lilc] put down: asking where we are\n");
+      }
+    } else {
+      stillSince = 0;
+    }
+  }
+}
+
 // Both microphones, as left and right, for the bridge (not for talking)
 static void startStereo() {
   stId = recReqId;
@@ -1498,6 +1551,7 @@ void loop() {
   auto t = uiTouch();
   static int dragLastY = 0;
   static bool touchOnFace = false;
+  watchMotion(now);
   // The bridge asked to hear the room: record both microphones (no talking meanwhile)
   if (recReqId && !stId && (mode == IDLE || mode == AWAY)) startStereo();
   if (stId) {

@@ -14,6 +14,9 @@ desk top.
   front of its stand) or "between" two (at home_z_cm).
 - "places" can pin anything else (or override any of the above):
   {"x": cm, "y": cm, "z": cm}, or {"near": monitor, "dx": cm, "dy": cm, "dz": cm}.
+- A home's position measured by sound (lilc_locate.py, after it was picked
+  up and put down) wins over all of that; those are kept in
+  ~/.cache/lilc-workspace/measured.json.
 
 aim(from_home, to_place) gives:
 - yaw/pitch: degrees for the Stack-chan's neck. 0 = facing the user;
@@ -26,7 +29,12 @@ aim(from_home, to_place) gives:
 All of it is in config.json under "desk"; the defaults below are the user's
 desk on 2026-10-10.
 """
+import json
 import math
+import os
+import time
+
+MEASURED = os.path.join(os.path.expanduser("~"), ".cache", "lilc-workspace", "measured.json")
 
 DESK_DEFAULTS = {
     "monitor_spacing_cm": 60,
@@ -49,6 +57,18 @@ class DeskGeo:
         self.p = dict(DESK_DEFAULTS)
         self.p.update(cfg.get("desk") or {})
         self.desk = desk  # lilc_desk.DeskLink: the RetroKM layout
+        try:
+            with open(MEASURED) as f:
+                self.measured = json.load(f)
+        except (OSError, ValueError):
+            self.measured = {}
+
+    def set_measured(self, place, x, y, z, fit_cm):
+        """A position heard by sound: from now on that's where it is."""
+        self.measured[place] = {"x": x, "y": y, "z": z, "fit_cm": fit_cm, "t": time.time()}
+        os.makedirs(os.path.dirname(MEASURED), exist_ok=True)
+        with open(MEASURED, "w") as f:
+            json.dump(self.measured, f, indent=1)
 
     # ------------------------------------------------------------ positions
 
@@ -76,6 +96,9 @@ class DeskGeo:
 
     def position(self, place):
         """(x, y, z) in cm, or None when nobody knows where it is."""
+        got = self.measured.get(place)
+        if got:
+            return (float(got["x"]), float(got["y"]), float(got["z"]))
         mons = self._monitors()
         pin = self.p["places"].get(place)
         if pin:

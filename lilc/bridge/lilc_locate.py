@@ -222,10 +222,18 @@ def analyze_voice(pcm, rate, channels, p):
 
 
 class Locator:
-    def __init__(self, cfg, desk):
+    # A position from an automatic re-check (after being moved) is kept only
+    # if it is this sure: enough speakers, and they agree this well
+    AUTO_MIN_SPEAKERS = 3
+    AUTO_MAX_FIT_CM = 15
+    AUTO_GAP_S = 20  # at most one automatic re-check per device this often
+
+    def __init__(self, cfg, desk, geo=None):
         self.p = dict(LOCATE_DEFAULTS)
         self.p.update(cfg.get("locate") or {})
         self.desk = desk
+        self.geo = geo        # lilc_place.DeskGeo: told where a moved device now is
+        self.last_auto = {}
         self.jobs = {}
         self.next_id = int(time.time()) % 10000 * 10
         self.lock = threading.Lock()
@@ -246,6 +254,16 @@ class Locator:
             self.jobs[n] = {"id": n, "dev": dev, "kind": kind, "ms": min(ms, 16000), "rate": p["rate"],
                             "state": "waiting for the device", "t": time.time(), "sound": None, "p": p}
         print("locate %d: %s on %s" % (n, kind, dev))
+        return n
+
+    def moved(self, dev):
+        """The device was picked up and put down: listen for where it is now."""
+        if time.time() - self.last_auto.get(dev, 0) < self.AUTO_GAP_S:
+            return None
+        self.last_auto[dev] = time.time()
+        n = self.start(dev, "speakers")
+        self.jobs[n]["auto"] = True
+        print("locate %d: %s was moved, re-checking where it is" % (n, dev))
         return n
 
     def request_for(self, dev):
@@ -314,5 +332,12 @@ class Locator:
             json.dump(res, f, indent=1)
         j["state"] = "done"
         j["result"] = res
+        pos = res.get("position_cm")
+        if j.get("auto") and self.geo and pos:
+            if pos["speakers_used"] >= self.AUTO_MIN_SPEAKERS and pos["rms_error_cm"] <= self.AUTO_MAX_FIT_CM:
+                self.geo.set_measured(j["dev"], pos["x"], pos["y"], pos["z"], pos["rms_error_cm"])
+                print("locate %d: %s is now at x %.0f, z %.0f cm" % (n, j["dev"], pos["x"], pos["z"]))
+            else:
+                print("locate %d: not sure enough to move %s (%s)" % (n, j["dev"], pos))
         print("locate %d: %s" % (n, json.dumps(res)[:600]))
         return res

@@ -24,6 +24,8 @@ Endpoints (all need header  X-LilC-Key: <key from config.json>):
   POST /api/locate {"dev", "kind": "speakers"|"voice"} -> {"id"}: listen for
                               where things are (lilc_locate.py; locate.py starts one)
   GET  /api/locate/<id>       -> how it went
+  POST /api/moved             -> the device was picked up and put down: re-check
+                              where it is (by sound) and remember it
   POST /api/record/<id>/start, POST /api/record/<id> raw PCM (X-Rate,
                               X-Channels): the device's side of a locate
 
@@ -710,6 +712,10 @@ class Handler(BaseHTTPRequestHandler):
                 if kind not in ("speakers", "voice", "listen") or d.get("dev") not in PRESENCE.homes():
                     return self._send(400, {"error": "dev must be a home, kind speakers, voice or listen"})
                 return self._send(200, {"id": LOCATOR.start(d["dev"], kind, d.get("settings"))})
+            if self.path == "/api/moved":  # picked up and put down (the device's IMU)
+                if self._dev() in PRESENCE.homes():
+                    return self._send(200, {"locate": LOCATOR.moved(self._dev())})
+                return self._send(400, {"error": "which device?"})
             m = re.fullmatch(r"/api/record/(\d+)/start", self.path)
             if m:
                 LOCATOR.started(int(m.group(1)))
@@ -738,7 +744,7 @@ def main():
     hub = CFG.get("hub") or {}
     DESK = DeskLink(hub.get("host", "127.0.0.1"), hub.get("port", 24852))
     PRESENCE = Presence(CFG, DESK)
-    LOCATOR = Locator(CFG, DESK)
+    LOCATOR = Locator(CFG, DESK, PRESENCE.geo)
     CHAT = Chat(CFG)
     SPEECH = Speech(CFG)
     JOBS = Jobs()
