@@ -459,6 +459,16 @@ static void startTracking() {
   objSince = millis();
 }
 
+// Arriving, he takes the neck as he finds it (it may still face wherever he
+// last went) and only starts looking about after a moment
+static uint32_t neckHeldUntil = 0;
+static void settleIn(uint32_t now) {
+  lookX = head.targetX = head.x;
+  lookY = head.targetY = head.y;
+  neckHeldUntil = now + 2500;
+  lookAt = now + 2500;
+}
+
 static void lookAtSpot(float x, float y) {
   lookX = x;
   lookY = y;
@@ -1453,7 +1463,7 @@ void loop() {
           lookAt = now + 6000 + random(8000);
         }
       }
-      if (!tracking && now - lookSince > NECK_DELAY) head.look(lookX, lookY);
+      if (!tracking && now - lookSince > NECK_DELAY && now > neckHeldUntil) head.look(lookX, lookY);
       if (lastNeeds >= 0 && needsCount > lastNeeds) {  // a task wants you: glance at its PC (no sound)
         lookToward(tasksAim);
         lookAt = now + 1500;
@@ -1477,12 +1487,11 @@ void loop() {
         break;
       }
       if (presHere) {  // on his way here: "COMING!", then he slides in
-        eyePop = 0;
-        head.look(0, 0);
+        eyePop = 0;      // (the neck stays as it is: nobody is in it yet)
         if ((int32_t)(now - presArriveAt) >= 0) {
           mode = IDLE;
           modeSince = now;
-          lookAtSpot(0, 0);
+          settleIn(now);
         }
         if (t.wasClicked() && t.y >= BAR_Y - 4) barTap(t.x);
         break;
@@ -1553,10 +1562,8 @@ void loop() {
           eyePop = max(0.0f, eyePop - dt * 2.2f);
         if (eyePop <= 0.02f) { hopPhase = HOP_AWAY; hopSince = now; }
       } else if (hopPhase == HOP_AWAY) {
-        if (!hopActive) { hopPhase = HOP_BACK; hopSince = now; eyePop = 0; }
-      } else {  // the neck turns back, then his window slides in
-        head.look(0, 0);
-        lookX = lookY = 0;
+        if (!hopActive) { hopPhase = HOP_BACK; hopSince = now; eyePop = 0; settleIn(now); }
+      } else {  // back: his window slides in (into the neck as it is)
         if (now - hopSince > 900) eyePop = min(1.0f, eyePop + dt * 1.8f);
         if (eyePop >= 1 && now - hopSince > 1200) { mode = THINKING; modeSince = now; }
       }
