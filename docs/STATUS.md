@@ -97,6 +97,20 @@ The SGI Octane session ("SGI Octane bringup and data recovery") was given
 `sgi bringup/RETROKM-KEYBOARD.md` and `sgi bringup/type-octane.py` (types
 text into the Octane through the hub's control socket).
 
+## lil' C desk buddy (2026-10-10, built, not installed)
+
+Commits 01f0869 and 655097a. Hub: BUDDY frames, `activity` and `buddy`
+panel commands. X11 + Windows agents show lil' C's window; the Windows tray
+icon (left click) calls him. Panel code moved to `panel/lib/rkm_panel`
+(lil' C's Tab5 firmware embeds it); monitors show numbers. To install:
+- hub: `./install-laptop.sh` (sudo, user types the password)
+- laptop agent: rebuild `build/rkm-x11` (X headers via apt-get download)
+  and restart the autostarted one
+- armbox: rebuild rkm-x11 on the box with `~/rkm-sdk`, add `-lm`
+- Dell: copy `build/rkm-win32.exe` to `C:\RetroKM\`
+- the stand-alone panel firmware still builds (`pio run -e tab5`), but the
+  Tab5 is meant to run lil' C's firmware now, which includes the desk map.
+
 ## Open ideas / next steps
 
 - **Set-3 keys:** verify key by key on the Octane (the table was written
