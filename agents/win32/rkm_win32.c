@@ -573,6 +573,18 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE prev, LPSTR cmdline, int show)
     }
     if (WSAStartup(MAKEWORD(1, 1), &wsa) != 0) return 1;
 
+    /* An older copy still running (being updated, say): ask it to quit, so
+     * the two don't keep replacing each other at the hub.  Works with any
+     * version: they all quit on IDM_QUIT. */
+    {
+        HWND old = FindWindow("RetroKM", NULL);
+        int i;
+        if (old) {
+            PostMessage(old, WM_COMMAND, IDM_QUIT, 0);
+            for (i = 0; i < 50 && IsWindow(old); i++) Sleep(100);
+        }
+    }
+
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc = wndproc;
     wc.hInstance = inst;

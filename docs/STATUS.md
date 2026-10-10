@@ -9,7 +9,7 @@ file is the state of *this* desk and what was learned getting there.
 |---|---|---|
 | IdeaPad Gaming 3 (`laptop`), runs the hub | X11 agent, autostarts at login | own panel (`lcd`) + HDMI into the tall Dell's DVI |
 | Armbian H96 Max (`armbox`) 192.168.1.108 | X11 agent, XFCE autostart | Extron in 2 |
-| Dell Precision 410 (`precision`), "DELL2000" 192.168.1.139, Win 2000 (+98) | `C:\RetroKM\rkm-win32.exe` + `rkm.ini` | Extron in 1 |
+| Dell Precision 410 (`precision`), "DELL2000" 192.168.1.139, Win 2000 (+98) | `D:\RetroKM\rkm-win32.exe` + `rkm.ini` (2000) | Extron in 1 |
 | SGI Octane (`octane`) | NanoC6 PS/2 keyboard "octanekb" 192.168.1.120 (no agent yet) | Extron in 4 |
 | Dreamcast (`dreamcast`) | none (`agent = no`) | Extron in 5 |
 
@@ -66,6 +66,25 @@ file is the state of *this* desk and what was learned getting there.
   headers fetched with `apt-get download libx11-dev libxtst-dev x11proto-dev`
   into a scratch dir (no sudo); the armbox's are in `~/rkm-sdk`.
 
+## The Dell's drives and updating it
+
+- C: Windows 98 SE, D: Windows 2000 (the agent is `D:\RetroKM\`), E: shared
+  between the two. A Sound Blaster Audigy drives the desk's 4 analog speakers.
+- With no mouse plugged in at boot, Windows 2000 has no pointer at all, so the
+  hub's mouse does nothing there (keyboard still works). Plug one in and reboot.
+- Its screen can be watched through the MacroSilicon USB capture card on the
+  laptop (`/dev/video0`, fed from Extron output 7 or 8). Use raw mode:
+  `ffmpeg -f v4l2 -input_format yuyv422 -video_size 1280x720 -i /dev/video0
+  -frames:v 40 -update 1 shot.jpg`. MJPEG mode only gives colour bars, and so
+  do the first few frames. Only one program can have it open (Discord).
+- Updating the agent without a mouse: `tools/rkm-type.py precision '...'`
+  types into it through the hub. Serve the exe read-only over FTP from the
+  laptop (pyftpdlib, port 2121), then in a cmd prompt on the Dell: `ftp -n`,
+  `open 192.168.1.166 2121`, `user anonymous x`, `binary`,
+  `get rkm-win32.exe rkm-new.exe`, `bye` (type slowly: ftp drops keys while
+  it connects), `start rkm-new.exe` (a new agent closes the old one),
+  `copy /y rkm-new.exe rkm-win32.exe`.
+
 ## Hard-won lessons
 
 - **ESP32-C6:** `Serial.begin()` re-enables the USB pads and takes GPIO
@@ -107,7 +126,7 @@ icon (left click) calls him. Panel code moved to `panel/lib/rkm_panel`
 - laptop agent: rebuild `build/rkm-x11` (X headers via apt-get download)
   and restart the autostarted one
 - armbox: rebuild rkm-x11 on the box with `~/rkm-sdk`, add `-lm`
-- Dell: copy `build/rkm-win32.exe` to `C:\RetroKM\`
+- Dell: done 2026-10-10 (see "Updating the Dell" below)
 - the stand-alone panel firmware still builds (`pio run -e tab5`), but the
   Tab5 is meant to run lil' C's firmware now, which includes the desk map.
 
