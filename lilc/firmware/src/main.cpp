@@ -124,6 +124,14 @@ static String presFrom;                  // ... and where he is coming from
 static volatile bool summonWanted = false;
 static volatile int summonSeq = -1;
 static volatile uint32_t summonAt = 0;
+// Recording both microphones for the bridge, which listens for where things
+// are (bridge/lilc_locate.py): the request (net task), then the recording (UI)
+static volatile int recReqId = 0, recReqMs = 0, recReqRate = 48000;
+static volatile int stId = 0;            // the recording in hand (0: none)
+static int16_t* stBuf = nullptr;
+static int stLen = 0, stTotal = 0, stRate = 48000;
+static volatile bool stStarted = false, stUpload = false;
+static int stLastId = 0;
 
 // ------------------------------------------------------------ network
 
@@ -184,6 +192,15 @@ static void fetchPresence() {
   if (!ok) return;
   int seq = doc["seq"] | 0;
   bool here = doc["here"] | true;
+  JsonVariantConst rec = doc["record"];
+  if (!rec.isNull()) {  // the bridge wants both microphones for a moment
+    int id = rec["id"] | 0;
+    if (id && id != stLastId && id != stId && !recReqId) {
+      recReqMs = constrain((int)(rec["ms"] | 4000), 500, 8000);
+      recReqRate = rec["rate"] | 48000;
+      recReqId = id;
+    }
+  }
   // Just called him over: an answer from before the bridge moved him is stale
   if (!here && seq == summonSeq && millis() - summonAt < 4000) return;
   xSemaphoreTake(lock, portMAX_DELAY);
@@ -320,6 +337,31 @@ static void netTask(void*) {
     if (summonWanted) {
       summonWanted = false;
       sendSummon();
+    }
+    if (stStarted) {  // the recording has begun: the bridge starts the sounds
+      stStarted = false;
+      HTTPClient http;
+      if (httpBegin(http, "/api/record/" + String(stId) + "/start")) {
+        http.POST("{}");
+        http.end();
+      }
+    }
+    if (stUpload) {
+      HTTPClient http;
+      if (httpBegin(http, "/api/record/" + String(stId))) {
+        http.addHeader("Content-Type", "application/octet-stream");
+        http.addHeader("X-Rate", String(stRate));
+        http.addHeader("X-Channels", "2");
+        http.setTimeout(30000);
+        int code = http.POST((uint8_t*)stBuf, stLen * 2);
+        http.end();
+        Serial.printf("[lilc] recording %d uploaded: %d\n", stId, code);
+      }
+      free(stBuf);
+      stBuf = nullptr;
+      stUpload = false;
+      stId = 0;
+      setNotice("");
     }
     static uint32_t lastPres = 0;
     if (bridgeOk && !videoActive() && millis() - lastPres > PRESENCE_POLL_MS) {
@@ -893,6 +935,45 @@ static void pumpMic() {
   }
 }
 
+// Both microphones, as left and right, for the bridge (not for talking)
+static void startStereo() {
+  stId = recReqId;
+  recReqId = 0;
+  stLastId = stId;
+  stRate = recReqRate;
+  stTotal = (int)((int64_t)recReqMs * stRate / 1000) * 2;
+  stLen = 0;
+  stBuf = (int16_t*)ps_malloc(stTotal * 2);
+  if (!stBuf) { stId = 0; return; }
+  M5.Speaker.stop();
+  M5.Speaker.end();
+  auto c = M5.Mic.config();
+  c.sample_rate = stRate;
+  c.stereo = true;
+  M5.Mic.config(c);
+  M5.Mic.begin();
+  stStarted = true;
+  setNotice("listening to the room...");
+}
+
+static void pumpStereo() {
+  const int chunk = stRate / 50 * 2;  // 20 ms, left and right
+  while (M5.Mic.isRecording() < 2 && stLen + chunk <= stTotal) {
+    M5.Mic.record(stBuf + stLen, chunk, stRate, true);
+    stLen += chunk;
+  }
+  if (stLen + chunk > stTotal && !M5.Mic.isRecording()) {  // done: back to normal
+    M5.Mic.end();
+    auto c = M5.Mic.config();
+    c.sample_rate = REC_RATE;
+    c.stereo = false;
+    M5.Mic.config(c);
+    M5.Speaker.begin();
+    M5.Speaker.setVolume(VOLUME);
+    stUpload = true;
+  }
+}
+
 static void stopListening(bool send) {
   while (M5.Mic.isRecording()) delay(1);
   M5.Mic.end();
@@ -1404,6 +1485,12 @@ void loop() {
   auto t = uiTouch();
   static int dragLastY = 0;
   static bool touchOnFace = false;
+  // The bridge asked to hear the room: record both microphones (no talking meanwhile)
+  if (recReqId && !stId && (mode == IDLE || mode == AWAY)) startStereo();
+  if (stId) {
+    if (!stUpload) pumpStereo();
+    t = m5::touch_detail_t();
+  }
 
   if (WiFi.status() != WL_CONNECTED && now % 10000 < 20) WiFi.reconnect();
   ArduinoOTA.handle();

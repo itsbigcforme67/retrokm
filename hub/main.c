@@ -937,11 +937,11 @@ static const char *cmd_rest(char *from, const char *line_end)
 
 static void run_panel_command(char *cmd, Conn *r)
 {
-    char *argv[5] = { 0, 0, 0, 0, 0 }, *save = NULL, *tok;
+    char *argv[12] = { 0 }, *save = NULL, *tok;
     const char *cmd_end = cmd + strlen(cmd);
     int argc = 0;
 
-    for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 5; tok = strtok_r(NULL, " \t\r\n", &save))
+    for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 12; tok = strtok_r(NULL, " \t\r\n", &save))
         argv[argc++] = tok;
     if (argc == 0) return;
 
@@ -1024,12 +1024,33 @@ static void run_panel_command(char *cmd, Conn *r)
             memcpy(p + 1, lab, n);
         }
         send_frame(s->buddy, RKM_BUDDY, p, (unsigned)(1 + n));
+    } else if (!strcasecmp(argv[0], "sound") && argc == 11) {
+        /* sound <screen> <id> <rate> <chirp ms> <gap ms> <lo Hz> <hi Hz> <level %> <lead ms> <ch,ch,..>:
+         * play a chirp on each listed channel in turn (lil' C locating himself) */
+        Screen *s = screen_by_name(argv[1]);
+        unsigned char p[32];
+        unsigned n = 0, k;
+        char *c;
+        if (!s || !s->sound) { ctl_printf(r, "error %s cannot play sounds\n", argv[1]); return; }
+        RKM_PUT16(p, (unsigned)atoi(argv[2]));
+        RKM_PUT32(p + 2, (unsigned long)atol(argv[3]));
+        RKM_PUT16(p + 6, (unsigned)atoi(argv[4]));
+        RKM_PUT16(p + 8, (unsigned)atoi(argv[5]));
+        RKM_PUT16(p + 10, (unsigned)atoi(argv[6]));
+        RKM_PUT16(p + 12, (unsigned)atoi(argv[7]));
+        p[14] = (unsigned char)atoi(argv[8]);
+        RKM_PUT16(p + 15, (unsigned)atoi(argv[9]));
+        for (c = argv[10], k = 18; *c && k < sizeof p; c++)
+            if (*c >= '0' && *c <= '5') { p[k++] = (unsigned char)(*c - '0'); n++; }
+        p[17] = (unsigned char)n;
+        send_frame(s->sound, RKM_SOUND, p, 18 + n);
     } else if (!strcasecmp(argv[0], "ping")) {
         ctl_printf(r, "pong\n");
     } else {
         ctl_printf(r, "error commands are layout, tie <screen> <monitor>, untie <monitor>, "
                       "move <monitor> <col> <row>, share <monitor> [on|off], color <screen> <RRGGBB|default>, "
-                      "goto <screen>, lock [on|off], activity, buddy <screen> show|hide [label], ping\n");
+                      "goto <screen>, lock [on|off], activity, buddy <screen> show|hide [label], "
+                      "sound <screen> <id> <rate> <chirp> <gap> <lo> <hi> <level> <lead> <channels>, ping\n");
     }
 }
 
@@ -1043,6 +1064,7 @@ static void conn_detach(Conn *c)
     if (s->kbd == c) s->kbd = NULL;
     if (s->clip == c) s->clip = NULL;
     if (s->buddy == c) s->buddy = NULL;
+    if (s->sound == c) s->sound = NULL;
     c->screen = NULL;
     logmsg("%s: disconnected (%s)", s->name, c->peer);
 }
@@ -1055,6 +1077,7 @@ static void kick(Conn *old)
     if (s && s->kbd == old) s->kbd = NULL;
     if (s && s->clip == old) s->clip = NULL;
     if (s && s->buddy == old) s->buddy = NULL;
+    if (s && s->sound == old) s->sound = NULL;
     old->screen = NULL;
     old->dead = 1;
 }
@@ -1113,6 +1136,7 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
         s->clip_gen = 0;
     }
     if (c->caps & RKM_CAP_BUDDY) s->buddy = c;
+    if (c->caps & RKM_CAP_SOUND) s->sound = c;
     w[1] = RKM_OK;
     send_frame(c, RKM_WELCOME, w, 2);
     logmsg("%s: connected from %s, %dx%d%s%s%s%s", s->name, c->peer, s->w, s->h,
@@ -1166,6 +1190,17 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
         break;
     case RKM_CLIP_END:
         if (c->clip_in_active) clip_received(c);
+        break;
+    case RKM_SOUND_EVENT:                      /* how the chirps went: to the panels too */
+        if (len >= 8) {
+            char line[96];
+            int i;
+            snprintf(line, sizeof line, "sound %s %u %s %u %lu\n", c->screen->name, RKM_GET16(p),
+                     p[2] == RKM_SOUND_PLAYING ? "playing" : p[2] == RKM_SOUND_DONE ? "done" : "failed",
+                     (unsigned)p[3], (unsigned long)RKM_GET32(p + 4));
+            for (i = 0; i < MAX_CONNS; i++)
+                if (conns[i].kind == CONN_PANEL && !conns[i].dead) conn_write(&conns[i], line, strlen(line));
+        }
         break;
     case RKM_BUDDY_EVENT:                      /* tell the panels (lil' C's bridge) */
         if (len >= 1) {

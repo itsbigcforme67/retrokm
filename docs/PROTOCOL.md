@@ -47,10 +47,12 @@ Unknown types must be ignored, so new messages can be added later.
 | 0x22 | CLIP_END | both | none |
 | 0x30 | BUDDY | H>A | cmd u8 (0 hide, 1 show), label (rest, up to 48 bytes) |
 | 0x31 | BUDDY_EVENT | A>H | event u8 (1 his window was clicked, 2 called from the machine) |
+| 0x32 | SOUND | H>A | id u16, rate u32, chirp ms u16, gap ms u16, low Hz u16, high Hz u16, level % u8, lead-in ms u16, count u8, channel u8 [count] |
+| 0x33 | SOUND_EVENT | A>H | id u16, status u8 (0 playing, 1 done, 2 failed), channels u8, rate u32 |
 
 **caps**: bit 0 `INPUT` (can inject), bit 1 `CLIP` (has a clipboard),
 bit 2 `REL` (pointer is relative only), bit 3 `KEYS` (a hardware keyboard),
-bit 4 `BUDDY` (can show the desk buddy window).
+bit 4 `BUDDY` (can show the desk buddy window), bit 5 `SOUND` (can play test chirps).
 
 **charset**: 0 UTF-8, 1 ISO 8859-1, 2 Windows-1252, 3 MacRoman.
 **eol**: 0 LF, 1 CRLF, 2 CR. The agent always sends and receives clipboard
@@ -127,6 +129,19 @@ from them. Agents without the capability never see BUDDY frames.
 The panel port also answers `activity` with
 `activity {"screen":[s since input, s since a key],...}` (-1: never), so
 lil' C can stay out of the way of a machine someone is using.
+
+## Test chirps
+
+For lil' C to work out where he is by sound, an agent with `SOUND` plays a
+linear chirp (low to high Hz, Hann window) on each listed speaker in turn:
+the first after the lead-in, then one every chirp + gap ms. Channels are in
+WAVE order (0 front left, 1 front right, 2 centre, 3 sub, 4 rear left, 5
+rear right). The agent builds the sound itself, opens 5.1, quad or stereo,
+whichever the card takes, leaves out speakers the layout lacks, and reports
+how many channels it got. The panel port takes
+`sound <screen> <id> <rate> <chirp> <gap> <low> <high> <level> <lead> <ch,ch,..>`
+and passes on `sound <screen> <id> playing|done|failed <channels> <rate>`.
+The Windows agent has it.
 
 ## Planned: serial transport
 

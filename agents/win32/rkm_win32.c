@@ -3,9 +3,9 @@
  *
  * Plain Win32 + Winsock 1.1, ANSI APIs only, single thread, C89.
  *
- *   Visual C++ 6:   cl /O1 rkm_win32.c ..\..\common\rkm_proto.c user32.lib shell32.lib wsock32.lib
+ *   Visual C++ 6:   cl /O1 rkm_win32.c ..\..\common\rkm_proto.c user32.lib shell32.lib wsock32.lib winmm.lib
  *   Open Watcom:    wcl386 -l=nt_win -bt=nt rkm_win32.c ..\..\common\rkm_proto.c
- *   MinGW:          gcc -Os -mwindows -o rkm-win32.exe rkm_win32.c ../../common/rkm_proto.c -lwsock32
+ *   MinGW:          gcc -Os -mwindows -o rkm-win32.exe rkm_win32.c ../../common/rkm_proto.c -lwsock32 -lwinmm
  *
  *   rkm-win32.exe hub-host [name [port]]
  * or put an rkm.ini next to the exe:
@@ -63,6 +63,7 @@ static NOTIFYICONDATA nid;
 static int use_buddy = 1;
 
 #include "buddy_win32.h"
+#include "sound_win32.h"
 
 /* ---- tray ---------------------------------------------------------------- */
 
@@ -146,7 +147,8 @@ static void send_hello(void)
     BOOL one = TRUE;
 
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
-    n = rkm_hello(p, RKM_CAP_INPUT | RKM_CAP_CLIP | (use_buddy ? RKM_CAP_BUDDY : 0), RKM_CS_CP1252, RKM_EOL_CRLF,
+    n = rkm_hello(p, RKM_CAP_INPUT | RKM_CAP_CLIP | RKM_CAP_SOUND | (use_buddy ? RKM_CAP_BUDDY : 0),
+                  RKM_CS_CP1252, RKM_EOL_CRLF,
                   (unsigned int)GetSystemMetrics(SM_CXSCREEN),
                   (unsigned int)GetSystemMetrics(SM_CYSCREEN),
                   (unsigned int)(MAX_CLIP / 1024), my_name);
@@ -393,6 +395,9 @@ static void on_frame(void *ctx, int type, const unsigned char *p, unsigned int l
     case RKM_CLIP_END:
         clip_install();
         break;
+    case RKM_SOUND:
+        sound_play(hwnd, p, len);
+        break;
     case RKM_BUDDY:
         if (len < 1 || !use_buddy) break;
         if (p[0] == RKM_BUDDY_SHOW) buddy_show((const char *)p + 1, len - 1);
@@ -414,6 +419,16 @@ static void buddy_event(int e)
 static void buddy_clicked(void)
 {
     buddy_event(RKM_BUDDY_CLICK);
+}
+
+static void sound_event(unsigned id, int status, int channels, unsigned long rate)
+{
+    unsigned char b[8];
+    RKM_PUT16(b, id);
+    b[2] = (unsigned char)status;
+    b[3] = (unsigned char)channels;
+    RKM_PUT32(b + 4, rate);
+    send_frame(RKM_SOUND_EVENT, b, 8);
 }
 
 /* ---- window -------------------------------------------------------------- */
@@ -465,6 +480,10 @@ static LRESULT CALLBACK wndproc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CHANGECBCHAIN:
         if ((HWND)wp == next_viewer) next_viewer = (HWND)lp;
         else if (next_viewer) SendMessage(next_viewer, msg, wp, lp);
+        break;
+
+    case MM_WOM_DONE:
+        sound_done();
         break;
 
     case WM_DISPLAYCHANGE: {

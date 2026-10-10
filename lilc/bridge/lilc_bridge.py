@@ -21,6 +21,11 @@ Endpoints (all need header  X-LilC-Key: <key from config.json>):
   GET  /api/media/<id>/audio             -> 16 kHz s16le mono PCM
   GET  /api/presence          -> where lil' C is: {"where", "label", "here", ...}
   POST /api/summon            -> call him to this device
+  POST /api/locate {"dev", "kind": "speakers"|"voice"} -> {"id"}: listen for
+                              where things are (lilc_locate.py; locate.py starts one)
+  GET  /api/locate/<id>       -> how it went
+  POST /api/record/<id>/start, POST /api/record/<id> raw PCM (X-Rate,
+                              X-Channels): the device's side of a locate
 
 Devices say which home they are with the header X-LilC-Dev (stackchan, tab5).
 """
@@ -41,6 +46,7 @@ from lilc_media import Media
 from lilc_speakspell import speak_and_spell
 from lilc_desk import DeskLink
 from lilc_presence import Presence
+from lilc_locate import Locator
 try:
     from piper.config import SynthesisConfig
 except ImportError:
@@ -602,7 +608,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         if not any(p in self.path for p in ("/api/tasks", "/api/ping", "/api/job",
-                                            "/api/media", "/api/presence")):
+                                            "/api/media", "/api/presence", "/api/locate")):
             sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
 
     def _send(self, code, body, ctype="application/json", headers=None):
@@ -640,7 +646,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "stt": bool(SPEECH.stt),
                                     "tts": bool(SPEECH.tts)})
         if self.path == "/api/presence":
-            return self._send(200, PRESENCE.state_for(self._dev()))
+            st = PRESENCE.state_for(self._dev())
+            rec = LOCATOR.request_for(self._dev())
+            if rec:
+                st["record"] = rec  # please record both microphones (lilc_locate.py)
+            return self._send(200, st)
+        m = re.fullmatch(r"/api/locate/(\d+)", self.path)
+        if m and int(m.group(1)) in LOCATOR.jobs:
+            j = dict(LOCATOR.jobs[int(m.group(1))])
+            return self._send(200, j)
         if self.path == "/api/tasks":
             body = list_tasks(CFG["task_limit"])
             body["media_newest"] = MEDIA.newest()
@@ -690,6 +704,22 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(503, {"error": "speech-to-text is off"})
                 pcm = self._body(16000 * 2 * 30)
                 return self._send(200, {"job": JOBS.start(pcm=pcm, dev=self._dev())})
+            if self.path == "/api/locate":
+                d = json.loads(self._body(4096) or b"{}")
+                kind = d.get("kind", "speakers")
+                if kind not in ("speakers", "voice") or d.get("dev") not in PRESENCE.homes():
+                    return self._send(400, {"error": "dev must be a home, kind speakers or voice"})
+                return self._send(200, {"id": LOCATOR.start(d["dev"], kind)})
+            m = re.fullmatch(r"/api/record/(\d+)/start", self.path)
+            if m:
+                LOCATOR.started(int(m.group(1)))
+                return self._send(200, {"ok": True})
+            m = re.fullmatch(r"/api/record/(\d+)", self.path)
+            if m:
+                pcm = self._body(8 * 1024 * 1024)
+                res = LOCATOR.upload(int(m.group(1)), pcm, int(self.headers.get("X-Rate", 48000)),
+                                     int(self.headers.get("X-Channels", 2)))
+                return self._send(200 if res else 404, res or {"error": "no such recording"})
             if self.path == "/api/summon":
                 if self._dev():
                     PRESENCE.summon(self._dev())
@@ -703,11 +733,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global CFG, CHAT, SPEECH, JOBS, MEDIA, DESK, PRESENCE
+    global CFG, CHAT, SPEECH, JOBS, MEDIA, DESK, PRESENCE, LOCATOR
     CFG = load_config()
     hub = CFG.get("hub") or {}
     DESK = DeskLink(hub.get("host", "127.0.0.1"), hub.get("port", 24852))
     PRESENCE = Presence(CFG, DESK)
+    LOCATOR = Locator(CFG, DESK)
     CHAT = Chat(CFG)
     SPEECH = Speech(CFG)
     JOBS = Jobs()

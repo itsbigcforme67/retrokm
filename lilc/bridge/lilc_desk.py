@@ -25,6 +25,7 @@ class DeskLink:
         self.lock = threading.Lock()
         self.errors = []            # "error ..." lines from the hub, newest last
         self.on_buddy = None        # callback(screen, event) for buddy clicks
+        self.on_sound = None        # callback(screen, id, status, channels, rate)
         threading.Thread(target=self._run, daemon=True).start()
 
     # ------------------------------------------------------------ link
@@ -84,6 +85,10 @@ class DeskLink:
                 self.activity = {k: tuple(v) for k, v in json.loads(line[9:]).items()}
             except (ValueError, TypeError):
                 pass
+        elif line.startswith("sound "):  # sound <screen> <id> playing|done|failed <channels> <rate>
+            parts = line.split()
+            if len(parts) >= 6 and self.on_sound:
+                self.on_sound(parts[1], int(parts[2]), parts[3], int(parts[4]), int(parts[5]))
         elif line.startswith("buddy "):
             parts = line.split()
             if len(parts) >= 3 and self.on_buddy:
