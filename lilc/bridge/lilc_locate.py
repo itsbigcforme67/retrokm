@@ -144,10 +144,38 @@ def analyze_speakers(pcm, rate, channels, p, played_channels):
         for s in good:
             s["further_cm"] = round((s["arrival_ms"] - ref) / 1000 * SOUND_C, 1)  # than the first speaker
     out = {"kind": "speakers", "rate": rate, "slots": slots}
+    good, dropped = drop_impossible(good, p)
+    if dropped:
+        out["dropped"] = dropped
     pos = solve_position(good, p)
     if pos:
         out["position_cm"] = pos
     return out
+
+
+def drop_impossible(good, p):
+    """Two speakers' distances to one spot can't differ by more than the
+    distance between the speakers. A reading that breaks that (an echo or
+    noise caught in its window) is dropped, the worst first."""
+    spk = {k: np.array(v, dtype=float) for k, v in (p.get("speakers") or {}).items()}
+    good = [s for s in good if s["at"] in spk]
+    dropped = []
+    while len(good) > 3:
+        bad = {}
+        for a in good:
+            for b in good:
+                if a is b:
+                    continue
+                diff = abs(a["arrival_ms"] - b["arrival_ms"]) / 1000 * SOUND_C
+                if diff > np.linalg.norm(spk[a["at"]] - spk[b["at"]]) + 5:
+                    bad[a["at"]] = bad.get(a["at"], 0) + 1
+        if not bad:
+            break
+        # most broken pairs first; the fainter one if it's a tie
+        worst = max(good, key=lambda s: (bad.get(s["at"], 0), -s["snr"]))
+        good = [s for s in good if s is not worst]
+        dropped.append(worst["at"])
+    return good, dropped
 
 
 def solve_position(good, p):
@@ -227,6 +255,8 @@ class Locator:
     AUTO_MIN_SPEAKERS = 3
     AUTO_MAX_FIT_CM = 15
     AUTO_GAP_S = 20  # at most one automatic re-check per device this often
+    DESK_X_CM = (-250, 250)  # where on the desk a device can be (three speakers always
+    DESK_Z_CM = (-100, 150)  # fit exactly, so the answer must at least be on the desk)
 
     def __init__(self, cfg, desk, geo=None):
         self.p = dict(LOCATE_DEFAULTS)
@@ -334,7 +364,10 @@ class Locator:
         j["result"] = res
         pos = res.get("position_cm")
         if j.get("auto") and self.geo and pos:
-            if pos["speakers_used"] >= self.AUTO_MIN_SPEAKERS and pos["rms_error_cm"] <= self.AUTO_MAX_FIT_CM:
+            on_desk = (self.DESK_X_CM[0] <= pos["x"] <= self.DESK_X_CM[1] and
+                       self.DESK_Z_CM[0] <= pos["z"] <= self.DESK_Z_CM[1])
+            if (pos["speakers_used"] >= self.AUTO_MIN_SPEAKERS and on_desk and
+                    pos["rms_error_cm"] <= self.AUTO_MAX_FIT_CM):
                 self.geo.set_measured(j["dev"], pos["x"], pos["y"], pos["z"], pos["rms_error_cm"])
                 print("locate %d: %s is now at x %.0f, z %.0f cm" % (n, j["dev"], pos["x"], pos["z"]))
             else:
