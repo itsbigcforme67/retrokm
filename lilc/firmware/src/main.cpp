@@ -459,10 +459,24 @@ static void startTracking() {
   objSince = millis();
 }
 
+// How far his window has come in: 1 = in place, 0 = gone off the top of the
+// screen. He arrives by sliding down from the top and leaves the same way.
+static float eyePop = 1;
+
+// Gone: the empty body stays exactly as he left it
+static bool bodyEmpty = false;
+static void leaveBody() {
+  bodyEmpty = true;
+  eyePop = 0;
+  head.targetX = head.x;
+  head.targetY = head.y;
+}
+
 // Arriving, he takes the neck as he finds it (it may still face wherever he
 // last went) and only starts looking about after a moment
 static uint32_t neckHeldUntil = 0;
 static void settleIn(uint32_t now) {
+  bodyEmpty = false;
   lookX = head.targetX = head.x;
   lookY = head.targetY = head.y;
   neckHeldUntil = now + 2500;
@@ -503,9 +517,6 @@ static void turnToward(const Aim& a) {
   head.lookFar(x, y);
 }
 static bool following = false;
-// How far his window has come in: 1 = in place, 0 = gone off the top of the
-// screen. He arrives by sliding down from the top and leaves the same way.
-static float eyePop = 1;
 static float slideOut() {
   float e = constrain(eyePop, 0.0f, 1.0f);
   return (1 - e) * (1 - e) * (1 - e);  // eased: quick to start, gentle to land
@@ -1411,6 +1422,7 @@ void loop() {
 
   switch (mode) {
     case IDLE:
+      if (bodyEmpty && (presHere || !presKnown)) settleIn(now);  // he's in it again
       if (presKnown && !presHere) {  // he's been called away: off he goes
         mode = AWAY;
         modeSince = now;
@@ -1497,12 +1509,17 @@ void loop() {
         break;
       }
       // Leaving: his eyes look first, the neck turns to face where he's
-      // going, and only then does he go (his window slides off the top)
-      if (now - modeSince > NECK_DELAY) turnToward(presAim);
-      if (now - modeSince > NECK_DELAY + 150 &&
-          ((fabsf(head.x - head.targetX) < 5 && fabsf(head.y - head.targetY) < 4) ||
-           now - modeSince > 3000))
-        eyePop = max(0.0f, eyePop - dt * 2.2f);
+      // going, and only then does he go (his window slides off the top).
+      // Once he's gone the body doesn't move at all until he's back.
+      if (bodyEmpty) eyePop = 0;  // (back from the task list or pictures: still gone)
+      if (eyePop > 0.02f) {
+        if (now - modeSince > NECK_DELAY) turnToward(presAim);
+        if (now - modeSince > NECK_DELAY + 150 &&
+            ((fabsf(head.x - head.targetX) < 5 && fabsf(head.y - head.targetY) < 4) ||
+             now - modeSince > 3000))
+          eyePop = max(0.0f, eyePop - dt * 2.2f);
+        if (eyePop <= 0.02f) leaveBody();
+      }
       if (t.wasPressed()) {
         touchOnFace = t.y < BAR_Y - 4;
         if (touchOnFace) {  // call him back
@@ -1560,7 +1577,7 @@ void loop() {
             ((fabsf(head.x - head.targetX) < 5 && fabsf(head.y - head.targetY) < 4) ||
              now - hopSince > 3000))
           eyePop = max(0.0f, eyePop - dt * 2.2f);
-        if (eyePop <= 0.02f) { hopPhase = HOP_AWAY; hopSince = now; }
+        if (eyePop <= 0.02f) { hopPhase = HOP_AWAY; hopSince = now; leaveBody(); }
       } else if (hopPhase == HOP_AWAY) {
         if (!hopActive) { hopPhase = HOP_BACK; hopSince = now; eyePop = 0; settleIn(now); }
       } else {  // back: his window slides in (into the neck as it is)
@@ -1632,7 +1649,8 @@ void loop() {
 
   // the neck pans; big turns (hops, leaving) at a set pace whatever the frame rate
   head.update(mode == HOP || mode == AWAY ? 1 - expf(-dt * 3.0f) : 0.07f);
-  if (mode != HOP && mode != AWAY && eyePop < 1) eyePop = min(1.0f, eyePop + dt * 1.8f);  // arriving: slide in
+  if (mode != HOP && mode != AWAY && !bodyEmpty && eyePop < 1)
+    eyePop = min(1.0f, eyePop + dt * 1.8f);  // arriving: slide in
   updateMouth();
   if (mode == TASKS) {
     drawTasks();
