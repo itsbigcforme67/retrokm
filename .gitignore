@@ -1,0 +1,11 @@
+# local and generated
+bridge/.venv/
+__pycache__/
+bridge/tms5100.so
+firmware/.pio/
+# secrets: the device key and WiFi password
+bridge/config.json
+firmware/include/secrets.h
+# downloaded by bridge/setup.sh
+bridge/voices/*.onnx
+bridge/voices/*.onnx.json
