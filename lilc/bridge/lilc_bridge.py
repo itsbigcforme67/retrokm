@@ -718,7 +718,7 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 pcm = self._body(8 * 1024 * 1024)
                 res = LOCATOR.upload(int(m.group(1)), pcm, int(self.headers.get("X-Rate", 48000)),
-                                     int(self.headers.get("X-Channels", 2)))
+                                     int(self.headers.get("X-Channels", 2)), self.headers.get("X-Head", ""))
                 return self._send(200 if res else 404, res or {"error": "no such recording"})
             if self.path == "/api/summon":
                 if self._dev():

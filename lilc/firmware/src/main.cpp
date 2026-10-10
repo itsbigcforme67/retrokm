@@ -132,6 +132,7 @@ static int16_t* stBuf = nullptr;
 static int stLen = 0, stTotal = 0, stRate = 48000;
 static volatile bool stStarted = false, stUpload = false;
 static int stLastId = 0;
+static float stYaw = 0, stPitch = 0;     // where the head (and its mics) pointed
 
 // ------------------------------------------------------------ network
 
@@ -352,6 +353,7 @@ static void netTask(void*) {
         http.addHeader("Content-Type", "application/octet-stream");
         http.addHeader("X-Rate", String(stRate));
         http.addHeader("X-Channels", "2");
+        http.addHeader("X-Head", String(stYaw, 1) + "," + String(stPitch, 1));
         http.setTimeout(30000);
         int code = http.POST((uint8_t*)stBuf, stLen * 2);
         http.end();
@@ -945,6 +947,13 @@ static void startStereo() {
   stLen = 0;
   stBuf = (int16_t*)ps_malloc(stTotal * 2);
   if (!stBuf) { stId = 0; return; }
+  // The microphones are on the head: hold it still while they listen, and
+  // tell the bridge which way it pointed
+  tracking = false;
+  head.targetX = head.x;
+  head.targetY = head.y;
+  stYaw = head.x;
+  stPitch = head.y;
   M5.Speaker.stop();
   M5.Speaker.end();
   auto c = M5.Mic.config();
@@ -1549,7 +1558,7 @@ void loop() {
           lookY = constrain(objY, -(float)SERVO_Y_RANGE, (float)SERVO_Y_RANGE);
           lookAt = now + 1500 + random(2000);
         }
-      } else if (now > lookAt) {
+      } else if (now > lookAt && !stId) {  // (not while the mics listen)
         float x, y;
         int roll = random(100);
         if (roll < 8) {  // something floats by
@@ -1566,7 +1575,7 @@ void loop() {
           lookAt = now + 6000 + random(8000);
         }
       }
-      if (!tracking && now - lookSince > NECK_DELAY && now > neckHeldUntil) head.look(lookX, lookY);
+      if (!tracking && !stId && now - lookSince > NECK_DELAY && now > neckHeldUntil) head.look(lookX, lookY);
       if (lastNeeds >= 0 && needsCount > lastNeeds) {  // a task wants you: glance at its PC (no sound)
         lookToward(tasksAim);
         lookAt = now + 1500;

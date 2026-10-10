@@ -113,17 +113,29 @@ def analyze_speakers(pcm, rate, channels, p, played_channels):
         if sc > best:
             best, t0 = sc, off
     t0 = max(0, t0 - win // 2)
+    # The loudest chirp anchors the schedule. Every speaker is within a few
+    # metres, so each true arrival is within +-12 ms of its slot on that
+    # schedule; anything further off is processing or a late echo (the
+    # Audigy/DTS rears add a smeared copy ~0.27 s after each chirp)
+    rough = []
+    for k in range(len(order)):
+        lo = t0 + k * period
+        seg = env[lo: lo + 2 * win]
+        rough.append((float(seg.max()) if len(seg) else 0.0, lo + int(np.argmax(seg)) if len(seg) else lo))
+    kbest = int(np.argmax([r[0] for r in rough]))
+    anchor = rough[kbest][1] - kbest * period
+    reach = int(rate * 0.012)
     slots = []
     for k, c in enumerate(order):
-        lo, hi = t0 + k * period, t0 + k * period + 2 * win
-        per_mic = [first_arrival(e, lo, min(hi, len(e))) for e in envs]
+        lo, hi = anchor + k * period - reach, anchor + k * period + reach
+        per_mic = [first_arrival(e, max(0, lo), min(hi, len(e))) for e in envs]
         heard = [m for m in per_mic if m[0] is not None]
         arr = np.mean([m[0] for m in heard]) if heard else None
         snr = max((m[1] for m in heard), default=0.0)
         where = (p.get("wiring") or {}).get(str(c), str(c))
         slots.append({"channel": c, "speaker": NAMES.get(where, where), "at": where,
                       "played": c in LAYOUTS.get(played_channels, ()), "arrival_ms": None if arr is None else
-                      round((arr - k * period) * 1000 / rate, 3),
+                      round(float(arr - k * period) * 1000 / rate, 3),
                       "snr": round(snr, 1),
                       "mic_lr_us": None if len(heard) < 2 else round((per_mic[0][0] - per_mic[1][0]) * 1e6 / rate, 1)})
     good = [s for s in slots if s["played"] and s["arrival_ms"] is not None and s["snr"] > 6]
@@ -265,7 +277,7 @@ class Locator:
                     j["sound"] = {"failed": True}
                 print("locate %d: %s %s (%s channels)" % (j["id"], screen, status, channels))
 
-    def upload(self, n, pcm, rate, channels):
+    def upload(self, n, pcm, rate, channels, head=""):
         j = self.jobs.get(n)
         if not j:
             return None
@@ -290,6 +302,11 @@ class Locator:
         except Exception as e:
             res = {"error": "analysis failed: %s" % e}
         res["wav"] = base + ".wav"
+        try:  # which way the head (and its microphones) pointed: yaw, pitch degrees
+            yaw, pitch = (float(v) for v in head.split(","))
+            res["head"] = {"yaw": yaw, "pitch": pitch}
+        except ValueError:
+            pass
         with open(base + ".json", "w") as f:
             json.dump(res, f, indent=1)
         j["state"] = "done"
