@@ -45,11 +45,10 @@ LOCATE_DEFAULTS = {
     # for better positions.
     "speakers": {"FL": [-110, 95, 40], "FR": [150, 95, 40], "C": [20, 55, 75],
                  "BL": [-120, 10, -40], "BR": [160, 10, -40]},
-    # which speaker each sound card channel really comes out of. On the Dell
-    # the front and rear pairs are swapped (heard 2026-10-10: channels 0, 1
-    # play from the back, 4, 5 from the front). Swap the plugs and set this
-    # back to {"0": "FL", "1": "FR", "2": "C", "4": "BL", "5": "BR"}.
-    "wiring": {"0": "BL", "1": "BR", "2": "C", "4": "FL", "5": "FR"},
+    # which speaker each sound card channel comes out of (the standard
+    # wiring; on 2026-10-10 the Dell's front and rear plugs were found
+    # swapped and the user swapped them back)
+    "wiring": {"0": "FL", "1": "FR", "2": "C", "4": "BL", "5": "BR"},
     "mic_spacing_cm": 0,                  # between the two microphones, if known
     "device_y_cm": 8,                     # the device's microphones above the desk
 }
