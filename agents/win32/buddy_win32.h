@@ -55,7 +55,8 @@ static void bd_paint(HDC out)
     RECT r;
     POINT pt;
     /* lil' C's eyes are the same shape everywhere: 1.5 times as tall as wide */
-    double rx = bd.ww / 4.0 - 8 < (bd.face_h / 2.0 - 8) / 1.5 ? bd.ww / 4.0 - 8 : (bd.face_h / 2.0 - 8) / 1.5;
+    /* (1.5 times as tall as wide, 0.2 of a radius apart, as big as fit) */
+    double rx = (bd.ww - 16) / 4.2 < (bd.face_h / 2.0 - 8) / 1.5 ? (bd.ww - 16) / 4.2 : (bd.face_h / 2.0 - 8) / 1.5;
     double ry = rx * 1.5, rim = rx * 0.16;
     double prx = rx * 0.24, pry = prx * 1.2;
     int i;
@@ -66,7 +67,7 @@ static void bd_paint(HDC out)
     FillRect(dc, &r, bd.weave);
     GetCursorPos(&pt);
     for (i = 0; i < 2; i++) {
-        double cx = bd.ww * (i ? 190.0 : 70.0) / 260, cy = bd.face_h / 2.0;
+        double cx = bd.ww / 2.0 + (i ? 1 : -1) * rx * 1.1, cy = bd.face_h / 2.0;
         double ax = rx - rim - prx - 3, ay = ry - rim - pry - 3, dx, dy, k;
         bd_ellipse(dc, cx, cy, rx, ry, 0);
         bd_ellipse(dc, cx, cy, rx - rim, ry - rim, 1);

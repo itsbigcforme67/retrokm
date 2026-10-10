@@ -48,12 +48,12 @@ agent on :0, the Windows agent under Wine); not yet on the devices.
   the desk; Claude replies with `[[kvm:show M MON]]`, `[[kvm:blank MON]]`,
   `[[kvm:keyboard M]]`. Monitors numbered left to right, captures last.
 - **Tab5 firmware** now embeds the RetroKM desk map (`firmware/lib/rkm_panel`
-  is a symlink to `../../MULTI KM/panel/lib/rkm_panel`): bottom bar middle
+  is a symlink to `../../panel/lib/rkm_panel`): bottom bar middle
   "desk (KVM)" opens it, its "lil' C" button returns. Tab5 has ArduinoOTA
   now (hostname lilc-tab5): `pio run -e tab5-ota -t upload` (IP .140; the
   first one goes over the current RetroKM panel firmware's OTA).
 - Old pieces still fine without the new hub: KVM chat works with today's
-  hub; visits to other machines need the new hub + agents (MULTI KM STATUS).
+  hub; visits to other machines need the new hub + agents (docs/STATUS.md).
 
 Both devices flashed 2026-10-10 and the new bridge is running; summons and
 a hop to the laptop worked on hardware. Both now update over WiFi:
@@ -77,7 +77,7 @@ Freeze seen once (called to Tab5 while the Stack-chan showed a reply, then
 tapped the reply): not reproduced; serial logged in the session scratchpad.
 
 ### Still to deploy
-3. Hub + agents: see MULTI KM docs/STATUS.md.
+3. Hub + agents: see ../docs/STATUS.md.
 4. Tune `homes.tab5.yaw` (-70 is a guess for where the Stack-chan turns to
    look at the Tab5).
 
@@ -94,8 +94,8 @@ tapped the reply): not reproduced; serial logged in the session scratchpad.
 
 ## Ideas the user has queued (later)
 
-- Take machine positions (head yaw) from MULTI KM's monitor layout; turn
-  to face the arm box (right of the main monitor).
+- Turn to face the arm box (right of the main monitor): pin it in
+  config.json `desk.places` (lilc/bridge/lilc_place.py).
 - Summon from a classic Windows taskbar icon: done in the Windows agent
   (click the RetroKM tray icon), needs the new rkm-win32.exe on the Dell.
 - Webcam colour-dot tracking to aim at things ("where's my PS2?").

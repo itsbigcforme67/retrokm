@@ -535,13 +535,21 @@ static void makeWeave() {
       weave.drawPixel(x, y, (rootWeave[y & 3] >> (x & 3)) & 1 ? TFT_BLACK : TFT_WHITE);
 }
 
-// His eyes are the same shape everywhere (Stack-chan, Tab5, the pop-up and
-// the RetroKM agents' windows): ovals EYE_TALL times as tall as wide, as big
-// as fit in each half of the window's client area.
+// His eyes are the same everywhere (Stack-chan, Tab5, the pop-up and the
+// RetroKM agents' windows): ovals EYE_TALL times as tall as wide, EYE_GAP of
+// their width apart, side by side in the middle of the window's client area,
+// as big as fit. However the window is sized, they keep that look.
 static const float EYE_TALL = 1.5f;
+static const float EYE_GAP = 0.2f;  // between the eyes, in eye radii
 static void eyeSize(int cw, int ch, int margin, int& rx, int& ry) {
-  rx = (int)min(cw / 4.0f - margin, (ch / 2.0f - margin) / EYE_TALL);
+  rx = (int)min((cw - 2.0f * margin) / (4 + EYE_GAP), (ch / 2.0f - margin) / EYE_TALL);
   ry = (int)(rx * EYE_TALL);
+}
+// The two eye centres for a client area starting at x0, cw wide
+static void eyeCentres(int x0, int cw, int rx, int& left, int& right) {
+  int d = (int)(rx * (1 + EYE_GAP / 2));
+  left = x0 + cw / 2 - d;
+  right = x0 + cw / 2 + d;
 }
 
 // One xeyes eye on g; (px, py) is the finger in g's coordinates
@@ -624,8 +632,12 @@ static void drawFace(bool withBar) {
 
   // Shrink upwards when there is text under the eyes
   bool compact = mode == THINKING || mode == SPEAKING || mode == REPLY;
-  eyeCY += ((compact ? 72 : 100) - eyeCY) * 0.2f;
-  eyeRY += ((compact ? 58 : 106) - eyeRY) * 0.2f;  // (the window's bottom is eyeCY + eyeRY + 4)
+  // (the window's bottom is eyeCY + eyeRY + 4). Quick, whatever the frame rate
+  static uint32_t lastSize = now;
+  float ks = 1 - expf(-min(0.1f, (now - lastSize) / 1000.0f) * 14.0f);
+  lastSize = now;
+  eyeCY += ((compact ? 72 : 100) - eyeCY) * ks;
+  eyeRY += ((compact ? 58 : 106) - eyeRY) * ks;
   float pupil = 1 + mouthOpen * 0.6f;  // pupils pulse while talking
 #if !DESKTOP  // (the desktop build draws its window in present())
   // His xeyes window covers the screen above the notice line (shorter when
@@ -638,8 +650,10 @@ static void drawFace(bool withBar) {
     twmFrameOn(canvas, 2, y0, W - 8, wh, "xeyes", th, &fonts::DejaVu9, 3);
     int cw = W - 12, ch = wh - th - 4, top = y0 + th + 2, rx, ry;
     eyeSize(cw, ch, 6, rx, ry);
-    drawXEye(canvas, 4 + cw / 4, top + ch / 2, rx, ry, pupil, ptrX, ptrY);
-    drawXEye(canvas, 4 + cw * 3 / 4, top + ch / 2, rx, ry, pupil, ptrX, ptrY);
+    int el, er;
+    eyeCentres(4, cw, rx, el, er);
+    drawXEye(canvas, el, top + ch / 2, rx, ry, pupil, ptrX, ptrY);
+    drawXEye(canvas, er, top + ch / 2, rx, ry, pupil, ptrX, ptrY);
   }
 #endif
 
@@ -1192,8 +1206,10 @@ static void drawXeyesWindow() {
   int rx, ry;
   eyeSize(cw, ch, 10, rx, ry);
   float pupil = 1 + mouthOpen * 0.6f;
-  drawXEye(desk, cx + cw / 4, cy + ch / 2, rx, ry, pupil, raw.x, raw.y);
-  drawXEye(desk, cx + cw * 3 / 4, cy + ch / 2, rx, ry, pupil, raw.x, raw.y);
+  int el, er;
+  eyeCentres(cx, cw, rx, el, er);
+  drawXEye(desk, el, cy + ch / 2, rx, ry, pupil, raw.x, raw.y);
+  drawXEye(desk, er, cy + ch / 2, rx, ry, pupil, raw.x, raw.y);
 }
 #endif
 

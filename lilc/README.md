@@ -59,7 +59,7 @@ track of where he is (`bridge/lilc_presence.py`); each device asks it every
   visiting (or uses its mouse for a few seconds), he goes home.
 - **On computers** he is a small xeyes window that darts around the screen.
   On the laptop it's `bridge/lilc_popup.py`; on the other machines it's drawn
-  by their RetroKM agent (X11 and Windows agents, "desk buddy" in MULTI KM's
+  by their RetroKM agent (X11 and Windows agents, "desk buddy" in RetroKM's
   `docs/PROTOCOL.md`), shown and hidden through the hub.
 - Every weight and time is in `bridge/config.json` under `"presence"` (the
   defaults are at the top of `lilc_presence.py`): stay times, how restless he
@@ -77,7 +77,7 @@ track of where he is (`bridge/lilc_presence.py`); each device asks it every
 
 ## The desk (RetroKM)
 
-lil' C runs the RetroKM KVM desk (MULTI KM) through the hub's panel port
+lil' C runs the RetroKM KVM desk (the rest of this repo) through the hub's panel port
 (`bridge/lilc_desk.py`, port 24852 on the bridge's PC; `"hub"` in config.json
 to change it). Each question carries a note with the desk as it is now, and
 Claude answers desk requests with tags the bridge carries out at once:
@@ -108,7 +108,7 @@ laptop?") and Claude starts its answer with a `[[hop:laptop]]` tag. Then:
    eyes pop in and he answers.
 
 Claude can also check running work on the laptop (ps, pgrep, uptime, free, df,
-sensors), read-only. Later: positions from MULTI KM's monitor layout, the
+sensors), read-only. Later: the
 webcam for fine aiming.
 
 ## Voice
@@ -137,7 +137,7 @@ Measures that keep answers quick (2026-10-06):
 ### 1. Bridge (on the PC)
 
 ```
-cd "LIL C/bridge"
+cd lilc/bridge
 sh setup.sh      # one time: venv + whisper + piper voice (~200 MB)
 sh run.sh
 ```
@@ -156,7 +156,7 @@ are in `firmware/include/board.h`:
 | Device | CoreS3 in the Stack-chan body | M5Stack Tab5 (ESP32-P4) |
 | Screen | 320x240 | 1280x720 X desktop: root weave, a twm-style "xeyes" window that roams to where he looks, the rest of the UI 3x on top, and a "claude tasks" window |
 | Head | servos | none (hops still show the sign and the laptop pop-up) |
-| Extra | | the RetroKM desk map (`lib/rkm_panel`, a link into MULTI KM), OTA updates |
+| Extra | | the RetroKM desk map (`lib/rkm_panel`, a link to ../panel/lib/rkm_panel), OTA updates |
 | WiFi | built in | ESP32-C6 over SDIO (`WiFi.setPins`) |
 | Platform | espressif32 6.13 (Arduino 2) | pioarduino 55.03.311 (Arduino 3.3) |
 
@@ -186,7 +186,7 @@ Both talk to the same bridge, share one Claude conversation, and use the same
 3. Plug in the CoreS3 by USB-C and run:
 
 ```
-cd "LIL C/firmware"
+cd lilc/firmware
 ~/.platformio/penv/bin/pio run -t upload
 ```
 

@@ -104,7 +104,8 @@ static void bd_draw(int at_pointer)
     int scr = DefaultScreen(bd.d), i;
     unsigned long black = BlackPixel(bd.d, scr), white = WhitePixel(bd.d, scr);
     /* lil' C's eyes are the same shape everywhere: 1.5 times as tall as wide */
-    double rx = bd.ww / 4.0 - 8 < (bd.face_h / 2.0 - 8) / 1.5 ? bd.ww / 4.0 - 8 : (bd.face_h / 2.0 - 8) / 1.5;
+    /* (1.5 times as tall as wide, 0.2 of a radius apart, as big as fit) */
+    double rx = (bd.ww - 16) / 4.2 < (bd.face_h / 2.0 - 8) / 1.5 ? (bd.ww - 16) / 4.2 : (bd.face_h / 2.0 - 8) / 1.5;
     double ry = rx * 1.5, rim = rx * 0.16;
     double prx = rx * 0.24, pry = prx * 1.2;
     int px = 0, py = 0;
@@ -117,7 +118,7 @@ static void bd_draw(int at_pointer)
     }
     XFillRectangle(bd.d, bd.buf, bd.tile_gc, 0, 0, (unsigned)bd.ww, (unsigned)bd.face_h);
     for (i = 0; i < 2; i++) {
-        double cx = bd.ww * (i ? 190.0 : 70.0) / 260, cy = bd.face_h / 2.0;
+        double cx = bd.ww / 2.0 + (i ? 1 : -1) * rx * 1.1, cy = bd.face_h / 2.0;
         double ax = rx - rim - prx - 3, ay = ry - rim - pry - 3, dx, dy, k;
         XSetForeground(bd.d, bd.gc, black);
         bd_ellipse(cx, cy, rx, ry);

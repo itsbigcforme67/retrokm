@@ -157,7 +157,7 @@ the keyboard. See [panel/README.md](panel/README.md).
 
 ## lil' C, the desk buddy
 
-lil' C (the desk robot in `../LIL C`) wanders between the desk's machines.
+lil' C (the desk robot in [lilc/](lilc/README.md)) wanders between the desk's machines.
 The X11 and Windows agents can show him: a small xeyes window that darts
 around the screen until he leaves. His bridge connects to the panel port and
 sends `buddy <screen> show|hide`; clicking his window (or the Windows tray
