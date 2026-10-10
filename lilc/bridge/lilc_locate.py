@@ -43,13 +43,18 @@ LOCATE_DEFAULTS = {
     # the fronts sit high on the hutch tops, the rears on the front corners of
     # the two wings, the centre on the shelf above the Extron. Measure them
     # for better positions.
-    "speakers": {"0": [-110, 95, 40], "1": [150, 95, 40], "2": [20, 55, 75],
-                 "4": [-120, 10, -40], "5": [160, 10, -40]},
+    "speakers": {"FL": [-110, 95, 40], "FR": [150, 95, 40], "C": [20, 55, 75],
+                 "BL": [-120, 10, -40], "BR": [160, 10, -40]},
+    # which speaker each sound card channel really comes out of. On the Dell
+    # the front and rear pairs are swapped (heard 2026-10-10: channels 0, 1
+    # play from the back, 4, 5 from the front). Swap the plugs and set this
+    # back to {"0": "FL", "1": "FR", "2": "C", "4": "BL", "5": "BR"}.
+    "wiring": {"0": "BL", "1": "BR", "2": "C", "4": "FL", "5": "FR"},
     "mic_spacing_cm": 0,                  # between the two microphones, if known
     "device_y_cm": 8,                     # the device's microphones above the desk
 }
 LAYOUTS = {6: (0, 1, 2, 3, 4, 5), 4: (0, 1, 4, 5), 2: (0, 1)}  # what each card layout plays
-NAMES = {0: "front left", 1: "front right", 2: "centre", 3: "sub", 4: "rear left", 5: "rear right"}
+NAMES = {"FL": "front left", "FR": "front right", "C": "centre", "BL": "back left", "BR": "back right"}
 
 
 def chirp(p, rate):
@@ -116,7 +121,8 @@ def analyze_speakers(pcm, rate, channels, p, played_channels):
         heard = [m for m in per_mic if m[0] is not None]
         arr = np.mean([m[0] for m in heard]) if heard else None
         snr = max((m[1] for m in heard), default=0.0)
-        slots.append({"channel": c, "speaker": NAMES.get(c, str(c)),
+        where = (p.get("wiring") or {}).get(str(c), str(c))
+        slots.append({"channel": c, "speaker": NAMES.get(where, where), "at": where,
                       "played": c in LAYOUTS.get(played_channels, ()), "arrival_ms": None if arr is None else
                       round((arr - k * period) * 1000 / rate, 3),
                       "snr": round(snr, 1),
@@ -138,11 +144,11 @@ def solve_position(good, p):
     the speakers' positions are known. Its height is taken as known (it sits
     on the desk: "device_y_cm"); speakers at about one height can't tell
     height apart anyway. Needs three speakers; more makes it sturdier."""
-    spk = {int(k): np.array(v, dtype=float) for k, v in (p.get("speakers") or {}).items()}
-    use = [s for s in good if s["channel"] in spk]
+    spk = {k: np.array(v, dtype=float) for k, v in (p.get("speakers") or {}).items()}
+    use = [s for s in good if s["at"] in spk]
     if len(use) < 3:
         return None
-    S = np.array([spk[s["channel"]] for s in use])
+    S = np.array([spk[s["at"]] for s in use])
     d = np.array([s["arrival_ms"] / 1000 * SOUND_C for s in use])  # distance + unknown offset
     y = float(p.get("device_y_cm", 8))
     best = None
@@ -216,14 +222,17 @@ class Locator:
         os.makedirs(self.dir, exist_ok=True)
         desk.on_sound = self._sound_event
 
-    def start(self, dev, kind):
+    def start(self, dev, kind, overrides=None):
+        """overrides: settings for this run only (e.g. "order", "gap_ms")."""
         with self.lock:
             self.next_id += 1
             n = self.next_id
+            p = dict(self.p)
+            p.update({k: v for k, v in (overrides or {}).items() if k in LOCATE_DEFAULTS})
             ms = 1000 * 4 if kind == "voice" else int(
-                self.p["lead_ms"] + len(self.p["order"].split(",")) * (self.p["chirp_ms"] + self.p["gap_ms"]) + 1500)
-            self.jobs[n] = {"id": n, "dev": dev, "kind": kind, "ms": ms, "rate": self.p["rate"],
-                            "state": "waiting for the device", "t": time.time(), "sound": None}
+                p["lead_ms"] + len(p["order"].split(",")) * (p["chirp_ms"] + p["gap_ms"]) + 1500)
+            self.jobs[n] = {"id": n, "dev": dev, "kind": kind, "ms": min(ms, 8000), "rate": p["rate"],
+                            "state": "waiting for the device", "t": time.time(), "sound": None, "p": p}
         print("locate %d: %s on %s" % (n, kind, dev))
         return n
 
@@ -241,7 +250,7 @@ class Locator:
             return
         j["state"] = "recording"
         if j["kind"] == "speakers":
-            p = self.p
+            p = j["p"]
             # the device needs a moment after saying it has started
             threading.Timer(0.3, self.desk.send, args=(
                 "sound %s %d %d %d %d %d %d %d %d %s" % (
@@ -275,10 +284,10 @@ class Locator:
                 elif j["sound"].get("failed"):
                     res = {"kind": "speakers", "error": "the sound card would not play the chirps"}
                 else:
-                    res = analyze_speakers(pcm, rate, channels, self.p, j["sound"]["channels"])
+                    res = analyze_speakers(pcm, rate, channels, j["p"], j["sound"]["channels"])
                     res["played"] = j["sound"]
             else:
-                res = analyze_voice(pcm, rate, channels, self.p)
+                res = analyze_voice(pcm, rate, channels, j["p"])
         except Exception as e:
             res = {"error": "analysis failed: %s" % e}
         res["wav"] = base + ".wav"

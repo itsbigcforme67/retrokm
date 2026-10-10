@@ -709,7 +709,7 @@ class Handler(BaseHTTPRequestHandler):
                 kind = d.get("kind", "speakers")
                 if kind not in ("speakers", "voice") or d.get("dev") not in PRESENCE.homes():
                     return self._send(400, {"error": "dev must be a home, kind speakers or voice"})
-                return self._send(200, {"id": LOCATOR.start(d["dev"], kind)})
+                return self._send(200, {"id": LOCATOR.start(d["dev"], kind, d.get("settings"))})
             m = re.fullmatch(r"/api/record/(\d+)/start", self.path)
             if m:
                 LOCATOR.started(int(m.group(1)))

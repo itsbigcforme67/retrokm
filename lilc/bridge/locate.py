@@ -3,6 +3,7 @@
 
   .venv/bin/python locate.py speakers stackchan   chirps from the speakers
   .venv/bin/python locate.py voice tab5           talk to it for 4 s
+  ... speakers stackchan order=0,1,2,3,4,5 gap_ms=600   settings for this run
 """
 import json
 import os
@@ -23,7 +24,11 @@ def call(path, body=None):
     return json.loads(urllib.request.urlopen(r, timeout=10).read())
 
 
-n = call("/api/locate", {"dev": dev, "kind": kind})["id"]
+settings = {}
+for a in sys.argv[3:]:
+    k, _, v = a.partition("=")
+    settings[k] = int(v) if v.lstrip("-").isdigit() else v
+n = call("/api/locate", {"dev": dev, "kind": kind, "settings": settings})["id"]
 print("locate %d: %s on %s%s" % (n, kind, dev, "  (talk now, for 4 seconds)" if kind == "voice" else ""))
 last = None
 for _ in range(120):

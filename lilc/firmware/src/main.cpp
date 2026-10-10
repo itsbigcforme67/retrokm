@@ -957,12 +957,16 @@ static void startStereo() {
 }
 
 static void pumpStereo() {
-  const int chunk = stRate / 50 * 2;  // 20 ms, left and right
-  while (M5.Mic.isRecording() < 2 && stLen + chunk <= stTotal) {
-    M5.Mic.record(stBuf + stLen, chunk, stRate, true);
-    stLen += chunk;
+  // The whole buffer goes to the microphone in two halves, so it fills
+  // without a gap however long a frame takes (small chunks topped up once a
+  // frame lost audio and squeezed the timeline)
+  int half = (stTotal / 2) & ~1;
+  if (stLen == 0) {
+    M5.Mic.record(stBuf, half, stRate, true);
+    M5.Mic.record(stBuf + half, stTotal - half, stRate, true);
+    stLen = stTotal;
   }
-  if (stLen + chunk > stTotal && !M5.Mic.isRecording()) {  // done: back to normal
+  if (stLen == stTotal && !M5.Mic.isRecording()) {  // done: back to normal
     M5.Mic.end();
     auto c = M5.Mic.config();
     c.sample_rate = REC_RATE;
