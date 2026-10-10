@@ -83,6 +83,15 @@ the bridge times each chirp's first arrival (+-12 ms of the schedule, to
 skip processing smears) and solves the position from the speaker positions
 (still photo estimates in LOCATE_DEFAULTS; real measurements to come).
 Works: the Stack-chan lands mid-desk near the front edge, consistent runs.
+Moving him re-checks it (2026-10-10, confirmed by the user): the IMU sees a
+lift (|a| changes of ~0.03 g; neck moves, touches and the first 10 s after
+boot ignored), 3 s of stillness, POST /api/moved, a locate at 70% volume,
+impossible readings dropped (two speakers' distances can't differ by more
+than the speakers' spacing), and a sure answer (3+ speakers, on the desk)
+saved to ~/.cache/lilc-workspace/measured.json, which the desk model uses
+for that home. The devices report IMU readings with each presence poll
+(bridge prints "motion ..."). The Stack-chan seems to shut down when
+unplugged, so moves are tested on its cable.
 "voice" (which mic heard you first) is not usable yet: the two mics share
 electrical hum that the delay locks onto; needs speech gating and a band
 filter. Sound-side quirks are in ../docs/STATUS.md (Dell section).
