@@ -54,7 +54,9 @@ static void bd_paint(HDC out)
     HBITMAP bm = CreateCompatibleBitmap(out, bd.ww, bd.wh), oldbm;
     RECT r;
     POINT pt;
-    double rx = bd.ww * 54.0 / 260, ry = bd.face_h * 66.0 / 148, rim = rx * 0.16;
+    /* lil' C's eyes are the same shape everywhere: 1.5 times as tall as wide */
+    double rx = bd.ww / 4.0 - 8 < (bd.face_h / 2.0 - 8) / 1.5 ? bd.ww / 4.0 - 8 : (bd.face_h / 2.0 - 8) / 1.5;
+    double ry = rx * 1.5, rim = rx * 0.16;
     double prx = rx * 0.24, pry = prx * 1.2;
     int i;
 
