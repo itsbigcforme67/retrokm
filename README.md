@@ -63,8 +63,17 @@ track of where he is (`bridge/lilc_presence.py`); each device asks it every
   `docs/PROTOCOL.md`), shown and hidden through the hub.
 - Every weight and time is in `bridge/config.json` under `"presence"` (the
   defaults are at the top of `lilc_presence.py`): stay times, how restless he
-  is, how much he prefers the last-used home, where each home is for the
-  Stack-chan's head (`homes`: yaw/pitch).
+  is, how much he prefers the last-used home, the trip time.
+- **Which way he looks** comes from a small desk model, `bridge/lilc_place.py`
+  (`"desk"` in config.json): the monitors stand where the RetroKM desk map
+  has them, a computer is wherever a monitor shows it, the Stack-chan sits
+  below the tall monitor and the Tab5 between the tall monitor and the CRT,
+  both facing you. Before leaving, the Stack-chan turns its neck to face
+  where he's going; the Tab5's window glides that way. A task that newly
+  needs you makes him glance towards the laptop. Moving a monitor on the desk
+  map moves where he looks. Set `"yaw_sign": -1` if his neck turns the wrong way.
+- His eyes are the same shape everywhere: ovals 1.5 times as tall as wide, as
+  big as fit in his window.
 
 ## The desk (RetroKM)
 
@@ -87,9 +96,7 @@ desk map itself, full screen; the "lil' C" button at its top left comes back.
 
 Ask how something is going on a computer ("how's the Rugrats port going on the
 laptop?") and Claude starts its answer with a `[[hop:laptop]]` tag. Then:
-1. lil' C turns his head towards that machine (`machines` in
-   `bridge/config.json`: yaw/pitch in degrees, + yaw = his left). For now the
-   laptop is assumed to be behind him.
+1. lil' C turns his head towards that machine (from the desk model above).
 2. His screen shows a swinging "BE RIGHT BACK!" sign.
 3. On the laptop, a small xeyes window of his face (`bridge/lilc_popup.py`,
    plain X11) slides up from the bottom corner of its screen (`monitor` = the

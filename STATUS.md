@@ -68,6 +68,14 @@ going shows "HOLD ON, COMING!" for `travel_s` (2.8 s, bridge sends
 eyes already in it. The Stack-chan's face is now a twm "xeyes" window too
 (covers the weave while he's there). Hops use the same neck-first/slide.
 
+Directions (2026-10-10, flashed): `bridge/lilc_place.py` desk model from
+the RetroKM layout replaced the hardcoded yaw/pitch (laptop 115, Tab5 -70)
+and the fixed task glance (-15). Devices get yaw/pitch + dir_x/dir_y per
+device (`tasks_*` for the laptop). Stack-chan: no "hold my face" hint, slim
+bottom bar (dots for task counts), taller window, eyes 1.5:1 everywhere.
+Freeze seen once (called to Tab5 while the Stack-chan showed a reply, then
+tapped the reply): not reproduced; serial logged in the session scratchpad.
+
 ### Still to deploy
 3. Hub + agents: see MULTI KM docs/STATUS.md.
 4. Tune `homes.tab5.yaw` (-70 is a guess for where the Stack-chan turns to

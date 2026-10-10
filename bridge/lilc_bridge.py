@@ -125,13 +125,13 @@ DEFAULTS = {
     "piper_voice": "",       # path to a piper .onnx voice; empty = no speech
     "voice_style": "speakspell",  # "speakspell" (TMS5100 chip) or "plain"
     "task_limit": 8,
-    # Computers lil' C can hop over to. yaw/pitch: where to turn his head to
-    # look at it (degrees; + yaw = his left). monitor: the xrandr output the
-    # pop-up face appears on. Later these can come from MULTI KM's layout.
+    # Computers lil' C can hop over to besides the RetroKM desk's. monitor:
+    # the xrandr output his pop-up appears on. Where they are (which way he
+    # looks) comes from the desk model: lilc_place.py, "desk" in config.json.
     "machines": {
         "laptop": {"label": "the laptop",
                    "about": "this Linux laptop, where all the projects and Claude sessions live",
-                   "monitor": "eDP-1", "yaw": 115, "pitch": 8},
+                   "monitor": "eDP-1"},
     },
 }
 
@@ -472,8 +472,7 @@ class Hop:
     def __init__(self, job, name, home):
         self.job, self.started, self.home = job, time.time(), home
         label = PRESENCE.label(name)
-        yaw, pitch = PRESENCE.aim(name)
-        job["hop"] = {"name": name, "label": label, "yaw": yaw, "pitch": pitch}
+        job["hop"] = dict(PRESENCE.aim(home, name), name=name, label=label)
         print("hop ->", name)
         # let lil' C turn round and "leave" first
         threading.Timer(0.5, PRESENCE.hop_to, args=(name, f"lil' C: checking {label}...")).start()

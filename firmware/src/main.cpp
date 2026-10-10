@@ -96,14 +96,28 @@ static volatile bool replyDone = false;  // bridge finished the answer
 static volatile bool cancelJob = false;
 // "Hopping over" to check on a computer: where it is and what it's called
 static volatile bool hopActive = false;
-static float hopYaw = 0, hopPitch = 0;
+// Directions come from the bridge's desk model (bridge/lilc_place.py): yaw
+// and pitch for a neck (+ yaw = towards the user's left), dir x/y (-1..1,
+// screen right/up) for the Tab5, whose "neck" is its window on the desktop.
+struct Aim {
+  float yaw = 0, pitch = 0, dx = 0, dy = 0;
+  void read(JsonVariantConst v, const char* prefix = "") {
+    String p(prefix);
+    yaw = v[p + "yaw"] | 0.0f;
+    pitch = v[p + "pitch"] | 0.0f;
+    dx = v[p + "dir_x"] | 0.0f;
+    dy = v[p + "dir_y"] | 0.0f;
+  }
+};
+static Aim hopAim;
 static String hopLabel;
 static uint32_t playStart = 0;
 // Where lil' C is. There is only one of him; the bridge keeps track.
 static volatile bool presKnown = false;  // the bridge answers /api/presence
 static volatile bool presHere = true;    // he is on this device
 static String presLabel, presKind;       // where he is ("the Tab5"), home/machine
-static float presYaw = 0, presPitch = 0; // where the head turns to see him there
+static Aim presAim;                      // which way to look to see him there
+static Aim tasksAim;                     // ... and where the Claude sessions run
 static volatile int presSeq = -1;        // bumps each time he moves
 static volatile uint32_t presArriveAt = 0;  // on his way here: when he gets here
 static String presFrom;                  // ... and where he is coming from
@@ -175,8 +189,8 @@ static void fetchPresence() {
   xSemaphoreTake(lock, portMAX_DELAY);
   presLabel = (const char*)(doc["label"] | "");
   presKind = (const char*)(doc["kind"] | "");
-  presYaw = doc["yaw"] | 0.0f;
-  presPitch = doc["pitch"] | 0.0f;
+  presAim.read(doc.as<JsonVariantConst>());
+  tasksAim.read(doc.as<JsonVariantConst>(), "tasks_");
   presFrom = (const char*)(doc["from"] | "");
   xSemaphoreGive(lock);
   if (here) presArriveAt = millis() + (uint32_t)(doc["eta_ms"] | 0);
@@ -256,8 +270,7 @@ static void sendQuestion() {
     reply = doc["reply"] | "";
     JsonObject hop = doc["hop"].as<JsonObject>();
     if (hop) {
-      hopYaw = hop["yaw"] | 0.0f;
-      hopPitch = hop["pitch"] | 0.0f;
+      hopAim.read(hop);
       hopLabel = (const char*)(hop["label"] | "");
     }
     hopActive = (bool)hop;
@@ -452,6 +465,33 @@ static void lookAtSpot(float x, float y) {
   lookSince = millis();
   glanceUntil = 0;
 }
+
+// The neck position (head degrees) that faces an aim. On the Tab5 the window
+// is the head: its range maps onto the desktop's edges.
+static void aimNeck(const Aim& a, float& x, float& y) {
+#if DESKTOP
+  x = -a.dx * SERVO_X_RANGE * 0.96f;
+  y = a.dy * SERVO_Y_RANGE * 1.3f;
+#else
+  x = a.yaw;
+  y = a.pitch;
+#endif
+}
+
+// Eyes first: where to look within the neck's everyday range
+static void lookToward(const Aim& a) {
+  float x, y;
+  aimNeck(a, x, y);
+  lookAtSpot(constrain(x, -(float)SERVO_X_RANGE, (float)SERVO_X_RANGE),
+             constrain(y, -(float)SERVO_Y_RANGE, (float)SERVO_Y_RANGE));
+}
+
+// The neck turns all the way round to face it (as far as it goes)
+static void turnToward(const Aim& a) {
+  float x, y;
+  aimNeck(a, x, y);
+  head.lookFar(x, y);
+}
 static bool following = false;
 // How far his window has come in: 1 = in place, 0 = gone off the top of the
 // screen. He arrives by sliding down from the top and leaves the same way.
@@ -484,7 +524,7 @@ static void twmFrameOn(LGFX_Sprite& g, int x, int y, int w, int h, const char* n
   g.drawRect(rx, y + oy, b * 12 / 18, b * 12 / 18, TFT_BLACK);
   g.drawRect(rx, y + oy, b * 7 / 18, b * 7 / 18, TFT_BLACK);
 }
-static float eyeCY = 100, eyeRY = 78;
+static float eyeCY = 100, eyeRY = 106;
 
 static void makeWeave() {
   static const uint8_t rootWeave[4] = {0x07, 0x0d, 0x0b, 0x0e};  // X's root_weave
@@ -493,6 +533,15 @@ static void makeWeave() {
   for (int y = 0; y < H; y++)
     for (int x = 0; x < W; x++)
       weave.drawPixel(x, y, (rootWeave[y & 3] >> (x & 3)) & 1 ? TFT_BLACK : TFT_WHITE);
+}
+
+// His eyes are the same shape everywhere (Stack-chan, Tab5, the pop-up and
+// the RetroKM agents' windows): ovals EYE_TALL times as tall as wide, as big
+// as fit in each half of the window's client area.
+static const float EYE_TALL = 1.5f;
+static void eyeSize(int cw, int ch, int margin, int& rx, int& ry) {
+  rx = (int)min(cw / 4.0f - margin, (ch / 2.0f - margin) / EYE_TALL);
+  ry = (int)(rx * EYE_TALL);
 }
 
 // One xeyes eye on g; (px, py) is the finger in g's coordinates
@@ -576,7 +625,7 @@ static void drawFace(bool withBar) {
   // Shrink upwards when there is text under the eyes
   bool compact = mode == THINKING || mode == SPEAKING || mode == REPLY;
   eyeCY += ((compact ? 72 : 100) - eyeCY) * 0.2f;
-  eyeRY += ((compact ? 58 : 78) - eyeRY) * 0.2f;
+  eyeRY += ((compact ? 58 : 106) - eyeRY) * 0.2f;  // (the window's bottom is eyeCY + eyeRY + 4)
   float pupil = 1 + mouthOpen * 0.6f;  // pupils pulse while talking
 #if !DESKTOP  // (the desktop build draws its window in present())
   // His xeyes window covers the screen above the notice line (shorter when
@@ -587,8 +636,8 @@ static void drawFace(bool withBar) {
     int bottom = (int)(eyeCY + eyeRY + 4);
     int y0 = 2 - (int)(out * (bottom + 10)), wh = bottom - 2;
     twmFrameOn(canvas, 2, y0, W - 8, wh, "xeyes", th, &fonts::DejaVu9, 3);
-    int cw = W - 12, ch = wh - th - 4, top = y0 + th + 2;
-    int rx = cw / 4 - 8, ry = ch / 2 - 6;
+    int cw = W - 12, ch = wh - th - 4, top = y0 + th + 2, rx, ry;
+    eyeSize(cw, ch, 6, rx, ry);
     drawXEye(canvas, 4 + cw / 4, top + ch / 2, rx, ry, pupil, ptrX, ptrY);
     drawXEye(canvas, 4 + cw * 3 / 4, top + ch / 2, rx, ry, pupil, ptrX, ptrY);
   }
@@ -631,10 +680,16 @@ static void drawFace(bool withBar) {
     drawVFD(txt, fmodf((now - modeSince) / 1000.0f * VFD_CPS, pass));
   }
 
+#if DESKTOP
   if (withBar) drawBar("hold my face to talk");
+#else
+  if (withBar) drawBar("");  // (the Stack-chan doesn't need telling)
+#endif
 }
 
-// The notice line and the bottom bar: pictures | (desk |) tasks
+// The bottom bar (a slim strip: pictures | (desk |) tasks), and above it a
+// notice when there is something to say
+static const int BAR_Y = 216;
 static void drawBar(const String& hint) {
   xSemaphoreTake(lock, portMAX_DELAY);
   String n = notice;
@@ -644,30 +699,36 @@ static void drawBar(const String& hint) {
   else if (!bridgeOk) n = "looking for the bridge...";
   if (!n.length()) n = hint;
   canvas.setFont(&fonts::DejaVu12);
-  label(n, (W - canvas.textWidth(n)) / 2, 186, TFT_LIGHTGREY);
+  if (n.length()) label(n, (W - canvas.textWidth(n)) / 2, BAR_Y - 20, TFT_LIGHTGREY);
 
-  canvas.fillRect(0, 208, W, 32, 0x10A2);
+  const int ty = BAR_Y + 6, cy = BAR_Y + 12;
+  canvas.fillRect(0, BAR_Y, W, H - BAR_Y, 0x10A2);
   canvas.setTextColor(mediaNew ? TFT_YELLOW : TFT_LIGHTGREY);
-  String right;
+  canvas.drawString(mediaNew ? "< new pictures!" : "< pictures", 6, ty);
 #if HAS_KVM
-  canvas.drawFastVLine(W / 3, 212, 24, 0x4208);
-  canvas.drawFastVLine(W * 2 / 3, 212, 24, 0x4208);
-  canvas.drawString(mediaNew ? "< new pics!" : "< pictures", 8, 218);
+  canvas.drawFastVLine(W / 3, BAR_Y + 4, H - BAR_Y - 8, 0x4208);
+  canvas.drawFastVLine(W * 2 / 3, BAR_Y + 4, H - BAR_Y - 8, 0x4208);
   canvas.setTextColor(TFT_LIGHTGREY);
   canvas.setTextDatum(top_center);
-  canvas.drawString("desk (KVM)", W / 2, 218);
+  canvas.drawString("desk", W / 2, ty);
   canvas.setTextDatum(top_left);
-  right = needs ? String(needs) + " need you" : working ? String(working) + " working" : String("tasks");
 #else
-  canvas.drawFastVLine(W / 2, 212, 24, 0x4208);
-  canvas.drawString(mediaNew ? "< new pictures!" : "< pictures", 8, 218);
-  if (working) right += String(working) + " working ";
-  if (needs) right += String(needs) + " need you";
-  if (!right.length()) right = "tasks";
+  canvas.drawFastVLine(W / 2, BAR_Y + 4, H - BAR_Y - 8, 0x4208);
 #endif
-  right += " >";
-  canvas.setTextColor(needs ? TFT_ORANGE : TFT_GREEN);
-  canvas.drawString(right, W - 8 - canvas.textWidth(right), 218);
+  // tasks: a green dot per working count, an orange one for those that need you
+  int x = W - 6 - canvas.textWidth("tasks >");
+  canvas.setTextColor(TFT_LIGHTGREY);
+  canvas.drawString("tasks >", x, ty);
+  auto count = [&](int n, uint16_t c) {
+    if (!n) return;
+    String s(n);
+    x -= canvas.textWidth(s) + 18;
+    canvas.fillCircle(x + 5, cy, 4, c);
+    canvas.setTextColor(c);
+    canvas.drawString(s, x + 12, ty);
+  };
+  count(needs, TFT_ORANGE);
+  count(working, TFT_GREEN);
 }
 
 // ------------------------------------------------------------ hopping
@@ -1128,7 +1189,8 @@ static void drawXeyesWindow() {
   int x = xeyesRect.x, y = xeyesRect.y;
   twmFrame(x, y, XE_W, XE_H, "xeyes");
   int cx = x + 2, cy = y + TITLE_H + 2, cw = XE_W - 4, ch = XE_H - TITLE_H - 4;
-  int rx = cw / 4 - 10, ry = ch / 2 - 10;
+  int rx, ry;
+  eyeSize(cw, ch, 10, rx, ry);
   float pupil = 1 + mouthOpen * 0.6f;
   drawXEye(desk, cx + cw / 4, cy + ch / 2, rx, ry, pupil, raw.x, raw.y);
   drawXEye(desk, cx + cw * 3 / 4, cy + ch / 2, rx, ry, pupil, raw.x, raw.y);
@@ -1327,11 +1389,11 @@ void loop() {
         mode = AWAY;
         modeSince = now;
         tracking = false;
-        lookAtSpot(constrain(presYaw, -(float)SERVO_X_RANGE, (float)SERVO_X_RANGE), 0);
+        lookToward(presAim);
         break;
       }
       if (t.wasPressed()) {
-        touchOnFace = t.y < 200;
+        touchOnFace = t.y < BAR_Y - 4;
         if (touchOnFace) {
           if (!bridgeOk) setNotice("Bridge not found");
           else if (!bridgeStt) setNotice("Voice is off on the bridge");
@@ -1376,8 +1438,8 @@ void loop() {
         }
       }
       if (!tracking && now - lookSince > NECK_DELAY) head.look(lookX, lookY);
-      if (lastNeeds >= 0 && needsCount > lastNeeds) {  // a task wants you: glance (no sound)
-        lookAtSpot(-15, 0);
+      if (lastNeeds >= 0 && needsCount > lastNeeds) {  // a task wants you: glance at its PC (no sound)
+        lookToward(tasksAim);
         lookAt = now + 1500;
       }
       lastNeeds = needsCount;
@@ -1406,18 +1468,18 @@ void loop() {
           modeSince = now;
           lookAtSpot(0, 0);
         }
-        if (t.wasClicked() && t.y >= 200) barTap(t.x);
+        if (t.wasClicked() && t.y >= BAR_Y - 4) barTap(t.x);
         break;
       }
       // Leaving: his eyes look first, the neck turns to face where he's
       // going, and only then does he go (his window slides off the top)
-      if (now - modeSince > NECK_DELAY) head.lookFar(presYaw, presPitch);
+      if (now - modeSince > NECK_DELAY) turnToward(presAim);
       if (now - modeSince > NECK_DELAY + 150 &&
           ((fabsf(head.x - head.targetX) < 5 && fabsf(head.y - head.targetY) < 4) ||
            now - modeSince > 3000))
         eyePop = max(0.0f, eyePop - dt * 2.2f);
       if (t.wasPressed()) {
-        touchOnFace = t.y < 200;
+        touchOnFace = t.y < BAR_Y - 4;
         if (touchOnFace) {  // call him back
           summonSeq = presSeq;
           summonAt = now;
@@ -1458,7 +1520,7 @@ void loop() {
         mode = HOP;
         hopPhase = HOP_TURN;
         hopSince = now;
-        lookAtSpot(hopYaw, hopPitch);  // eyes go first
+        lookToward(hopAim);  // eyes go first
         break;
       }
       // Start talking as soon as the first sentence arrives
@@ -1468,7 +1530,7 @@ void loop() {
     case HOP:
       // Turn to look at the machine, "leave" (BE RIGHT BACK!), then return
       if (hopPhase == HOP_TURN) {  // the neck turns first, then he goes
-        if (now - hopSince > NECK_DELAY) head.lookFar(hopYaw, hopPitch);
+        if (now - hopSince > NECK_DELAY) turnToward(hopAim);
         if (now - hopSince > NECK_DELAY + 150 &&
             ((fabsf(head.x - head.targetX) < 5 && fabsf(head.y - head.targetY) < 4) ||
              now - hopSince > 3000))

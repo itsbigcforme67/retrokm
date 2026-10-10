@@ -21,16 +21,17 @@ import threading
 import time
 
 from lilc_x11 import x11_env, monitor_geometry, all_monitors
+from lilc_place import DeskGeo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 PRESENCE_DEFAULTS = {
     "wander": True,
-    # his homes: the devices that poll the bridge. yaw/pitch: where the
-    # Stack-chan's head turns to look at it (degrees, + yaw = his left)
+    # his homes: the devices that poll the bridge (where they stand on the
+    # desk is in lilc_place.py)
     "homes": {
-        "stackchan": {"label": "the Stack-chan", "yaw": 0, "pitch": 0},
-        "tab5": {"label": "the Tab5", "yaw": -70, "pitch": 0},
+        "stackchan": {"label": "the Stack-chan"},
+        "tab5": {"label": "the Tab5"},
     },
     "stay_home_s": [180, 600],      # at a home before he gets restless
     "stay_visit_s": [40, 150],      # visiting a computer
@@ -105,6 +106,7 @@ class Presence:
         self.p = dict(PRESENCE_DEFAULTS)
         self.p.update(cfg.get("presence") or {})
         self.desk = desk
+        self.geo = DeskGeo(cfg, desk)
         desk.on_buddy = self._buddy_event
         self.lock = threading.RLock()
         self.seen = {}                 # home -> last poll time
@@ -151,10 +153,9 @@ class Presence:
         s = self.desk.screen(place)
         return ("the " + s["label"]) if s and s.get("label") else place
 
-    def aim(self, place):
-        """(yaw, pitch) for the Stack-chan's head to look at that place."""
-        d = self.homes().get(place) or self.cfg["machines"].get(place) or {}
-        return d.get("yaw", 0), d.get("pitch", 0)
+    def aim(self, frm, place):
+        """Which way the home `frm` looks to see `place` (lilc_place.py)."""
+        return self.geo.aim(frm, place)
 
     def machine_idle(self, name):
         if name == "laptop":
@@ -267,11 +268,15 @@ class Presence:
 
     def state_for(self, dev):
         with self.lock:
-            yaw, pitch = self.aim(self.where)
+            a = self.aim(dev, self.where)
+            tasks = self.aim(dev, "laptop")  # where the Claude sessions run
             kind = "home" if self.where in self.homes() else "machine" if self.where else ""
             return {"where": self.where, "label": self.label(self.where) if self.where else "",
                     "kind": kind, "here": self.where == dev, "seq": self.seq,
-                    "yaw": yaw, "pitch": pitch,
+                    # which way this device looks to see where he is
+                    "yaw": a["yaw"], "pitch": a["pitch"], "dir_x": a["dir_x"], "dir_y": a["dir_y"],
+                    "tasks_yaw": tasks["yaw"], "tasks_pitch": tasks["pitch"],
+                    "tasks_dir_x": tasks["dir_x"], "tasks_dir_y": tasks["dir_y"],
                     # still on his way: ms until he arrives, and where from
                     "eta_ms": int(max(0.0, self.arrive_at - time.time()) * 1000),
                     "from": self.came_from}

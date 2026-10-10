@@ -62,7 +62,11 @@ font = d.open_font("fixed")
 text_gc = win.create_gc(foreground=white, background=black, font=font)
 
 EYES = [(70, 74), (190, 74)]
-RX, RY = 54, 66
+# The same eye shape as on his screens: 1.5 times as tall as wide, as big as
+# fits in each half of the face (firmware eyeSize())
+EYE_TALL = 1.5
+RX = min(WW / 4 - 8, (FACE_H / 2 - 8) / EYE_TALL)
+RY = RX * EYE_TALL
 
 
 def ellipse(gc, cx, cy, rx, ry):
