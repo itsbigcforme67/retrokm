@@ -76,6 +76,17 @@ bottom bar (dots for task counts), taller window, eyes 1.5:1 everywhere.
 Freeze seen once (called to Tab5 while the Stack-chan showed a reply, then
 tapped the reply): not reproduced; serial logged in the session scratchpad.
 
+Hearing where things are (2026-10-10): `bridge/lilc_locate.py`, run with
+`bridge/locate.py`. "speakers": the Dell plays a chirp per speaker, the
+device records both mics (48 kHz, head held still, head angle sent along),
+the bridge times each chirp's first arrival (+-12 ms of the schedule, to
+skip processing smears) and solves the position from the speaker positions
+(still photo estimates in LOCATE_DEFAULTS; real measurements to come).
+Works: the Stack-chan lands mid-desk near the front edge, consistent runs.
+"voice" (which mic heard you first) is not usable yet: the two mics share
+electrical hum that the delay locks onto; needs speech gating and a band
+filter. Sound-side quirks are in ../docs/STATUS.md (Dell section).
+
 ### Still to deploy
 3. Hub + agents: see ../docs/STATUS.md.
 4. Tune `homes.tab5.yaw` (-70 is a guess for where the Stack-chan turns to

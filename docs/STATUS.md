@@ -82,6 +82,16 @@ file is the state of *this* desk and what was learned getting there.
   Mode, Speakers). Both were on stereo / 2 speakers, so the backs only got
   an upmixed copy. Speakers: Cambridge SoundWorks DTT 2500 in FourPoint
   mode, front and rear plugs the right way round now.
+- **To troubleshoot later (sound):** the Audigy's rear output (channels 4/5,
+  Line Out 2) is ~10-20x quieter than its front output, measured at the
+  Stack-chan, with the plugs both ways round (so it follows the card's jack,
+  not a speaker). The DTT's own speaker test has the backs loudest, Bal/Fade
+  is centred, and Creative's software has no rear level. Suspects: the rear
+  plug not fully seated, or in the wrong jack (should be Line Out 2), or the
+  jack itself. Check: reseat both ends; then the rear cable in the front jack.
+  Each chirp also had a smeared copy ~0.27 s later before the speaker
+  settings were fixed; it looked much smaller afterwards (not re-measured
+  carefully).
 - Its screen can be watched through the MacroSilicon USB capture card on the
   laptop (`/dev/video0`, fed from Extron output 7 or 8). Use raw mode:
   `ffmpeg -f v4l2 -input_format yuyv422 -video_size 1280x720 -i /dev/video0
