@@ -138,7 +138,7 @@ def analyze_speakers(pcm, rate, channels, p, played_channels):
                       round(float(arr - k * period) * 1000 / rate, 3),
                       "snr": round(snr, 1),
                       "mic_lr_us": None if len(heard) < 2 else round((per_mic[0][0] - per_mic[1][0]) * 1e6 / rate, 1)})
-    good = [s for s in slots if s["played"] and s["arrival_ms"] is not None and s["snr"] > 6]
+    good = [s for s in slots if s["played"] and s["arrival_ms"] is not None and s["snr"] > 4]
     if good:
         ref = good[0]["arrival_ms"]
         for s in good:
@@ -242,7 +242,8 @@ class Locator:
             p.update({k: v for k, v in (overrides or {}).items() if k in LOCATE_DEFAULTS})
             ms = 1000 * 4 if kind == "voice" else int(
                 p["lead_ms"] + len(p["order"].split(",")) * (p["chirp_ms"] + p["gap_ms"]) + 1500)
-            self.jobs[n] = {"id": n, "dev": dev, "kind": kind, "ms": min(ms, 8000), "rate": p["rate"],
+            ms = int((overrides or {}).get("ms", ms))  # "listen": as long as asked
+            self.jobs[n] = {"id": n, "dev": dev, "kind": kind, "ms": min(ms, 16000), "rate": p["rate"],
                             "state": "waiting for the device", "t": time.time(), "sound": None, "p": p}
         print("locate %d: %s on %s" % (n, kind, dev))
         return n
@@ -297,8 +298,10 @@ class Locator:
                 else:
                     res = analyze_speakers(pcm, rate, channels, j["p"], j["sound"]["channels"])
                     res["played"] = j["sound"]
-            else:
+            elif j["kind"] == "voice":
                 res = analyze_voice(pcm, rate, channels, j["p"])
+            else:  # "listen": just the recording, for looking at by hand
+                res = {"kind": "listen", "seconds": round(len(pcm) / (2 * channels * rate), 2)}
         except Exception as e:
             res = {"error": "analysis failed: %s" % e}
         res["wav"] = base + ".wav"

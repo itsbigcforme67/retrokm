@@ -707,8 +707,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/locate":
                 d = json.loads(self._body(4096) or b"{}")
                 kind = d.get("kind", "speakers")
-                if kind not in ("speakers", "voice") or d.get("dev") not in PRESENCE.homes():
-                    return self._send(400, {"error": "dev must be a home, kind speakers or voice"})
+                if kind not in ("speakers", "voice", "listen") or d.get("dev") not in PRESENCE.homes():
+                    return self._send(400, {"error": "dev must be a home, kind speakers, voice or listen"})
                 return self._send(200, {"id": LOCATOR.start(d["dev"], kind, d.get("settings"))})
             m = re.fullmatch(r"/api/record/(\d+)/start", self.path)
             if m:

@@ -197,7 +197,7 @@ static void fetchPresence() {
   if (!rec.isNull()) {  // the bridge wants both microphones for a moment
     int id = rec["id"] | 0;
     if (id && id != stLastId && id != stId && !recReqId) {
-      recReqMs = constrain((int)(rec["ms"] | 4000), 500, 8000);
+      recReqMs = constrain((int)(rec["ms"] | 4000), 500, 16000);
       recReqRate = rec["rate"] | 48000;
       recReqId = id;
     }
