@@ -53,6 +53,9 @@ typedef struct Screen {
     Conn *in;                    /* connection with RKM_CAP_INPUT */
     Conn *kbd;                   /* hardware keyboard (RKM_CAP_KEYS): takes the keys */
     Conn *clip;                  /* connection with RKM_CAP_CLIP */
+    Conn *buddy;                 /* connection with RKM_CAP_BUDDY */
+    long long last_input_ms;     /* the hub last sent it input (0 = never) */
+    long long last_key_ms;       /* ... a key */
     unsigned clip_gen;           /* hub clipboard generation this screen has */
     double last_x, last_y;       /* where the pointer was when we left */
     int have_last;

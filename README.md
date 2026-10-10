@@ -100,7 +100,7 @@ hub config. `retrokm.conf.example` documents every option.
 ### IRIX (and any other X11 Unix)
 
 ```
-cc -o rkm-x11 agents/x11/rkm_x11.c common/rkm_proto.c -lXtst -lXext -lX11
+cc -o rkm-x11 agents/x11/rkm_x11.c common/rkm_proto.c -lXtst -lXext -lX11 -lm
 ./rkm-x11 -n octane -s both 192.168.1.10
 ```
 
@@ -114,6 +114,8 @@ Open Watcom or MinGW (command lines are at the top of the source file). Binaries
 from a current MinGW-w64 generally will not start on Windows 98; use VC6 or
 Open Watcom for that target. Run `rkm-win32.exe 192.168.1.10 pc`, or put an
 `rkm.ini` next to it and drop a shortcut in Startup. It sits in the tray.
+Clicking the tray icon calls lil' C over (see below); right-click for the
+menu.
 
 Both Windows installs on the dual-boot machine can use the same screen name.
 
@@ -152,6 +154,18 @@ agents/linux/rkm_clip.py -n laptop 192.168.1.10              # clipboard, in you
 An M5Stack Tab5 can show the desk and rearrange it: drag machines onto
 monitors to switch the Extron, drag monitors around, tap a machine to give it
 the keyboard. See [panel/README.md](panel/README.md).
+
+## lil' C, the desk buddy
+
+lil' C (the desk robot in `../LIL C`) wanders between the desk's machines.
+The X11 and Windows agents can show him: a small xeyes window that darts
+around the screen until he leaves. His bridge connects to the panel port and
+sends `buddy <screen> show|hide`; clicking his window (or the Windows tray
+icon) tells the bridge, which calls him there. `activity` on the same port
+says how long since each machine was last given input, so he can get out of
+the way. `-B` on the X11 agent (or `buddy=0` in `rkm.ini`) keeps him away.
+lil' C can also run the desk by voice ("bring up the Octane on monitor 2").
+Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Using it
 
@@ -217,7 +231,8 @@ agents/x11/     IRIX and other X11 systems
 agents/win32/   Windows 98 SE / 2000
 agents/macos/   classic Mac OS (68k binary, also for PowerPC)
 agents/linux/   uinput input agent and clipboard helper
-panel/          M5Stack Tab5 touch panel (desk map, drag-to-switch)
+panel/          M5Stack Tab5 touch panel (desk map, drag-to-switch); lib/rkm_panel is
+                the component lil' C's Tab5 firmware embeds
 injector/       M5Stack NanoC6 PS/2 hardware keyboard (BIOS, boot menus, PROMs)
 tests/          end-to-end test, Extron simulator, build stubs
 docs/           protocol description

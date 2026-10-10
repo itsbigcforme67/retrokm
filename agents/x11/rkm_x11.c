@@ -4,10 +4,12 @@
  * Input is injected with the XTEST extension; the clipboard is the X
  * selection mechanism.  Strict C89 so MIPSpro cc builds it as-is.
  *
- *   IRIX:   cc -o rkm-x11 rkm_x11.c ../../common/rkm_proto.c -lXtst -lXext -lX11
- *   Linux:  cc -o rkm-x11 rkm_x11.c ../../common/rkm_proto.c -lXtst -lX11
+ *   IRIX:   cc -o rkm-x11 rkm_x11.c ../../common/rkm_proto.c -lXtst -lXext -lX11 -lm
+ *   Linux:  cc -o rkm-x11 rkm_x11.c ../../common/rkm_proto.c -lXtst -lX11 -lm
  *
- *   rkm-x11 [-n name] [-p port] [-s clipboard|primary|both] [-l|-u] [-c] hub-host
+ *   rkm-x11 [-n name] [-p port] [-s clipboard|primary|both] [-l|-u] [-c] [-B] hub-host
+ *
+ * It can also show lil' C, the desk robot, when he visits (buddy_x11.h).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,6 +69,9 @@ static unsigned char *clip_in;               /* being received from the hub */
 static unsigned long clip_in_len, clip_in_total;
 static unsigned char *last_text[2];          /* last content seen, per selection */
 static unsigned long last_len[2];
+static int use_buddy = 1;
+
+#include "buddy_x11.h"
 
 /* ---- network ------------------------------------------------------------ */
 
@@ -572,6 +577,11 @@ static void on_frame(void *ctx, int type, const unsigned char *p, unsigned int l
             clip_in_len += len;
         }
         break;
+    case RKM_BUDDY:
+        if (len < 1 || !use_buddy) break;
+        if (p[0] == RKM_BUDDY_SHOW) buddy_show((const char *)p + 1, len - 1);
+        else buddy_hide();
+        break;
     case RKM_CLIP_END:
         if (!clip_in) break;
         if (clip_data) free(clip_data);
@@ -614,9 +624,14 @@ static int on_xerror(Display *d, XErrorEvent *e)
 static void pump_x(void)
 {
     XEvent ev;
+    unsigned char e = RKM_BUDDY_CLICK;
     while (XPending(dpy)) {
         XNextEvent(dpy, &ev);
-        handle_xevent(&ev);
+        switch (use_buddy ? buddy_event(&ev) : 0) {
+        case 2: if (sock >= 0) send_frame(RKM_BUDDY_EVENT, &e, 1); break;
+        case 1: break;
+        default: handle_xevent(&ev);
+        }
     }
 }
 
@@ -629,7 +644,8 @@ static void usage(void)
         "  -s which  selection to share: clipboard, primary or both (default clipboard)\n"
         "  -l        clipboard text is ISO 8859-1 (default on IRIX)\n"
         "  -u        clipboard text is UTF-8 (default elsewhere)\n"
-        "  -c        clipboard only, no mouse or keyboard\n", RKM_PORT);
+        "  -c        clipboard only, no mouse or keyboard\n"
+        "  -B        never show lil' C's window\n", RKM_PORT);
     exit(2);
 }
 
@@ -655,6 +671,7 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[i], "-l")) latin1 = 1;
         else if (!strcmp(argv[i], "-u")) latin1 = 0;
         else if (!strcmp(argv[i], "-c")) clip_only = 1;
+        else if (!strcmp(argv[i], "-B")) use_buddy = 0;
         else if (argv[i][0] == '-') usage();
         else hub_host = argv[i];
     }
@@ -680,6 +697,8 @@ int main(int argc, char **argv)
     a_prop = XInternAtom(dpy, "RKM_SELECTION", False);
     build_keymap();
     check_selections(0);
+    if (clip_only) use_buddy = 0;
+    if (use_buddy) buddy_init(dpy);
 
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, on_signal);
@@ -701,7 +720,8 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "rkm-x11: connected to %s as \"%s\"\n", hub_host, my_name);
         rkm_parser_init(&parser);
-        hl = rkm_hello(hello, clip_only ? RKM_CAP_CLIP : RKM_CAP_INPUT | RKM_CAP_CLIP,
+        hl = rkm_hello(hello, clip_only ? RKM_CAP_CLIP
+                                        : RKM_CAP_INPUT | RKM_CAP_CLIP | (use_buddy ? RKM_CAP_BUDDY : 0),
                        latin1 ? RKM_CS_LATIN1 : RKM_CS_UTF8, RKM_EOL_LF,
                        (unsigned int)DisplayWidth(dpy, DefaultScreen(dpy)),
                        (unsigned int)DisplayHeight(dpy, DefaultScreen(dpy)), maxkb, my_name);
@@ -721,6 +741,11 @@ int main(int argc, char **argv)
             mx = sock > xfd ? sock : xfd;
             tv.tv_sec = 1;
             tv.tv_usec = 0;
+            if (use_buddy) {                   /* lil' C is moving: wake up for each frame */
+                int ms = buddy_tick();
+                if (ms >= 0) { tv.tv_sec = 0; tv.tv_usec = ms * 1000L; }
+                XFlush(dpy);
+            }
             if (select(mx + 1, &rf, NULL, NULL, &tv) < 0) {
                 if (errno == EINTR) continue;
                 break;
@@ -737,6 +762,10 @@ int main(int argc, char **argv)
         if (!clip_only) release_all();
         if (sock >= 0) close(sock);
         sock = -1;
+        if (use_buddy) {                       /* no hub, no visit: see him off */
+            buddy_hide();
+            while (buddy_tick() >= 0) { XFlush(dpy); nap(25); }
+        }
         if (!stop) fprintf(stderr, "rkm-x11: lost the hub, reconnecting\n");
     }
     return 0;

@@ -45,9 +45,12 @@ Unknown types must be ignored, so new messages can be added later.
 | 0x20 | CLIP_BEGIN | both | format u8 (1 = text), total length u32 |
 | 0x21 | CLIP_DATA | both | up to 480 bytes |
 | 0x22 | CLIP_END | both | none |
+| 0x30 | BUDDY | H>A | cmd u8 (0 hide, 1 show), label (rest, up to 48 bytes) |
+| 0x31 | BUDDY_EVENT | A>H | event u8 (1 his window was clicked, 2 called from the machine) |
 
 **caps**: bit 0 `INPUT` (can inject), bit 1 `CLIP` (has a clipboard),
-bit 2 `REL` (pointer is relative only).
+bit 2 `REL` (pointer is relative only), bit 3 `KEYS` (a hardware keyboard),
+bit 4 `BUDDY` (can show the desk buddy window).
 
 **charset**: 0 UTF-8, 1 ISO 8859-1, 2 Windows-1252, 3 MacRoman.
 **eol**: 0 LF, 1 CRLF, 2 CR. The agent always sends and receives clipboard
@@ -109,6 +112,21 @@ Input and clipboard for one screen may arrive on separate connections that
 use the same name: one with `INPUT`, one with `CLIP`. This is how the hub's
 own desktop works (uinput in the hub plus a clipboard helper in the
 session), and how a hardware injector pairs with a software clipboard agent.
+
+## The desk buddy
+
+lil' C (a desk robot, a separate project) can visit the desk's machines.
+An agent with the `BUDDY` capability shows him as a small xeyes window
+when it gets BUDDY show, and sees him off on BUDDY hide; show while he is
+already there just changes the label. Clicking his window sends
+BUDDY_EVENT 1; calling him from the machine (the Windows agent's tray icon)
+sends BUDDY_EVENT 2. The hub passes events on to panel connections as
+`buddy <screen> click|summon`, and takes `buddy <screen> show|hide [label]`
+from them. Agents without the capability never see BUDDY frames.
+
+The panel port also answers `activity` with
+`activity {"screen":[s since input, s since a key],...}` (-1: never), so
+lil' C can stay out of the way of a machine someone is using.
 
 ## Planned: serial transport
 

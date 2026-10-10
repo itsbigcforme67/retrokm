@@ -37,6 +37,9 @@
 #define RKM_CLIP_DATA  0x21  /* bytes (<= RKM_CLIP_CHUNK)                         */
 #define RKM_CLIP_END   0x22  /* (none)                                            */
 
+#define RKM_BUDDY      0x30  /* H->A cmd,label..  show/hide lil' C's window       */
+#define RKM_BUDDY_EVENT 0x31 /* A->H event  someone clicked him / called him      */
+
 /* HELLO caps */
 #define RKM_CAP_INPUT  0x01  /* can inject mouse and keyboard                     */
 #define RKM_CAP_CLIP   0x02  /* can read and write the clipboard                  */
@@ -44,6 +47,7 @@
 #define RKM_CAP_KEYS   0x08  /* a hardware keyboard: gets ENTER, LEAVE, KEY and   */
                              /* RESET only; the machine's agent (if any) keeps    */
                              /* the pointer and clipboard                         */
+#define RKM_CAP_BUDDY  0x10  /* can show the desk buddy window (RKM_BUDDY)        */
 
 /* HELLO charset: encoding the agent uses for clipboard text */
 #define RKM_CS_UTF8     0
@@ -89,6 +93,12 @@
 
 /* CLIP_BEGIN format */
 #define RKM_CLIP_TEXT  1
+
+/* RKM_BUDDY cmd and RKM_BUDDY_EVENT event */
+#define RKM_BUDDY_HIDE   0
+#define RKM_BUDDY_SHOW   1
+#define RKM_BUDDY_CLICK  1   /* his window was clicked                          */
+#define RKM_BUDDY_SUMMON 2   /* called from the machine (tray icon, hotkey)     */
 
 /* ---- byte helpers ------------------------------------------------------ */
 #define RKM_GET16(p)  ((unsigned int)(((unsigned int)(p)[0] << 8) | (p)[1]))

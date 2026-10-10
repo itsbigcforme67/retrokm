@@ -12,6 +12,9 @@
  *   [retrokm]
  *   hub=192.168.1.10
  *   name=pc
+ *   buddy=0          (never show lil' C's window; see buddy_win32.h)
+ *
+ * The tray icon's menu can also call lil' C, the desk robot, over.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -35,6 +38,7 @@
 #define WM_SOCKET   (WM_USER + 1)
 #define WM_TRAY     (WM_USER + 2)
 #define IDM_QUIT    100
+#define IDM_CALL    101
 #define RETRY_MS    3000
 #define SILENCE_MS  30000
 #define MAX_CLIP    (1024UL * 1024UL)
@@ -56,6 +60,9 @@ static int clip_dirty, clip_ready;
 static HGLOBAL clip_in;
 static unsigned long clip_in_len, clip_in_total;
 static NOTIFYICONDATA nid;
+static int use_buddy = 1;
+
+#include "buddy_win32.h"
 
 /* ---- tray ---------------------------------------------------------------- */
 
@@ -74,6 +81,7 @@ static void drop(void)
     if (sock != INVALID_SOCKET) closesocket(sock);
     sock = INVALID_SOCKET;
     if (state == ST_UP) release_all();
+    if (use_buddy) buddy_hide();                 /* no hub, no visit */
     state = ST_IDLE;
     retry_at = GetTickCount() + RETRY_MS;
     tray_tip("RetroKM: waiting for hub");
@@ -138,7 +146,7 @@ static void send_hello(void)
     BOOL one = TRUE;
 
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
-    n = rkm_hello(p, RKM_CAP_INPUT | RKM_CAP_CLIP, RKM_CS_CP1252, RKM_EOL_CRLF,
+    n = rkm_hello(p, RKM_CAP_INPUT | RKM_CAP_CLIP | (use_buddy ? RKM_CAP_BUDDY : 0), RKM_CS_CP1252, RKM_EOL_CRLF,
                   (unsigned int)GetSystemMetrics(SM_CXSCREEN),
                   (unsigned int)GetSystemMetrics(SM_CYSCREEN),
                   (unsigned int)(MAX_CLIP / 1024), my_name);
@@ -385,9 +393,27 @@ static void on_frame(void *ctx, int type, const unsigned char *p, unsigned int l
     case RKM_CLIP_END:
         clip_install();
         break;
+    case RKM_BUDDY:
+        if (len < 1 || !use_buddy) break;
+        if (p[0] == RKM_BUDDY_SHOW) buddy_show((const char *)p + 1, len - 1);
+        else buddy_hide();
+        break;
     default:
         break;
     }
+}
+
+/* ---- lil' C --------------------------------------------------------------- */
+
+static void buddy_event(int e)
+{
+    unsigned char b = (unsigned char)e;
+    send_frame(RKM_BUDDY_EVENT, &b, 1);
+}
+
+static void buddy_clicked(void)
+{
+    buddy_event(RKM_BUDDY_CLICK);
 }
 
 /* ---- window -------------------------------------------------------------- */
@@ -450,11 +476,15 @@ static LRESULT CALLBACK wndproc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_TRAY:
-        if (lp == WM_RBUTTONUP || lp == WM_LBUTTONUP) {
+        if (lp == WM_LBUTTONUP && use_buddy && state == ST_UP) {
+            buddy_event(RKM_BUDDY_SUMMON);       /* a click: call lil' C here */
+        } else if (lp == WM_RBUTTONUP || lp == WM_LBUTTONUP) {
             HMENU m = CreatePopupMenu();
             POINT pt;
             AppendMenu(m, MF_STRING | MF_GRAYED, 0, nid.szTip);
             AppendMenu(m, MF_SEPARATOR, 0, NULL);
+            if (use_buddy)
+                AppendMenu(m, MF_STRING | (state == ST_UP ? 0 : MF_GRAYED), IDM_CALL, "Call lil' C over");
             AppendMenu(m, MF_STRING, IDM_QUIT, "Quit RetroKM");
             GetCursorPos(&pt);
             SetForegroundWindow(w);
@@ -465,6 +495,7 @@ static LRESULT CALLBACK wndproc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_COMMAND:
         if (LOWORD(wp) == IDM_QUIT) DestroyWindow(w);
+        else if (LOWORD(wp) == IDM_CALL) buddy_event(RKM_BUDDY_SUMMON);
         break;
 
     case WM_ENDSESSION:
@@ -496,6 +527,7 @@ static void configure(const char *cmdline)
     GetPrivateProfileString("retrokm", "hub", "", hub_host, sizeof hub_host, ini);
     GetPrivateProfileString("retrokm", "name", my_name, my_name, sizeof my_name, ini);
     hub_port = (int)GetPrivateProfileInt("retrokm", "port", RKM_PORT, ini);
+    use_buddy = (int)GetPrivateProfileInt("retrokm", "buddy", 1, ini);
 
     lstrcpyn(args, cmdline, sizeof args);
     tok = strtok(args, " \t");
@@ -544,6 +576,7 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE prev, LPSTR cmdline, int show)
     lstrcpy(nid.szTip, "RetroKM: waiting for hub");
     Shell_NotifyIcon(NIM_ADD, &nid);
 
+    if (use_buddy) buddy_init(inst);
     next_viewer = SetClipboardViewer(hwnd);
     clip_ready = 1;
     SetTimer(hwnd, 1, 1000, NULL);

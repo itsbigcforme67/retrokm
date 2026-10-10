@@ -546,6 +546,7 @@ void hub_motion(int dx, int dy)
     touched = 1;
 
     if (!s) return;
+    s->last_input_ms = now_ms();
     mag = sqrt((double)dx * dx + (double)dy * dy);
     gain = cfg.speed * s->speed * (1.0 + cfg.accel * (mag > 30 ? 30 : mag) / 10.0);
     nx = px + dx * gain;
@@ -606,6 +607,7 @@ void hub_button(int btn, int down)
     if (down) buttons |= 1 << btn;
     else buttons &= ~(1 << btn);
     if (!s) return;
+    s->last_input_ms = now_ms();
     flush_move(s);
     if (s->local) { uinput_key(evbtn[btn], down); return; }
     p[0] = (unsigned char)btn;
@@ -620,6 +622,7 @@ void hub_wheel(int dy, int dx)
     touched = 1;
 
     if (!s) return;
+    s->last_input_ms = now_ms();
     if (s->local) { uinput_wheel(dy, dx); return; }
     RKM_PUT16(p, (unsigned)dy & 0xFFFF);
     RKM_PUT16(p + 2, (unsigned)dx & 0xFFFF);
@@ -667,6 +670,7 @@ void hub_key(int evcode, int usage, int state)
 
     s = active;
     if (!s) return;
+    s->last_input_ms = s->last_key_ms = now_ms();
     if (s->local) { uinput_key(evcode, state); return; }
     if (!usage || !(s->kbd || s->in)) return;
     flush_move(s);
@@ -834,9 +838,9 @@ static void layout_json(Sbuf *b)
         sb_printf(b, ",\"art\":");
         sb_str(b, s->art);
         sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d,"
-                  "\"color\":%lu,\"colorSet\":%d}",
+                  "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d}",
                   s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h,
-                  lights_color(s), s->color >= 0);
+                  lights_color(s), s->color >= 0, s->buddy != NULL);
     }
     sb_printf(b, "],\"monitors\":[");
     for (i = 0; i < cfg.nmonitors; i++) {
@@ -898,9 +902,43 @@ static Monitor *monitor_at(int col, int row)
     return NULL;
 }
 
+/* activity {"screen":[seconds since input, seconds since a key],...}; -1 = never.
+ * lil' C's bridge asks for this to stay out of the way of machines in use. */
+static void cmd_activity(Conn *r)
+{
+    Sbuf b = { 0, 0, 0 };
+    long long now = now_ms();
+    int i;
+
+    sb_printf(&b, "activity {");
+    for (i = 0; i < cfg.nscreens; i++) {
+        Screen *s = &cfg.screens[i];
+        sb_printf(&b, "%s", i ? "," : "");
+        sb_str(&b, s->name);
+        sb_printf(&b, ":[%.1f,%.1f]", s->last_input_ms ? (now - s->last_input_ms) / 1000.0 : -1.0,
+                  s->last_key_ms ? (now - s->last_key_ms) / 1000.0 : -1.0);
+    }
+    sb_printf(&b, "}\n");
+    if (b.p) conn_write(r, b.p, b.len);
+    free(b.p);
+}
+
+/* The rest of the command line from the word `from` on: strtok_r cut it up
+ * with NULs, so put spaces back up to the line's real end. */
+static const char *cmd_rest(char *from, const char *line_end)
+{
+    char *q;
+    for (q = from; q < line_end; q++)
+        if (*q == 0 || *q == '\r' || *q == '\n' || *q == '\t') *q = ' ';
+    while (q > from && q[-1] == ' ') q--;
+    *q = 0;
+    return from;
+}
+
 static void run_panel_command(char *cmd, Conn *r)
 {
     char *argv[5] = { 0, 0, 0, 0, 0 }, *save = NULL, *tok;
+    const char *cmd_end = cmd + strlen(cmd);
     int argc = 0;
 
     for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 5; tok = strtok_r(NULL, " \t\r\n", &save))
@@ -970,12 +1008,28 @@ static void run_panel_command(char *cmd, Conn *r)
         else goto_screen(s);
     } else if (!strcasecmp(argv[0], "lock")) {
         locked = argc >= 2 ? !strcasecmp(argv[1], "on") : !locked;
+    } else if (!strcasecmp(argv[0], "activity")) {
+        cmd_activity(r);
+    } else if (!strcasecmp(argv[0], "buddy") && argc >= 3) {
+        /* buddy <screen> show|hide [label]: lil' C's window on that machine */
+        Screen *s = screen_by_name(argv[1]);
+        unsigned char p[1 + 48];
+        size_t n = 0;
+        if (!s || !s->buddy) { ctl_printf(r, "error %s cannot show lil' C\n", argv[1]); return; }
+        p[0] = !strcasecmp(argv[2], "show") ? RKM_BUDDY_SHOW : RKM_BUDDY_HIDE;
+        if (argc >= 4) {                          /* the label is the rest of the line */
+            const char *lab = cmd_rest(argv[3], cmd_end);
+            n = strlen(lab);
+            if (n > 48) n = 48;
+            memcpy(p + 1, lab, n);
+        }
+        send_frame(s->buddy, RKM_BUDDY, p, (unsigned)(1 + n));
     } else if (!strcasecmp(argv[0], "ping")) {
         ctl_printf(r, "pong\n");
     } else {
         ctl_printf(r, "error commands are layout, tie <screen> <monitor>, untie <monitor>, "
                       "move <monitor> <col> <row>, share <monitor> [on|off], color <screen> <RRGGBB|default>, "
-                      "goto <screen>, lock [on|off], ping\n");
+                      "goto <screen>, lock [on|off], activity, buddy <screen> show|hide [label], ping\n");
     }
 }
 
@@ -988,6 +1042,7 @@ static void conn_detach(Conn *c)
     if (s->in == c) s->in = NULL;
     if (s->kbd == c) s->kbd = NULL;
     if (s->clip == c) s->clip = NULL;
+    if (s->buddy == c) s->buddy = NULL;
     c->screen = NULL;
     logmsg("%s: disconnected (%s)", s->name, c->peer);
 }
@@ -999,6 +1054,7 @@ static void kick(Conn *old)
     if (s && s->in == old) s->in = NULL;
     if (s && s->kbd == old) s->kbd = NULL;
     if (s && s->clip == old) s->clip = NULL;
+    if (s && s->buddy == old) s->buddy = NULL;
     old->screen = NULL;
     old->dead = 1;
 }
@@ -1056,6 +1112,7 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
         s->clip = c;
         s->clip_gen = 0;
     }
+    if (c->caps & RKM_CAP_BUDDY) s->buddy = c;
     w[1] = RKM_OK;
     send_frame(c, RKM_WELCOME, w, 2);
     logmsg("%s: connected from %s, %dx%d%s%s%s%s", s->name, c->peer, s->w, s->h,
@@ -1109,6 +1166,16 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
         break;
     case RKM_CLIP_END:
         if (c->clip_in_active) clip_received(c);
+        break;
+    case RKM_BUDDY_EVENT:                      /* tell the panels (lil' C's bridge) */
+        if (len >= 1) {
+            char line[64];
+            int i;
+            snprintf(line, sizeof line, "buddy %s %s\n", c->screen->name,
+                     p[0] == RKM_BUDDY_SUMMON ? "summon" : "click");
+            for (i = 0; i < MAX_CONNS; i++)
+                if (conns[i].kind == CONN_PANEL && !conns[i].dead) conn_write(&conns[i], line, strlen(line));
+        }
         break;
     default:
         break;                                 /* PONG and anything from the future */
