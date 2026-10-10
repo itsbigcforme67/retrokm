@@ -70,8 +70,18 @@ file is the state of *this* desk and what was learned getting there.
 
 - C: Windows 98 SE, D: Windows 2000 (the agent is `D:\RetroKM\`), E: shared
   between the two. A Sound Blaster Audigy drives the desk's 4 analog speakers.
-- With no mouse plugged in at boot, Windows 2000 has no pointer at all, so the
-  hub's mouse does nothing there (keyboard still works). Plug one in and reboot.
+- With no mouse plugged in at boot, Windows 2000 draws no pointer, but the
+  hub's mouse still works (moves and clicks land, invisibly). To click
+  something blind: lock edges, steer with `rel` while reading the hub's
+  `status` position (it tracks where the pointer is), then `btn 1 1/0`
+  (watch the result on the capture card).
+- Sound (fixed 2026-10-10): Windows' Speaker Setup is "Quadraphonic
+  Speakers" (Control Panel, Sounds and Multimedia, Audio, Advanced) and the
+  Audigy's own setting "4 Speakers" (Creative Surround Mixer,
+  `D:\Program Files\Creative\SBAudigy\SurMix2\SurMix2.exe`, Advanced
+  Mode, Speakers). Both were on stereo / 2 speakers, so the backs only got
+  an upmixed copy. Speakers: Cambridge SoundWorks DTT 2500 in FourPoint
+  mode, front and rear plugs the right way round now.
 - Its screen can be watched through the MacroSilicon USB capture card on the
   laptop (`/dev/video0`, fed from Extron output 7 or 8). Use raw mode:
   `ffmpeg -f v4l2 -input_format yuyv422 -video_size 1280x720 -i /dev/video0
