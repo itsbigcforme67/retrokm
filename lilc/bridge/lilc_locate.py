@@ -36,7 +36,7 @@ LOCATE_DEFAULTS = {
     "order": "0,1,4,5",
     "rate": 48000,
     "chirp_ms": 60, "gap_ms": 340, "lead_ms": 400,
-    "lo_hz": 2000, "hi_hz": 12000, "level": 25,
+    "lo_hz": 2000, "hi_hz": 12000, "level": 70,  # % (25 was too faint for the quiet rears)
     # where each speaker is: [x, y, z] in desk cm (lilc_place.py: x right, y up
     # from the desk top, z away from the chair; x = 0 in front of the tall
     # monitor). Rough guesses from the user's photo of the desk (2026-10-10):
