@@ -134,6 +134,11 @@ static volatile bool stStarted = false, stUpload = false;
 static int stLastId = 0;
 static float stYaw = 0, stPitch = 0;     // where the head (and its mics) pointed
 static volatile bool movedWanted = false;  // picked up and put down: tell the bridge
+// Motion seen since the last presence poll, sent along for tuning:
+// largest |a| change (g), largest gyro rate (deg/s), largest shake count
+static volatile float motionDev = 0, motionGyro = 0;
+static volatile int motionShake = 0;
+static volatile int imuState = 0;  // 0 not tried, 1 no IMU, 2 reads fail, 3 working
 
 // ------------------------------------------------------------ network
 
@@ -181,6 +186,15 @@ static void fetchTasks() {
 static void fetchPresence() {
   HTTPClient http;
   if (!httpBegin(http, "/api/presence")) return;
+  static uint32_t lastImuNote = 0;
+  if (motionDev > 0.02f || motionGyro > 5 || millis() - lastImuNote > 10000) {  // what the IMU felt
+    lastImuNote = millis();
+    http.addHeader("X-LilC-Imu", String((int)imuState));
+    http.addHeader("X-LilC-Motion", String(motionDev, 3) + "," + String(motionGyro, 0) + "," +
+                                        String(motionShake));
+    motionDev = motionGyro = 0;
+    motionShake = 0;
+  }
   http.setTimeout(3000);
   int code = http.GET();
   JsonDocument doc;
@@ -947,35 +961,51 @@ static void pumpMic() {
 }
 
 // Picked up and put down? The accelerometer's total (|a|, 1 g at rest) only
-// changes when the device itself is carried: the Stack-chan's own neck
-// turns the sensor but leaves the total alone, and a tap on the screen is too
-// short to count. A carry, then 3 s of stillness: tell the bridge.
+// changes when the device itself is moved: the Stack-chan's own neck turns
+// the sensor but leaves the total alone. A smooth lift is gentle (about
+// 0.04 g) while the desk at rest reads under 0.016 g, so a few readings over
+// 0.025 g close together count as being handled, unless the neck is moving
+// or the screen was just touched (a tap jolts it too). So does turning much
+// faster than the neck. Then 3 s of stillness: tell the bridge.
 static void watchMotion(uint32_t now) {
-  static uint32_t last = 0;
-  if (now - last < 20 || !M5.Imu.isEnabled()) return;  // ~50 Hz
+  static uint32_t last = 0, touchedAt = 0;
+  if (M5.Touch.getDetail().isPressed()) touchedAt = now;
+  if (now - last < 20) return;  // ~50 Hz
+  float dt = (now - last) / 1000.0f;
   last = now;
-  float ax, ay, az;
+  if (!M5.Imu.isEnabled()) { imuState = 1; return; }
+  float ax, ay, az, gx, gy, gz;
   M5.Imu.update();
-  if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
+  if (!M5.Imu.getAccel(&ax, &ay, &az)) { imuState = 2; return; }
+  imuState = 3;
   float mag = sqrtf(ax * ax + ay * ay + az * az);
-  static float rest = 1.0f;  // |a| at rest, learnt slowly (sensors read a bit off 1 g)
-  static int shaken = 0;     // rises while |a| is off its rest value
+  float spin = M5.Imu.getGyro(&gx, &gy, &gz) ? sqrtf(gx * gx + gy * gy + gz * gz) : 0;  // deg/s
+  static float rest = -1;    // |a| averaged over ~2 s (sensors read a bit off 1 g)
+  static int shaken = 0;     // rises with each sign of handling, falls back over time
   static bool carried = false;
   static uint32_t stillSince = 0;
-  float dev = fabsf(mag - rest);
-  if (dev < 0.03f) rest += (mag - rest) * 0.02f;
-  static float neckX = 0, neckY = 0;  // a quick neck turn jolts the sensor: not a carry
-  bool neckMoving = fabsf(head.x - neckX) + fabsf(head.y - neckY) > 0.4f;
+  static float neckX = 0, neckY = 0;
+  float neckRate = (fabsf(head.x - neckX) + fabsf(head.y - neckY)) / max(dt, 0.001f);  // deg/s
   neckX = head.x;
   neckY = head.y;
-  if (dev > 0.12f && !neckMoving) shaken = min(shaken + 2, 100);
+  bool neckMoving = neckRate > 3;
+  bool touched = now - touchedAt < 300;
+  if (rest < 0) rest = mag;
+  float dev = fabsf(mag - rest);  // quick changes only: a lift, a bump, a set-down
+  rest += (mag - rest) * 0.01f;
+  bool sign = !touched && ((dev > 0.025f && !neckMoving) || spin > neckRate * 1.5f + 40);
+  if (now < 10000) sign = false;  // starting up: the servos jolt it
+  if (sign) shaken = min(shaken + 6, 100);
   else if (shaken > 0) shaken--;
-  if (shaken > 24 && !carried) {  // about half a second of handling
+  motionDev = max((float)motionDev, dev);
+  motionShake = max((int)motionShake, shaken);
+  motionGyro = max((float)motionGyro, spin);
+  if (shaken > 12 && !carried) {  // three signs close together
     carried = true;
     Serial.printf("[lilc] picked up\n");
   }
   if (carried) {
-    if (dev < 0.04f) {
+    if (dev < 0.012f && spin < 8 + neckRate * 1.5f) {
       if (!stillSince) stillSince = now;
       if (now - stillSince > 3000) {
         carried = false;

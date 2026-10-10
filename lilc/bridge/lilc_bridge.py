@@ -648,6 +648,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "stt": bool(SPEECH.stt),
                                     "tts": bool(SPEECH.tts)})
         if self.path == "/api/presence":
+            if self.headers.get("X-LilC-Motion"):  # the device's IMU, for tuning
+                print("motion %s: %s imu %s" % (self._dev(), self.headers["X-LilC-Motion"],
+                                                 self.headers.get("X-LilC-Imu")))
             st = PRESENCE.state_for(self._dev())
             rec = LOCATOR.request_for(self._dev())
             if rec:
