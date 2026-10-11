@@ -9,7 +9,8 @@
 //
 // Log: UDP to the hub's host, port 24853 (python recvfrom, or nc -klu 24853).
 // Settings: UDP port 24854 (and USB serial in pc mode):
-//   show | name <screen> | label <board name> | hub <host> | mode pc|xbox | reboot
+//   show | name <screen> | label <board name> | hub <host> | player 1-4 | mode pc|xbox | reboot
+// (player: which of the console's pad ports this is; one dongle per port)
 #include "dongle.h"
 #include <errno.h>
 #include <ArduinoOTA.h>
@@ -28,6 +29,7 @@ UsbMode usb_mode = MODE_XBOX;
 
 static Preferences prefs;
 static String name, hubHost, label;
+static int player = 1;  // which player on its screen this dongle plays
 static HWCDC usbSerial;  // pc mode only: in xbox mode the port is the controller
 
 // ------------------------------------------------------------ log over WiFi
@@ -136,7 +138,7 @@ static void onFrame(void *, int type, const unsigned char *p, unsigned len) {
     neutral();
     break;
   case RKM_PAD:
-    if (len >= RKM_PAD_LEN && p[0] == 0 && hasPad) {
+    if (len >= RKM_PAD_LEN && p[0] == player - 1 && hasPad) {
       xid_input_t in;
       xid_from_rkm(RKM_GET16(p + 1), p[3], p[4], (int16_t)RKM_GET16(p + 5),
                    (int16_t)RKM_GET16(p + 7), (int16_t)RKM_GET16(p + 9),
@@ -217,7 +219,7 @@ static void watchUsb() {
       (r.left != rumbleNow.left || r.right != rumbleNow.right)) {
     rumbleNow = r;
     unsigned char p[5];
-    p[0] = 0;
+    p[0] = (unsigned char)(player - 1);
     RKM_PUT16(p + 1, r.left);   // the big motor
     RKM_PUT16(p + 3, r.right);  // the small one
     sendFrame(RKM_RUMBLE, p, 5);
@@ -239,6 +241,7 @@ static void loadSettings() {
   hubHost = prefs.getString("hub", HUB_HOST);
   label = prefs.isKey("label") ? prefs.getString("label") : name + "pad";
   usb_mode = (UsbMode)prefs.getUChar("mode", MODE_XBOX);
+  player = constrain(prefs.getUChar("player", 1), 1, 4);
 }
 
 static void command(String in, Print &reply) {
@@ -246,6 +249,10 @@ static void command(String in, Print &reply) {
   if (in.startsWith("name ")) { name = in.substring(5); prefs.putString("name", name); hubClose("renamed"); }
   else if (in.startsWith("hub ")) { hubHost = in.substring(4); prefs.putString("hub", hubHost); hubClose("new hub"); }
   else if (in.startsWith("label ")) { label = in.substring(6); prefs.putString("label", label); }
+  else if (in.startsWith("player ")) {
+    int n = in.substring(7).toInt();
+    if (n >= 1 && n <= 4) { player = n; prefs.putUChar("player", n); neutral(); }
+  }
   else if (in == "mode pc" || in == "mode xbox") {
     UsbMode m = in == "mode pc" ? MODE_PC : MODE_XBOX;
     prefs.putUChar("mode", m);
@@ -258,14 +265,14 @@ static void command(String in, Print &reply) {
   else if (in == "reboot") { reply.println("rebooting"); delay(100); ESP.restart(); }
   if (!in.length()) return;
   XidStats s = xid_stats();
-  reply.printf("label=%s name=%s hub=%s mode=%s wifi=%s hub link=%s pad=%s usb=%s "
+  reply.printf("label=%s name=%s player=%d hub=%s mode=%s wifi=%s hub link=%s pad=%s usb=%s "
                "reports=%u xid_reqs=%u rumble=%u,%u\n",
-               label.c_str(), name.c_str(), hubHost.c_str(), usb_mode == MODE_PC ? "pc" : "xbox",
+               label.c_str(), name.c_str(), player, hubHost.c_str(), usb_mode == MODE_PC ? "pc" : "xbox",
                WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "joining",
                welcomed ? "up" : "down", hasPad ? "ours" : "elsewhere",
                s.mounted ? "taken" : "idle", (unsigned)s.reports, (unsigned)s.xid_reqs,
                rumbleNow.left, rumbleNow.right);
-  reply.println("commands: show | name <screen> | label <board name> | hub <host> | mode pc|xbox | reboot");
+  reply.println("commands: show | name <screen> | label <board name> | hub <host> | player 1-4 | mode pc|xbox | reboot");
 }
 
 static WiFiUDP ctlUdp;  // echo show | nc -u -w1 <ip> 24854
@@ -309,8 +316,8 @@ void setup() {
   if (usb_mode == MODE_XBOX) xid_start();  // first, so the console sees the pad at once
   else { usbSerial.begin(); usbSerial.setTxTimeoutMs(0); }
   screen_start();
-  logf("boot: %s (%s), %s mode, screen %s", label.c_str(), WiFi.macAddress().c_str(),
-       usb_mode == MODE_PC ? "pc" : "xbox", name.c_str());
+  logf("boot: %s (%s), %s mode, screen %s player %d", label.c_str(), WiFi.macAddress().c_str(),
+       usb_mode == MODE_PC ? "pc" : "xbox", name.c_str(), player);
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // power saving would make the pad late
