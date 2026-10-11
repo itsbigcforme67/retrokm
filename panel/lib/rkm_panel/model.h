@@ -13,6 +13,9 @@ struct Machine {
   bool soft = false;      // its software agent is running
   uint32_t color = 0;     // its colour (cables, card, keyboard lights); 0 = not sent
   bool colorSet = false;  // picked by hand rather than the default
+  bool pad = false;       // a controller dongle (pad player) is connected
+  std::string via;        // a console: the box its video goes through (the RetroTINK)
+  std::string plugged;    // a box: what is wired into it now
 };
 
 struct Monitor {
@@ -51,6 +54,34 @@ struct Layout {
     return -1;
   }
 
+  // Boxes are machines other machines go through (via).  A root box is not
+  // itself behind another one; each root box gets a page of its own.
+  bool isBox(const std::string& n) const {
+    for (auto& m : machines) if (m.via == n) return true;
+    return false;
+  }
+  std::vector<int> rootBoxes() const {
+    std::vector<int> out;
+    for (size_t i = 0; i < machines.size(); i++)
+      if (machines[i].via.empty() && isBox(machines[i].name)) out.push_back((int)i);
+    return out;
+  }
+  // The root box a machine ends up in (itself when it is one), or -1
+  int rootOf(int i) const {
+    for (int n = 0; i >= 0 && n < 32; n++) {
+      if (machines[i].via.empty()) return isBox(machines[i].name) ? i : -1;
+      i = machineIndex(machines[i].via);
+    }
+    return -1;
+  }
+  int depthOf(int i) const {  // boxes between it and its root
+    int d = 0;
+    for (; i >= 0 && !machines[i].via.empty() && d < 32; d++) i = machineIndex(machines[i].via);
+    return d;
+  }
+  // A card on the desk page: not behind a box, or wired to the switcher too
+  bool onDesk(int i) const { return machines[i].via.empty() || machines[i].input > 0; }
+
   bool parse(const std::string& json) {
     JsonDocument doc;
     if (deserializeJson(doc, json)) return false;
@@ -72,6 +103,9 @@ struct Layout {
       m.soft = s["soft"] | 0;
       m.color = s["color"] | 0u;
       m.colorSet = s["colorSet"] | 0;
+      m.pad = s["pad"] | 0;
+      m.via = s["via"] | "";
+      m.plugged = s["plugged"] | "";
       l.machines.push_back(m);
     }
     for (JsonObject o : doc["monitors"].as<JsonArray>()) {

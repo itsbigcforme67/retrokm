@@ -170,6 +170,39 @@ static void artRetrotink(Pen& p) {
   p.dot(34, 7, 2, 0xE11D48);                                     // power LED
 }
 
+// Original Xbox: big black box, green jewel with the X, disc tray
+static void artXbox(Pen& p) {
+  p.ellipse(4, 36, 76, 7, 0x0B0C0E);
+  p.quad(-62, -14, 44, -14, 64, -32, -42, -32, 0x2A2D31);        // top
+  p.quad(44, -14, 64, -32, 64, 2, 44, 26, 0x121315);             // side
+  p.rrect(-62, -16, 106, 42, 6, 0x1D1F22);                       // front
+  p.quad(-62, 0, 44, 0, 44, 4, -62, 4, 0x2F8F3A);                // green groove
+  p.rect(-50, -8, 54, 4, 0x0D0E10);                              // tray
+  p.dot(-12, -22, 12, 0x2F3236);                                 // jewel on the top
+  p.dot(-12, -22, 9.5f, 0x22C55E);
+  p.line(-17, -27, -7, -17, 0x0B3D1A, 2.4f);                     // the X
+  p.line(-7, -27, -17, -17, 0x0B3D1A, 2.4f);
+  for (int i = 0; i < 4; i++) p.rrect(-54 + i * 13, 12, 9, 7, 1.5f, 0x3A3D42);  // pad ports
+  p.dot(30, -6, 3, 0x3A3D42);                                    // power / eject
+  p.dot(30, 8, 3, 0x3A3D42);
+}
+
+// PlayStation 2 (fat): black slabs, ridged front, blue logo
+static void artPs2(Pen& p) {
+  p.ellipse(4, 34, 74, 6, 0x0B0C0E);
+  p.quad(-62, -10, 42, -10, 62, -28, -42, -28, 0x232428);        // top
+  p.quad(42, -10, 62, -28, 62, 4, 42, 24, 0x0F1012);             // side
+  p.rect(-62, -10, 104, 16, 0x1A1B1E);                           // upper slab (tray)
+  p.rect(-62, 7, 104, 17, 0x1A1B1E);                             // lower slab
+  p.rect(-62, 6, 104, 1.5f, 0x05060A);                           // the groove
+  for (int i = 0; i < 5; i++) p.rect(-58, -7 + i * 2.5f, 60, 1, 0x26282C);  // ridges
+  p.rrect(8, -6, 28, 6, 1.5f, 0x2B3A8C);                         // logo plate
+  p.rect(12, -4, 20, 2, 0x5C7CFA);
+  p.rrect(-56, 12, 10, 8, 1.5f, 0x2A2C30);                       // pad ports
+  p.rrect(-42, 12, 10, 8, 1.5f, 0x2A2C30);
+  p.dot(30, 15, 2.2f, 0x3B5BDB);                                 // power LED
+}
+
 static void artGeneric(Pen& p) {
   p.ellipse(0, 52, 60, 5, 0x0B0C0E);
   p.rrect(-50, -40, 100, 90, 6, 0x6B7280);
@@ -186,6 +219,8 @@ static void drawArt(Gfx& g, const std::string& art, int cx, int cy, float scale,
   else if (art == "octane") artOctane(p);
   else if (art == "dreamcast") artDreamcast(p);
   else if (art == "retrotink") artRetrotink(p);
+  else if (art == "xbox") artXbox(p);
+  else if (art == "ps2") artPs2(p);
   else artGeneric(p);
 }
 
@@ -197,6 +232,8 @@ static uint32_t machineColor(const std::string& art, int index) {
   if (art == "armbox") return 0xE5E7EB;
   if (art == "octane") return 0x2EC4B6;
   if (art == "retrotink") return 0xE11D48;
+  if (art == "xbox") return 0x22C55E;
+  if (art == "ps2") return 0x3B5BDB;
   static const uint32_t pal[] = {0xF472B6, 0xA78BFA, 0xFB7185, 0x84CC16, 0xFACC15};
   return pal[index % 5];
 }
