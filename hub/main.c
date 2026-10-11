@@ -88,9 +88,28 @@ Monitor *monitor_by_name(const char *name)
     return NULL;
 }
 
+static int has_pads(const Screen *s)
+{
+    int k;
+    for (k = 0; k < MAX_PLAYERS; k++)
+        if (s->pads[k]) return 1;
+    return 0;
+}
+
 static int ready(const Screen *s)
 {
-    return s && !s->no_agent && (s->local || s->in || s->kbd || s->pad);
+    return s && !s->no_agent && (s->local || s->in || s->kbd || has_pads(s));
+}
+
+int screen_is_desktop(const Screen *s)
+{
+    return s->local || (s->in && !strncmp(s->in->peer, "127.0.0.1", 9));
+}
+
+/* The keyboard + mouse may reach this machine (a line on the panel) */
+static int kbm_ok(const Screen *s)
+{
+    return s && cfg.nacc > 0 && cfg.acc[0].player[s - cfg.screens];
 }
 
 static int is_rel(const Screen *s)
@@ -282,7 +301,7 @@ static Monitor *neighbor(const Monitor *m, int dir)
 
     for (i = 0; i < cfg.nmonitors; i++) {
         Monitor *k = &cfg.monitors[i];
-        if (k == m || k->capture || !ready(k->cur) || k->cur == active) continue;
+        if (k == m || k->capture || !ready(k->cur) || k->cur == active || !kbm_ok(k->cur)) continue;
         switch (dir) {
         case DIR_LEFT:
             if (k->row == m->row && k->col < m->col && (!best || k->col > best->col)) best = k;
@@ -412,6 +431,9 @@ static unsigned char remap_mods(const Screen *s, unsigned char m)
     return out;
 }
 
+static void pads_leave(Screen *s);
+static void pads_enter(Screen *s);
+
 static void do_leave(Screen *s)
 {
     flush_move(s);
@@ -423,10 +445,7 @@ static void do_leave(Screen *s)
     /* a separate clipboard helper uses LEAVE as its cue to report changes */
     if (s->clip && s->clip != s->in) send_frame(s->clip, RKM_LEAVE, NULL, 0);
     send_frame(s->kbd, RKM_LEAVE, NULL, 0);        /* lets go of any keys it holds */
-    if (s->pad) {
-        send_frame(s->pad, RKM_LEAVE, NULL, 0);    /* buttons up, sticks centred */
-        pad_rumble(0, 0);                          /* its game's rumble stays behind */
-    }
+    if (!s->always[ACC_PAD]) pads_leave(s);
 }
 
 static void do_enter(Screen *s)
@@ -442,9 +461,10 @@ static void do_enter(Screen *s)
         RKM_PUT16(p, (unsigned)px);
         RKM_PUT16(p + 2, (unsigned)py);
         p[4] = remap_mods(s, mods);
-        send_frame(s->in, RKM_ENTER, p, 5);
-        send_frame(s->kbd, RKM_ENTER, p, 5);
-        send_frame(s->pad, RKM_ENTER, p, 5);
+        if (kbm_ok(s)) {
+            send_frame(s->in, RKM_ENTER, p, 5);
+            send_frame(s->kbd, RKM_ENTER, p, 5);
+        }
         if (is_rel(s)) {
             /* No absolute positioning: slam into the top-left corner, then
              * walk out to the entry point. */
@@ -457,6 +477,7 @@ static void do_enter(Screen *s)
         }
     }
     clip_sync(s);
+    pads_enter(s);
 }
 
 static void switch_to(Screen *t, Monitor *m, double x, double y)
@@ -604,7 +625,7 @@ void hub_motion(int dx, int dy)
     }
     px = nx;
     py = ny;
-    queue_move(s);
+    if (kbm_ok(s)) queue_move(s);
 }
 
 void hub_button(int btn, int down)
@@ -617,7 +638,7 @@ void hub_button(int btn, int down)
     if (btn < 1 || btn > 5) return;
     if (down) buttons |= 1 << btn;
     else buttons &= ~(1 << btn);
-    if (!s) return;
+    if (!s || !kbm_ok(s)) return;
     s->last_input_ms = now_ms();
     flush_move(s);
     if (s->local) { uinput_key(evbtn[btn], down); return; }
@@ -632,7 +653,7 @@ void hub_wheel(int dy, int dx)
     unsigned char p[4];
     touched = 1;
 
-    if (!s) return;
+    if (!s || !kbm_ok(s)) return;
     s->last_input_ms = now_ms();
     if (s->local) { uinput_wheel(dy, dx); return; }
     RKM_PUT16(p, (unsigned)dy & 0xFFFF);
@@ -679,41 +700,62 @@ void hub_key(int evcode, int usage, int state)
         return;
     }
 
-    s = active;
-    if (!s) return;
-    s->last_input_ms = s->last_key_ms = now_ms();
-    if (s->local) { uinput_key(evcode, state); return; }
-    if (!usage || !(s->kbd || s->in)) return;
-    flush_move(s);
-    p[0] = remap_usage(s, (unsigned char)usage);
-    p[1] = (unsigned char)state;
-    p[2] = remap_mods(s, mods);
-    send_frame(s->kbd ? s->kbd : s->in, RKM_KEY, p, 3);   /* a hardware keyboard wins */
-}
-
-/* ---- the game pad --------------------------------------------------------- */
-
-static PadState pad_now;         /* the physical pad, as last reported */
-static int pad_latched;          /* a Guide combo fired: hold its buttons back */
-
-/* Hand the keyboard and pad to the next / previous screen that plays a pad
- * (or the hub's own desktop), in config order. */
-static void pad_cycle(int dir)
-{
-    int i, n = cfg.nscreens, cur = active ? (int)(active - cfg.screens) : -1;
-    for (i = 1; i <= n; i++) {
-        Screen *s = &cfg.screens[((cur + dir * i) % n + n) % n];
-        if (s != active && ready(s) && (s->pad || s->local)) {
-            goto_screen(s);
-            return;
-        }
+    /* the machine in focus, and linked machines that take keys out of focus */
+    for (i = 0; i < cfg.nscreens; i++) {
+        s = &cfg.screens[i];
+        if (!kbm_ok(s) || !ready(s) || (s != active && !s->always[ACC_KBM])) continue;
+        s->last_input_ms = s->last_key_ms = now_ms();
+        if (s->local) { uinput_key(evcode, state); continue; }
+        if (!usage || !(s->kbd || s->in)) continue;
+        if (s == active) flush_move(s);
+        p[0] = remap_usage(s, (unsigned char)usage);
+        p[1] = (unsigned char)state;
+        p[2] = remap_mods(s, mods);
+        send_frame(s->kbd ? s->kbd : s->in, RKM_KEY, p, 3);   /* a hardware keyboard wins */
     }
 }
 
-static void send_pad(Screen *s, const PadState *ps)
+/* ---- game pads ------------------------------------------------------------
+ *
+ * Each pad (an Accessory) is linked to machines as player 1..4 there.  Its
+ * input goes to the machine in focus, if linked, and to linked machines
+ * that take pad input out of focus.  Several pads on one player of one
+ * machine are merged into one. */
+
+static unsigned pad_prev[MAX_ACC];   /* buttons last time, for the Guide combos */
+static int pad_latched[MAX_ACC];     /* a Guide combo fired: hold its buttons back */
+static PadState pad_eff[MAX_ACC];    /* what the pad sends (combo buttons held back) */
+static PadState pad_sent[MAX_SCREENS][MAX_PLAYERS];
+
+static int pad_player(const Accessory *a, const Screen *s)
+{
+    return a->player[s - cfg.screens];
+}
+
+/* Does this pad's input go to s right now? */
+static int pad_goes(const Accessory *a, const Screen *s)
+{
+    return a->kind == ACC_PAD && a->present && pad_player(a, s) && (s == active || s->always[ACC_PAD]);
+}
+
+int hub_pad_on_desktop(const Accessory *a)
+{
+    int i;
+    for (i = 0; i < cfg.nscreens; i++)
+        if (screen_is_desktop(&cfg.screens[i]) && pad_goes(a, &cfg.screens[i])) return 1;
+    return 0;
+}
+
+static short bigger(short a, short b)
+{
+    return abs(a) >= abs(b) ? a : b;
+}
+
+static void send_pad_player(Screen *s, int player, const PadState *ps)
 {
     unsigned char p[RKM_PAD_LEN];
-    p[0] = 0;
+    int k;
+    p[0] = (unsigned char)(player - 1);
     RKM_PUT16(p + 1, ps->buttons);
     p[3] = ps->lt;
     p[4] = ps->rt;
@@ -721,33 +763,177 @@ static void send_pad(Screen *s, const PadState *ps)
     RKM_PUT16(p + 7, (unsigned)(ps->ly & 0xFFFF));
     RKM_PUT16(p + 9, (unsigned)(ps->rx & 0xFFFF));
     RKM_PUT16(p + 11, (unsigned)(ps->ry & 0xFFFF));
-    send_frame(s->pad, RKM_PAD, p, RKM_PAD_LEN);
+    for (k = 0; k < MAX_PLAYERS; k++) send_frame(s->pads[k], RKM_PAD, p, RKM_PAD_LEN);
 }
 
-void hub_pad(const PadState *in)
+/* Work out each player's state on s from the pads going there; send what changed */
+static void pads_update(Screen *s, int force)
 {
-    unsigned pressed = in->buttons & ~pad_now.buttons;
-    PadState out = *in;
-    Screen *s;
+    int si = (int)(s - cfg.screens), pl, i;
+    if (!has_pads(s)) return;
+    for (pl = 1; pl <= MAX_PLAYERS; pl++) {
+        PadState m;
+        int linked = pl == 1;            /* a dongle is player 1 unless told otherwise */
+        memset(&m, 0, sizeof m);
+        for (i = 0; i < cfg.nacc; i++) {
+            const Accessory *a = &cfg.acc[i];
+            const PadState *e = &pad_eff[i];
+            if (pad_player(a, s) == pl) linked = 1;
+            if (!pad_goes(a, s) || pad_player(a, s) != pl) continue;
+            m.buttons |= e->buttons;
+            if (e->lt > m.lt) m.lt = e->lt;
+            if (e->rt > m.rt) m.rt = e->rt;
+            m.lx = bigger(m.lx, e->lx);
+            m.ly = bigger(m.ly, e->ly);
+            m.rx = bigger(m.rx, e->rx);
+            m.ry = bigger(m.ry, e->ry);
+        }
+        if (!memcmp(&m, &pad_sent[si][pl - 1], sizeof m) && !(force && linked)) continue;
+        pad_sent[si][pl - 1] = m;
+        send_pad_player(s, pl, &m);
+    }
+}
 
-    pad_now = *in;
+/* s lost focus: players that only had it through focus let go (and their
+ * pads stop shaking) */
+static void pads_leave(Screen *s)
+{
+    int i, k;
+    for (k = 0; k < MAX_PLAYERS; k++) send_frame(s->pads[k], RKM_LEAVE, NULL, 0);
+    memset(pad_sent[s - cfg.screens], 0, sizeof pad_sent[0]);
+    for (i = 0; i < cfg.nacc; i++)
+        if (cfg.acc[i].kind == ACC_PAD && pad_player(&cfg.acc[i], s)) pad_rumble(&cfg.acc[i], 0, 0);
+}
+
+static void pads_enter(Screen *s)
+{
+    int k;
+    if (s->always[ACC_PAD]) return;          /* it has had them all along */
+    for (k = 0; k < MAX_PLAYERS; k++) send_frame(s->pads[k], RKM_ENTER, NULL, 0);
+    pads_update(s, 1);                       /* what the pads are doing right now */
+}
+
+/* Hand focus to the next / previous machine this pad may drive */
+static void pad_cycle(const Accessory *a, int dir)
+{
+    int i, n = cfg.nscreens, cur = active ? (int)(active - cfg.screens) : -1;
+    for (i = 1; i <= n; i++) {
+        Screen *s = &cfg.screens[((cur + dir * i) % n + n) % n];
+        if (s != active && ready(s) && pad_player(a, s) && (has_pads(s) || screen_is_desktop(s))) {
+            goto_screen(s);
+            return;
+        }
+    }
+}
+
+void hub_pad(Accessory *a)
+{
+    int ai = (int)(a - cfg.acc), i;
+    unsigned pressed = a->st.buttons & ~pad_prev[ai];
+
+    pad_prev[ai] = a->st.buttons;
     touched = 1;
-    if ((in->buttons & RKM_PAD_GUIDE) && (pressed & (RKM_PAD_RB | RKM_PAD_LB))) {
-        pad_latched = 1;
-        pad_cycle(pressed & RKM_PAD_RB ? 1 : -1);
+    pad_eff[ai] = a->st;
+    if ((a->st.buttons & RKM_PAD_GUIDE) && (pressed & (RKM_PAD_RB | RKM_PAD_LB))) {
+        pad_latched[ai] = 1;
+        pad_eff[ai].buttons &= ~(unsigned)(RKM_PAD_GUIDE | RKM_PAD_LB | RKM_PAD_RB);
+        pad_cycle(a, pressed & RKM_PAD_RB ? 1 : -1);
         return;
     }
-    if (pad_latched) {
-        if (!(in->buttons & RKM_PAD_GUIDE)) pad_latched = 0;
-        out.buttons &= ~(unsigned)(RKM_PAD_GUIDE | RKM_PAD_LB | RKM_PAD_RB);
+    if (pad_latched[ai]) {
+        if (!(a->st.buttons & RKM_PAD_GUIDE)) pad_latched[ai] = 0;
+        pad_eff[ai].buttons &= ~(unsigned)(RKM_PAD_GUIDE | RKM_PAD_LB | RKM_PAD_RB);
     }
-    s = active;
-    if (!s || s->local || !s->pad) return;   /* the desktop reads the pad itself */
-    s->last_input_ms = now_ms();
-    send_pad(s, &out);
+    for (i = 0; i < cfg.nscreens; i++) {
+        Screen *s = &cfg.screens[i];
+        if (!pad_player(a, s)) continue;
+        if (pad_goes(a, s)) s->last_input_ms = now_ms();
+        pads_update(s, 0);
+    }
+}
+
+/* The control port's pad: scripts drive the machine in focus as player 1 */
+static Accessory *script_pad(void)
+{
+    static Accessory *a;
+    int i;
+    if (!a && (a = acc_by_name("script")) == NULL && cfg.nacc < MAX_ACC) {
+        a = &cfg.acc[cfg.nacc++];
+        memset(a, 0, sizeof *a);
+        strcpy(a->name, "script");
+        strcpy(a->label, "Scripts (control port)");
+        a->kind = ACC_PAD;
+        a->color = -1;
+        a->scripted = 1;
+    }
+    if (a) {
+        a->present = 1;
+        for (i = 0; i < cfg.nscreens; i++) a->player[i] = 1;
+    }
+    return a;
 }
 
 /* ---- commands (hotkeys and the control socket) -------------------------- */
+
+/* Lines on the panel's accessories page, and the settings in the machines'
+ * options sheet.  Shared by the panel and control ports.  Returns 1 if the
+ * command was one of these. */
+static int accessory_command(int argc, char **argv, Conn *r, int panel)
+{
+    const char *err = panel ? "error " : "error: ";
+    Accessory *a;
+    Screen *s;
+    if (!strcasecmp(argv[0], "link") || !strcasecmp(argv[0], "unlink") || !strcasecmp(argv[0], "player")) {
+        /* link <accessory> <screen> [player]   unlink <accessory> <screen>   player <accessory> <screen> <n> */
+        int on = strcasecmp(argv[0], "unlink") != 0, pl = 0;
+        if (argc < 3 || !(a = acc_by_name(argv[1])) || a->scripted || !(s = screen_by_name(argv[2]))) {
+            ctl_printf(r, "%sno such accessory or screen\n", err);
+            return 1;
+        }
+        if (on && a->kind == ACC_PAD) {
+            int used[MAX_PLAYERS + 1] = { 0 }, i;
+            if (argc >= 4) pl = atoi(argv[3]);
+            else if (pad_player(a, s)) pl = pad_player(a, s);
+            else {   /* the next free player there: P1, P2, ... */
+                for (i = 0; i < cfg.nacc; i++)
+                    if (&cfg.acc[i] != a && cfg.acc[i].kind == ACC_PAD && !cfg.acc[i].scripted)
+                        used[pad_player(&cfg.acc[i], s)] = 1;
+                for (pl = 1; pl < MAX_PLAYERS && used[pl]; pl++) {}
+            }
+            if (pl < 1 || pl > MAX_PLAYERS) { ctl_printf(r, "%splayers are 1 to %d\n", err, MAX_PLAYERS); return 1; }
+        } else if (on) {
+            pl = 1;
+        }
+        a->player[s - cfg.screens] = (unsigned char)pl;
+        logmsg("%s %s %s%s", a->name, on ? "linked to" : "unlinked from", s->name,
+               on && a->kind == ACC_PAD ? (pl == 1 ? " as P1" : pl == 2 ? " as P2" : pl == 3 ? " as P3" : " as P4") : "");
+        if (a->kind == ACC_PAD) {
+            if (!pl) pad_rumble(a, 0, 0);
+            pads_update(s, 0);
+        }
+        config_save_state();
+        if (!panel) ctl_printf(r, "ok\n");
+        return 1;
+    }
+    if (!strcasecmp(argv[0], "always")) {
+        /* always <screen> <kind> on|off: receive that kind of input while out of focus */
+        int k;
+        if (argc != 4 || !(s = screen_by_name(argv[1])) || (k = acc_kind(argv[2])) < 0) {
+            ctl_printf(r, "%salways <screen> <kind> on|off\n", err);
+            return 1;
+        }
+        s->always[k] = !strcasecmp(argv[3], "on");
+        logmsg("%s: %s input %s out of focus", s->name, acc_kinds[k].label, s->always[k] ? "kept" : "not kept");
+        if (k == ACC_PAD && s != active) {
+            if (s->always[k]) pads_update(s, 1);
+            else pads_leave(s);
+        }
+        config_save_state();
+        if (!panel) ctl_printf(r, "ok\n");
+        return 1;
+    }
+    return 0;
+}
 
 /* Say which console is wired into a box (it cannot tell us itself). */
 static int plug_console(Screen *c, Screen *box, Conn *r, int panel)
@@ -783,7 +969,13 @@ static void cmd_status(Conn *r)
                    s->local ? "uinput" : s->in ? s->in->peer : "-",
                    s->clip ? s->clip->peer : "-");
         if (s->kbd) ctl_printf(r, " keyboard=%s", s->kbd->peer);
-        if (s->pad) ctl_printf(r, " pad=%s", s->pad->peer);
+        {
+            int k;
+            for (k = 0; k < MAX_PLAYERS; k++)
+                if (s->pads[k]) ctl_printf(r, " pad=%s", s->pads[k]->peer);
+            for (k = 0; k < ACC_KINDS; k++)
+                if (s->always[k]) ctl_printf(r, " always-%s", acc_kinds[k].id);
+        }
         if (s->via) ctl_printf(r, " via=%s", s->via->name);
         if (s->plugged) ctl_printf(r, " plugged=%s", s->plugged->name);
         if (s->extron_input) ctl_printf(r, " extron-in=%d", s->extron_input);
@@ -796,7 +988,18 @@ static void cmd_status(Conn *r)
         else ctl_printf(r, "extron-out=%d (input %d)", m->extron_output, extron_input_for(m->extron_output));
         ctl_printf(r, " shows=%s\n", m->cur ? m->cur->name : "-");
     }
-    ctl_printf(r, "pad: %s\n", pad_name() ? pad_name() : "(none)");
+    for (i = 0; i < cfg.nacc; i++) {
+        const Accessory *a = &cfg.acc[i];
+        int k, any = 0;
+        if (a->scripted) continue;
+        ctl_printf(r, "accessory %-24s %s %s ->", a->name, acc_kinds[a->kind].id, a->present ? "here" : "away");
+        for (k = 0; k < cfg.nscreens; k++)
+            if (a->player[k]) {
+                ctl_printf(r, a->kind == ACC_PAD ? " %s:P%d" : " %s", cfg.screens[k].name, a->player[k]);
+                any = 1;
+            }
+        ctl_printf(r, "%s  (%s)\n", any ? "" : " nothing", a->label);
+    }
     ctl_printf(r, "clipboard: %lu bytes, generation %u, from %s\n", (unsigned long)clip_len,
                clip_gen, clip_src ? clip_src->name : "-");
 }
@@ -850,6 +1053,7 @@ static void run_command(char *cmd, Conn *r)
         else if (plug_console(s, s->via, r, 0) == 0) ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "unplug") && argc == 2) {
         if (plug_console(NULL, screen_by_name(argv[1]), r, 0) == 0) ctl_printf(r, "ok\n");
+    } else if (accessory_command(argc, argv, r, 0)) {
     } else if (!strcasecmp(argv[0], "pad") && argc >= 2) {
         /* pad <buttons hex> [lt rt lx ly rx ry]: as if the real pad did it */
         PadState ps;
@@ -858,7 +1062,10 @@ static void run_command(char *cmd, Conn *r)
         if (argc >= 4) { ps.lt = (unsigned char)atoi(argv[2]); ps.rt = (unsigned char)atoi(argv[3]); }
         if (argc >= 6) { ps.lx = (short)atoi(argv[4]); ps.ly = (short)atoi(argv[5]); }
         if (argc >= 8) { ps.rx = (short)atoi(argv[6]); ps.ry = (short)atoi(argv[7]); }
-        hub_pad(&ps);
+        {
+            Accessory *a = script_pad();
+            if (a) { a->st = ps; hub_pad(a); }
+        }
         ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "ddc")) {
         /* ddc: what each DDC monitor reports; ddc <monitor> <input>: switch it */
@@ -887,7 +1094,8 @@ static void run_command(char *cmd, Conn *r)
         ctl_printf(r, "error: commands are status, goto <screen>, show <screen> [monitor], "
                       "tie <in> <out>, lock [on|off], rel <dx> <dy>, btn <n> <0|1>, "
                       "key <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], plug <console>, "
-                      "unplug <box>, quit\n");
+                      "unplug <box>, link <acc> <screen> [player], unlink <acc> <screen>, "
+                      "always <screen> <kind> on|off, quit\n");
     }
 }
 
@@ -922,15 +1130,50 @@ static void sb_str(Sbuf *b, const char *s)   /* JSON string */
     sb_printf(b, "\"");
     for (; *s; s++) {
         if (*s == '"' || *s == '\\') sb_printf(b, "\\%c", *s);
+        else if (*s == '\n') sb_printf(b, "\\n");
         else if ((unsigned char)*s < 0x20) sb_printf(b, " ");
         else sb_printf(b, "%c", *s);
     }
     sb_printf(b, "\"");
 }
 
+/* How a machine is attached, a line at a time, for the panel's "about" */
+static void screen_about(const Screen *s, char *out, size_t n)
+{
+    size_t len = 0;
+    int i, k;
+#define ADD(...) do { if (len < n) len += (size_t)snprintf(out + len, n - len, __VA_ARGS__); } while (0)
+    out[0] = 0;
+    if (s->local) ADD("the hub's own desktop\n");
+    else if (s->in) ADD("agent at %s\n", s->in->peer);
+    if (s->kbd) ADD("PS/2 keyboard at %s\n", s->kbd->peer);
+    for (k = 0; k < MAX_PLAYERS; k++)
+        if (s->pads[k]) ADD("pad dongle at %s\n", s->pads[k]->peer);
+    if (s->via) {
+        const Screen *b = s->via;
+        ADD("into the %s%s", b->label[0] ? b->label : b->name, b->plugged == s ? "" : " (not plugged in now)");
+        while (b->via) { b = b->via; ADD(", then the %s", b->label[0] ? b->label : b->name); }
+        if (b->extron_input) ADD(", switcher input %d", b->extron_input);
+        ADD("\n");
+    }
+    if (s->extron_input) ADD("switcher input %d\n", s->extron_input);
+    for (i = 0; i < cfg.nmonitors; i++) {
+        const Monitor *m = &cfg.monitors[i];
+        const char *mn = m->label[0] ? m->label : m->name;
+        if (m->cur != s) continue;
+        if (m->fixed == s) ADD("its own screen: %s\n", mn);
+        else if (m->shared == s && m->shared_on) ADD("on %s (its other input)\n", mn);
+        else ADD("on %s (switcher output %d)\n", mn, m->extron_output);
+    }
+    if (!len) ADD("%s\n", s->no_agent ? "video only" : "nothing connected");
+#undef ADD
+    if (len && len <= n && out[len - 1] == '\n') out[len - 1] = 0;
+}
+
 static void layout_json(Sbuf *b)
 {
-    int i;
+    int i, k;
+    char about[sizeof cfg.screens[0].about];
 
     sb_printf(b, "{\"active\":");
     sb_str(b, active ? active->name : "");
@@ -946,13 +1189,48 @@ static void layout_json(Sbuf *b)
         sb_printf(b, ",\"art\":");
         sb_str(b, s->art);
         sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d,"
-                  "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d,\"pad\":%d,\"via\":",
+                  "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d,\"pads\":%d,\"focus\":%d,\"via\":",
                   s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h,
-                  lights_color(s), s->color >= 0, s->buddy != NULL, s->pad != NULL);
+                  lights_color(s), s->color >= 0, s->buddy != NULL, has_pads(s), s == active);
         sb_str(b, s->via ? s->via->name : "");
         sb_printf(b, ",\"plugged\":");
         sb_str(b, s->plugged ? s->plugged->name : "");
+        sb_printf(b, ",\"always\":[");
+        for (k = 0; k < ACC_KINDS; k++) sb_printf(b, "%s%d", k ? "," : "", s->always[k]);
+        screen_about(s, about, sizeof about);
+        sb_printf(b, "],\"about\":");
+        sb_str(b, about);
         sb_printf(b, "}");
+    }
+    sb_printf(b, "],\"kinds\":[");
+    for (k = 0; k < ACC_KINDS; k++) {
+        sb_printf(b, "%s{\"id\":", k ? "," : "");
+        sb_str(b, acc_kinds[k].id);
+        sb_printf(b, ",\"label\":");
+        sb_str(b, acc_kinds[k].label);
+        sb_printf(b, "}");
+    }
+    sb_printf(b, "],\"accessories\":[");
+    for (i = 0, k = 0; i < cfg.nacc; i++) {
+        const Accessory *a = &cfg.acc[i];
+        int j, nl = 0;
+        if (a->scripted) continue;
+        sb_printf(b, "%s{\"name\":", k++ ? "," : "");
+        sb_str(b, a->name);
+        sb_printf(b, ",\"label\":");
+        sb_str(b, a->label);
+        sb_printf(b, ",\"kind\":");
+        sb_str(b, acc_kinds[a->kind].id);
+        sb_printf(b, ",\"present\":%d,\"color\":%ld,\"about\":", a->present || a->kind == ACC_KBM, a->color);
+        sb_str(b, a->about);
+        sb_printf(b, ",\"links\":[");
+        for (j = 0; j < cfg.nscreens; j++)
+            if (a->player[j]) {
+                sb_printf(b, "%s{\"screen\":", nl++ ? "," : "");
+                sb_str(b, cfg.screens[j].name);
+                sb_printf(b, ",\"player\":%d}", a->player[j]);
+            }
+        sb_printf(b, "]}");
     }
     sb_printf(b, "],\"monitors\":[");
     for (i = 0; i < cfg.nmonitors; i++) {
@@ -1110,10 +1388,17 @@ static void run_panel_command(char *cmd, Conn *r)
     } else if (!strcasecmp(argv[0], "color") && argc == 3) {
         /* color <screen> <RRGGBB | default>: its colour on the panel and keyboard */
         Screen *s = screen_by_name(argv[1]);
+        Accessory *a = acc_by_name(argv[1]);
+        if (!s && a) {   /* an accessory's lines */
+            a->color = !strcasecmp(argv[2], "default") ? -1 : (long)(strtoul(argv[2], NULL, 16) & 0xFFFFFF);
+            config_save_state();
+            return;
+        }
         if (!s) { ctl_printf(r, "error no screen %s\n", argv[1]); return; }
         s->color = !strcasecmp(argv[2], "default") ? s->config_color : (long)(strtoul(argv[2], NULL, 16) & 0xFFFFFF);
         config_save_state();
         if (s == active) lights_set(lights_color(s));
+    } else if (accessory_command(argc, argv, r, 1)) {
     } else if (!strcasecmp(argv[0], "plug") && argc == 2) {
         /* plug <console>: the cable from it now goes into its box */
         Screen *s = screen_by_name(argv[1]);
@@ -1181,7 +1466,11 @@ static void conn_detach(Conn *c)
     if (!s) return;
     if (s->in == c) s->in = NULL;
     if (s->kbd == c) s->kbd = NULL;
-    if (s->pad == c) s->pad = NULL;
+    {
+        int k;
+        for (k = 0; k < MAX_PLAYERS; k++)
+            if (s->pads[k] == c) s->pads[k] = NULL;
+    }
     if (s->clip == c) s->clip = NULL;
     if (s->buddy == c) s->buddy = NULL;
     if (s->sound == c) s->sound = NULL;
@@ -1195,7 +1484,11 @@ static void kick(Conn *old)
     Screen *s = old->screen;
     if (s && s->in == old) s->in = NULL;
     if (s && s->kbd == old) s->kbd = NULL;
-    if (s && s->pad == old) s->pad = NULL;
+    if (s) {
+        int k;
+        for (k = 0; k < MAX_PLAYERS; k++)
+            if (s->pads[k] == old) s->pads[k] = NULL;
+    }
     if (s && s->clip == old) s->clip = NULL;
     if (s && s->buddy == old) s->buddy = NULL;
     if (s && s->sound == old) s->sound = NULL;
@@ -1241,8 +1534,17 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     }
     if (c->caps & RKM_CAP_PAD) {                /* a game pad player: the pad only */
         c->caps &= ~(RKM_CAP_INPUT | RKM_CAP_CLIP);
-        if (s->pad && s->pad != c) kick(s->pad);
-        s->pad = c;
+        /* one per player port; the same dongle coming back replaces itself */
+        int k, slot = -1;
+        size_t hl = strcspn(c->peer, ":");
+        for (k = 0; k < MAX_PLAYERS && slot < 0; k++)
+            if (s->pads[k] && s->pads[k] != c && !strncmp(s->pads[k]->peer, c->peer, hl) &&
+                s->pads[k]->peer[hl] == ':') { kick(s->pads[k]); slot = k; }
+        for (k = 0; k < MAX_PLAYERS && slot < 0; k++)
+            if (!s->pads[k]) slot = k;
+        if (slot < 0) { kick(s->pads[0]); slot = 0; }
+        s->pads[slot] = c;
+        memset(pad_sent[s - cfg.screens], 0, sizeof pad_sent[0]);
     }
 
     if (c->caps & RKM_CAP_INPUT) {
@@ -1273,6 +1575,8 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     if (s == active) {
         if (c->caps & (RKM_CAP_INPUT | RKM_CAP_KEYS | RKM_CAP_PAD)) do_enter(s);   /* agent restarted under the pointer */
         else clip_sync(s);
+    } else if ((c->caps & RKM_CAP_PAD) && s->always[ACC_PAD]) {
+        pads_update(s, 1);
     }
     relayout();
 }
@@ -1319,8 +1623,12 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
         if (c->clip_in_active) clip_received(c);
         break;
     case RKM_RUMBLE:                           /* the game shakes the pad */
-        if (len >= 5 && c == c->screen->pad && c->screen == active)
-            pad_rumble(RKM_GET16(p + 1), RKM_GET16(p + 3));
+        if (len >= 5 && p[0] < MAX_PLAYERS) {    /* to the pads playing that player there */
+            int i;
+            for (i = 0; i < cfg.nacc; i++)
+                if (pad_goes(&cfg.acc[i], c->screen) && pad_player(&cfg.acc[i], c->screen) == p[0] + 1)
+                    pad_rumble(&cfg.acc[i], RKM_GET16(p + 1), RKM_GET16(p + 3));
+        }
         break;
     case RKM_SOUND_EVENT:                      /* how the chirps went: to the panels too */
         if (len >= 8) {
@@ -1529,18 +1837,21 @@ int main(int argc, char **argv)
     relayout();
 
     while (!quit) {
-        struct pollfd pfd[MAX_CONNS + MAX_DEVICES + 6];
-        Conn *pc[MAX_CONNS + MAX_DEVICES + 6];
+        struct pollfd pfd[MAX_CONNS + MAX_DEVICES + MAX_PADS + 5];
+        Conn *pc[MAX_CONNS + MAX_DEVICES + MAX_PADS + 5];
+        int padfds[MAX_PADS], npad, gi;
         int infds[MAX_DEVICES], nin, n = 0, timeout = 100, base_in, xfd, xi = -1, ci = -1, pi = -1, di = -1;
-        int gi = -1;
+
 
         pfd[n].fd = lfd; pfd[n].events = POLLIN; pc[n++] = NULL;
         if (cfd >= 0) { ci = n; pfd[n].fd = cfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
         if (pfd_listen >= 0) { pi = n; pfd[n].fd = pfd_listen; pfd[n].events = POLLIN; pc[n++] = NULL; }
-        if (pad_fd() >= 0) { gi = n; pfd[n].fd = pad_fd(); pfd[n].events = POLLIN; pc[n++] = NULL; }
         if (ddc_fd() >= 0) { di = n; pfd[n].fd = ddc_fd(); pfd[n].events = POLLIN; pc[n++] = NULL; }
         xfd = extron_fd();
         if (xfd >= 0) { xi = n; pfd[n].fd = xfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
+        gi = n;
+        npad = pad_fds(padfds, MAX_PADS);
+        for (i = 0; i < npad; i++) { pfd[n].fd = padfds[i]; pfd[n].events = POLLIN; pc[n++] = NULL; }
         base_in = n;
         nin = input_fds(infds, MAX_DEVICES);
         for (i = 0; i < nin; i++) { pfd[n].fd = infds[i]; pfd[n].events = POLLIN; pc[n++] = NULL; }
@@ -1561,7 +1872,8 @@ int main(int argc, char **argv)
         if (ci >= 0 && (pfd[ci].revents & POLLIN)) accept_conn(cfd, CONN_CTL);
         if (pi >= 0 && (pfd[pi].revents & POLLIN)) accept_conn(pfd_listen, CONN_PANEL);
         if (di >= 0 && (pfd[di].revents & POLLIN)) ddc_readable(ddc_changed);
-        if (gi >= 0 && pfd[gi].revents) pad_readable();
+        for (i = 0; i < npad; i++)
+            if (pfd[gi + i].revents) pad_readable(padfds[i]);
         if (xi >= 0 && pfd[xi].revents) extron_readable();
         for (i = 0; i < nin; i++)
             if (pfd[base_in + i].revents) input_readable(infds[i]);
@@ -1580,7 +1892,6 @@ int main(int argc, char **argv)
             flush_move(active);
         input_tick();
         pad_tick();
-        pad_grab(active && !active->local);
         lights_tick();
         extron_tick();
         housekeeping();
@@ -1589,7 +1900,6 @@ int main(int argc, char **argv)
     }
 
     if (active) do_leave(active);
-    pad_grab(0);
     lights_set(0xFFFFFFFF);                     /* the keyboard's own lighting again */
     for (i = 0; i < MAX_CONNS; i++)
         if (conns[i].kind != CONN_FREE) { conn_flush(&conns[i]); close(conns[i].fd); }
