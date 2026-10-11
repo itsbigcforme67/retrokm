@@ -150,21 +150,32 @@ icon (left click) calls him. Panel code moved to `panel/lib/rkm_panel`
 - the stand-alone panel firmware still builds (`pio run -e tab5`), but the
   Tab5 is meant to run lil' C's firmware now, which includes the desk map.
 
-## Game pad and the Xbox pad (2026-10-11, built, not on hardware)
+## Displays, accessories and the Xbox pad (2026-10-11, built, not on hardware)
 
-The owner asked for controller switching like the keyboard: the pad
-connects to the hub and the hub forwards it. Hub: `hub/pad.c` reads an
-Xbox-style pad (xpad over USB, or Bluetooth) and sends RKM_PAD to the
-active screen's pad player (RKM_CAP_PAD); RUMBLE comes back; Guide+RB/LB
-switches screens; the desktop keeps the pad while the laptop is active.
-`make test-pad` passes. `xboxpad/` is the Atom S3R original-Xbox pad
-(first written stand-alone in `XBOX DONGLE/` with BLE input, now a hub
-client). To do:
-- `./install-laptop.sh` (sudo) with an `[screen xbox]` section and the
-  Xbox's Extron input (not known yet).
-- First USB flash of the Atom S3R, then `xboxpad/xpadtest.py` on the laptop.
+The owner asked for controller switching like the keyboard, then for the
+panel to be two pages: **displays** (all computers and consoles) and
+**accessories** (lines from keyboard + mouse and each pad to machines, many
+to many). Decisions (owner, 2026-10-11):
+- An accessory drives the machine in focus if linked; per machine and per
+  kind, "receive inputs while out of focus" (long-press) makes it get them
+  anyway (handy for debugging several machines, e.g. Monster Hunter).
+- Pads are players on each machine: P1, P2... by default, long-press to
+  put several on one player (merged).
+- The keyboard + mouse can only reach linked machines (default: all).
+- Consoles go into the RetroTINK by moving plugs: `via = retrotink`; the
+  panel says which is plugged in (drag a console onto the tink's monitor).
+  A component switcher in front of the tink later: `via =` chains.
+Hub: accessories (`hub/pad.c`, several pads, stable ids, remembered while
+unplugged), links/toggles in the state file, kinds in one table
+(`acc_kinds`). `make test-consoles` passes. Panel checked in the desktop
+build (screenshots); Tab5 and lil' C firmware build. `xboxpad/` is the
+Atom S3R original-Xbox pad (a pad player, `player 1-4`).
+To do:
+- `./install-laptop.sh` (sudo) for the hub, OTA the Tab5 panel (or lil' C).
+- First USB flash of the Atom S3R, then `xboxpad/xpadtest.py`.
 - Check the Elite's mapping on Linux (USB and Bluetooth) with the hub's
   `-v` log; real Xbox with an Xbox-to-USB adapter.
+- Out of focus, a machine gets keys but not the pointer or mouse buttons.
 
 ## Open ideas / next steps
 

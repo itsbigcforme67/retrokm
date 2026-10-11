@@ -203,6 +203,41 @@ static void artPs2(Pen& p) {
   p.dot(30, 15, 2.2f, 0x3B5BDB);                                 // power LED
 }
 
+// The USB keyboard and the trackball (accessories page)
+static void artKeyboard(Pen& p) {
+  p.ellipse(-8, 30, 66, 5, 0x0B0C0E);
+  p.quad(-70, -6, 46, -6, 56, 24, -80, 24, 0x23262C);            // keyboard
+  for (int r = 0; r < 4; r++)                                    // keys
+    for (int k = 0; k < 11; k++) {
+      float t = r / 4.0f, x0 = -70 - t * 10 + k * (116 + t * 20) / 11, y0 = -3 + r * 6.5f;
+      p.rrect(x0 + 1, y0, (116 + t * 20) / 11 - 2.5f, 4.5f, 1, 0x3B3F47);
+    }
+  p.rrect(-40, 20, 52, 3, 1, 0x3B3F47);                          // space bar
+  p.line(-70, -6, 46, -6, 0x34D399);                             // a hint of RGB
+  p.ellipse(68, 22, 18, 9, 0x2A2D33);                            // trackball body
+  p.dot(68, 12, 10, 0xD94848);                                   // the ball
+  p.dot(65, 9, 3, 0xF59E9E);
+}
+
+// A modern Xbox-style controller (accessories page)
+static void artGamepad(Pen& p) {
+  p.ellipse(0, 40, 62, 6, 0x0B0C0E);
+  p.rrect(-50, -22, 100, 38, 18, 0x2A2D33);                      // body
+  p.dot(-36, 14, 19, 0x2A2D33);                                  // grips
+  p.dot(36, 14, 19, 0x2A2D33);
+  p.dot(-28, -6, 8, 0x16181C);                                   // left stick
+  p.dot(-28, -6, 5.5f, 0x3B3F47);
+  p.dot(12, 10, 7, 0x16181C);                                    // right stick
+  p.dot(12, 10, 4.5f, 0x3B3F47);
+  p.rect(-18, 6, 14, 4, 0x16181C);                               // d-pad
+  p.rect(-13, 1, 4, 14, 0x16181C);
+  p.dot(30, -14, 3.2f, 0xFACC15);                                // Y X B A
+  p.dot(24, -8, 3.2f, 0x3B82F6);
+  p.dot(36, -8, 3.2f, 0xEF4444);
+  p.dot(30, -2, 3.2f, 0x22C55E);
+  p.dot(0, -12, 4, 0xE8ECF1);                                    // guide
+}
+
 static void artGeneric(Pen& p) {
   p.ellipse(0, 52, 60, 5, 0x0B0C0E);
   p.rrect(-50, -40, 100, 90, 6, 0x6B7280);
@@ -221,6 +256,8 @@ static void drawArt(Gfx& g, const std::string& art, int cx, int cy, float scale,
   else if (art == "retrotink") artRetrotink(p);
   else if (art == "xbox") artXbox(p);
   else if (art == "ps2") artPs2(p);
+  else if (art == "keyboard") artKeyboard(p);
+  else if (art == "gamepad") artGamepad(p);
   else artGeneric(p);
 }
 

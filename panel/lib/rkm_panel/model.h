@@ -13,9 +13,33 @@ struct Machine {
   bool soft = false;      // its software agent is running
   uint32_t color = 0;     // its colour (cables, card, keyboard lights); 0 = not sent
   bool colorSet = false;  // picked by hand rather than the default
-  bool pad = false;       // a controller dongle (pad player) is connected
+  int pads = 0;           // controller dongles (pad players) connected
   std::string via;        // a console: the box its video goes through (the RetroTINK)
   std::string plugged;    // a box: what is wired into it now
+  std::vector<int> always;  // per kind (Layout::kinds): takes that input out of focus
+  std::string about;      // how it is attached, lines separated by \n
+};
+
+// A kind of accessory ("kbm", "pad"; later mics...), as the hub lists them
+struct Kind {
+  std::string id, label;
+};
+
+struct Link {
+  std::string screen;
+  int player = 1;         // pads: P1..P4 on that machine
+};
+
+// Something you hold: the keyboard + mouse, a game pad
+struct Accessory {
+  std::string name, label, kind, about;
+  bool present = false;
+  long color = -1;        // its lines; -1 = default
+  std::vector<Link> links;
+  const Link* link(const std::string& screen) const {
+    for (auto& l : links) if (l.screen == screen) return &l;
+    return nullptr;
+  }
 };
 
 struct Monitor {
@@ -40,6 +64,20 @@ struct Layout {
   bool switcherPresent = false, switcherOnline = false;
   std::vector<Machine> machines;
   std::vector<Monitor> monitors;
+  std::vector<Kind> kinds;
+  std::vector<Accessory> accessories;
+
+  Accessory* accessory(const std::string& n) {
+    for (auto& a : accessories) if (a.name == n) return &a;
+    return nullptr;
+  }
+  // Pads linked to a machine (for the little controller badge)
+  int padsLinked(const std::string& screen, bool presentOnly) const {
+    int n = 0;
+    for (auto& a : accessories)
+      if (a.kind == "pad" && a.link(screen) && (a.present || !presentOnly)) n++;
+    return n;
+  }
 
   Machine* machine(const std::string& n) {
     for (auto& m : machines) if (m.name == n) return &m;
@@ -79,8 +117,9 @@ struct Layout {
     for (; i >= 0 && !machines[i].via.empty() && d < 32; d++) i = machineIndex(machines[i].via);
     return d;
   }
-  // A card on the desk page: not behind a box, or wired to the switcher too
-  bool onDesk(int i) const { return machines[i].via.empty() || machines[i].input > 0; }
+  // A card on the displays page: every computer and console; boxes (the
+  // RetroTINK) are plumbing, shown through what is plugged into them
+  bool onDesk(int i) const { return !isBox(machines[i].name); }
 
   bool parse(const std::string& json) {
     JsonDocument doc;
@@ -103,7 +142,9 @@ struct Layout {
       m.soft = s["soft"] | 0;
       m.color = s["color"] | 0u;
       m.colorSet = s["colorSet"] | 0;
-      m.pad = s["pad"] | 0;
+      m.pads = s["pads"] | 0;
+      m.about = s["about"] | "";
+      for (int v : s["always"].as<JsonArray>()) m.always.push_back(v);
       m.via = s["via"] | "";
       m.plugged = s["plugged"] | "";
       l.machines.push_back(m);
@@ -124,6 +165,18 @@ struct Layout {
       m.ddc = o["ddc"] | -1;
       m.label = o["label"] | "";
       l.monitors.push_back(m);
+    }
+    for (JsonObject k : doc["kinds"].as<JsonArray>()) l.kinds.push_back({k["id"] | "", k["label"] | ""});
+    for (JsonObject o : doc["accessories"].as<JsonArray>()) {
+      Accessory a;
+      a.name = o["name"] | "";
+      a.label = o["label"] | "";
+      a.kind = o["kind"] | "";
+      a.about = o["about"] | "";
+      a.present = o["present"] | 0;
+      a.color = o["color"] | -1L;
+      for (JsonObject k : o["links"].as<JsonArray>()) a.links.push_back({k["screen"] | "", k["player"] | 1});
+      l.accessories.push_back(a);
     }
     *this = l;
     return true;

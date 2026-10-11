@@ -1,16 +1,35 @@
 # RetroKM touch panel (M5Stack Tab5)
 
-A 1280x720 touch screen that shows the desk:
+A 1280x720 touch screen with two pages (tabs in the header):
 
+**displays**
 - **Monitors** across the top, laid out as they stand. Drag one to a new spot
-  and the hub's screen edges follow (the move is saved in the hub's
-  `.state` file next to its config).
-- **Machines** along the bottom, each with a little picture. Drag from a
-  machine onto a monitor and the Extron switches that monitor to it. Pull a
-  cable's plug off a monitor to unplug it. Tap a machine to give it the
-  keyboard and mouse.
+  and the hub's screen edges follow (saved in the hub's `.state` file).
+- **Machines** along the bottom, computers and consoles alike, each with a
+  little picture. Drag from a machine onto a monitor and the Extron switches
+  that monitor to it; a console behind the RetroTINK is plugged into the
+  tink and the tink goes on that monitor. Pull a cable's plug off a monitor
+  to unplug it. Tap a machine to focus it (green box: keyboard, mouse and
+  linked pads go there). A controller badge in a card's corner means a pad
+  is linked to it.
 - Each monitor has a **number** on its corner (screens left to right, then
   capture cards), so "monitor 2" means the same thing to you and to lil' C.
+
+**accessories**
+- The things you hold along the top (keyboard + mouse, each game pad the
+  hub has seen), the machines along the bottom. Drag from an accessory to
+  a machine to link them; pull a line's end off a machine to unlink it, or
+  drop it on another machine. Many to many. Pads show their player (P1..P4)
+  where their line ends.
+
+**Hold** a machine or an accessory for its options: colour (a machine's
+cables, an accessory's lines), for a machine "receive inputs while out of
+focus" per kind of accessory and the player of each linked pad, for a pad
+its player on each machine, and an "about" that says how it is attached.
+
+Pages are `Page` subclasses in `lib/rkm_panel/rkm_panel.cpp` (the
+`pages[]` list); kinds of accessory come from the hub, so a new kind
+(mics, headsets) shows up in the options without panel changes.
 
 ## Inside lil' C
 
@@ -29,13 +48,17 @@ panel_port = 24852
 ```
 
 Give each `[screen]` a `label` and an `art` (`ideapad`, `precision`,
-`armbox`, `octane`, `dreamcast`; anything else gets a plain box). A monitor
+`armbox`, `octane`, `dreamcast`, `retrotink`, `xbox`, `ps2`; anything else
+gets a plain box). A console behind the RetroTINK says `via = retrotink`. A monitor
 with `shared = <machine>` has a second input; tap it on the panel to say
 which input it is on. `desk.conf.example`
 has a full desk behind an Extron MVX 88.
 
 The panel port takes `layout`, `tie <screen> <monitor>`, `untie <monitor>`,
 `move <monitor> <col> <row>`, `share <monitor> [on|off]`, `goto <screen>`, `lock`,
+`plug <console>`, `unplug <box>`, `link <accessory> <screen> [player]`,
+`unlink <accessory> <screen>`, `always <screen> <kind> on|off`,
+`color <screen|accessory> <rrggbb|default>`,
 `activity`, `buddy <screen> show|hide [label]` and `ping`, and pushes
 `layout {json}` whenever anything changes. It cannot type keys or move the
 pointer. Like the rest of RetroKM it has no password, so keep it on your
