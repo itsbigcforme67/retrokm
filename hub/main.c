@@ -90,7 +90,7 @@ Monitor *monitor_by_name(const char *name)
 
 static int ready(const Screen *s)
 {
-    return s && !s->no_agent && (s->local || s->in || s->kbd);
+    return s && !s->no_agent && (s->local || s->in || s->kbd || s->pad);
 }
 
 static int is_rel(const Screen *s)
@@ -417,6 +417,10 @@ static void do_leave(Screen *s)
     /* a separate clipboard helper uses LEAVE as its cue to report changes */
     if (s->clip && s->clip != s->in) send_frame(s->clip, RKM_LEAVE, NULL, 0);
     send_frame(s->kbd, RKM_LEAVE, NULL, 0);        /* lets go of any keys it holds */
+    if (s->pad) {
+        send_frame(s->pad, RKM_LEAVE, NULL, 0);    /* buttons up, sticks centred */
+        pad_rumble(0, 0);                          /* its game's rumble stays behind */
+    }
 }
 
 static void do_enter(Screen *s)
@@ -434,6 +438,7 @@ static void do_enter(Screen *s)
         p[4] = remap_mods(s, mods);
         send_frame(s->in, RKM_ENTER, p, 5);
         send_frame(s->kbd, RKM_ENTER, p, 5);
+        send_frame(s->pad, RKM_ENTER, p, 5);
         if (is_rel(s)) {
             /* No absolute positioning: slam into the top-left corner, then
              * walk out to the entry point. */
@@ -680,6 +685,62 @@ void hub_key(int evcode, int usage, int state)
     send_frame(s->kbd ? s->kbd : s->in, RKM_KEY, p, 3);   /* a hardware keyboard wins */
 }
 
+/* ---- the game pad --------------------------------------------------------- */
+
+static PadState pad_now;         /* the physical pad, as last reported */
+static int pad_latched;          /* a Guide combo fired: hold its buttons back */
+
+/* Hand the keyboard and pad to the next / previous screen that plays a pad
+ * (or the hub's own desktop), in config order. */
+static void pad_cycle(int dir)
+{
+    int i, n = cfg.nscreens, cur = active ? (int)(active - cfg.screens) : -1;
+    for (i = 1; i <= n; i++) {
+        Screen *s = &cfg.screens[((cur + dir * i) % n + n) % n];
+        if (s != active && ready(s) && (s->pad || s->local)) {
+            goto_screen(s);
+            return;
+        }
+    }
+}
+
+static void send_pad(Screen *s, const PadState *ps)
+{
+    unsigned char p[RKM_PAD_LEN];
+    p[0] = 0;
+    RKM_PUT16(p + 1, ps->buttons);
+    p[3] = ps->lt;
+    p[4] = ps->rt;
+    RKM_PUT16(p + 5, (unsigned)(ps->lx & 0xFFFF));
+    RKM_PUT16(p + 7, (unsigned)(ps->ly & 0xFFFF));
+    RKM_PUT16(p + 9, (unsigned)(ps->rx & 0xFFFF));
+    RKM_PUT16(p + 11, (unsigned)(ps->ry & 0xFFFF));
+    send_frame(s->pad, RKM_PAD, p, RKM_PAD_LEN);
+}
+
+void hub_pad(const PadState *in)
+{
+    unsigned pressed = in->buttons & ~pad_now.buttons;
+    PadState out = *in;
+    Screen *s;
+
+    pad_now = *in;
+    touched = 1;
+    if ((in->buttons & RKM_PAD_GUIDE) && (pressed & (RKM_PAD_RB | RKM_PAD_LB))) {
+        pad_latched = 1;
+        pad_cycle(pressed & RKM_PAD_RB ? 1 : -1);
+        return;
+    }
+    if (pad_latched) {
+        if (!(in->buttons & RKM_PAD_GUIDE)) pad_latched = 0;
+        out.buttons &= ~(unsigned)(RKM_PAD_GUIDE | RKM_PAD_LB | RKM_PAD_RB);
+    }
+    s = active;
+    if (!s || s->local || !s->pad) return;   /* the desktop reads the pad itself */
+    s->last_input_ms = now_ms();
+    send_pad(s, &out);
+}
+
 /* ---- commands (hotkeys and the control socket) -------------------------- */
 
 static void cmd_status(Conn *r)
@@ -697,6 +758,7 @@ static void cmd_status(Conn *r)
                    s->local ? "uinput" : s->in ? s->in->peer : "-",
                    s->clip ? s->clip->peer : "-");
         if (s->kbd) ctl_printf(r, " keyboard=%s", s->kbd->peer);
+        if (s->pad) ctl_printf(r, " pad=%s", s->pad->peer);
         if (s->extron_input) ctl_printf(r, " extron-in=%d", s->extron_input);
         ctl_printf(r, "\n");
     }
@@ -707,16 +769,17 @@ static void cmd_status(Conn *r)
         else ctl_printf(r, "extron-out=%d (input %d)", m->extron_output, extron_input_for(m->extron_output));
         ctl_printf(r, " shows=%s\n", m->cur ? m->cur->name : "-");
     }
+    ctl_printf(r, "pad: %s\n", pad_name() ? pad_name() : "(none)");
     ctl_printf(r, "clipboard: %lu bytes, generation %u, from %s\n", (unsigned long)clip_len,
                clip_gen, clip_src ? clip_src->name : "-");
 }
 
 static void run_command(char *cmd, Conn *r)
 {
-    char *argv[4] = { 0, 0, 0, 0 }, *save = NULL, *tok;
+    char *argv[10] = { 0 }, *save = NULL, *tok;
     int argc = 0;
 
-    for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 4; tok = strtok_r(NULL, " \t\r\n", &save))
+    for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 10; tok = strtok_r(NULL, " \t\r\n", &save))
         argv[argc++] = tok;
     if (argc == 0) return;
 
@@ -753,6 +816,16 @@ static void run_command(char *cmd, Conn *r)
         int u = key_by_name(argv[1]);
         if (u < 0) ctl_printf(r, "error: unknown key %s\n", argv[1]);
         else { hub_key(hid_to_evdev(u), u, atoi(argv[2])); ctl_printf(r, "ok\n"); }
+    } else if (!strcasecmp(argv[0], "pad") && argc >= 2) {
+        /* pad <buttons hex> [lt rt lx ly rx ry]: as if the real pad did it */
+        PadState ps;
+        memset(&ps, 0, sizeof ps);
+        ps.buttons = (unsigned)strtoul(argv[1], NULL, 16) & 0xFFFF;
+        if (argc >= 4) { ps.lt = (unsigned char)atoi(argv[2]); ps.rt = (unsigned char)atoi(argv[3]); }
+        if (argc >= 6) { ps.lx = (short)atoi(argv[4]); ps.ly = (short)atoi(argv[5]); }
+        if (argc >= 8) { ps.rx = (short)atoi(argv[6]); ps.ry = (short)atoi(argv[7]); }
+        hub_pad(&ps);
+        ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "ddc")) {
         /* ddc: what each DDC monitor reports; ddc <monitor> <input>: switch it */
         int i, v;
@@ -779,7 +852,7 @@ static void run_command(char *cmd, Conn *r)
     } else {
         ctl_printf(r, "error: commands are status, goto <screen>, show <screen> [monitor], "
                       "tie <in> <out>, lock [on|off], rel <dx> <dy>, btn <n> <0|1>, "
-                      "key <name> <0|1>, wheel <n>, quit\n");
+                      "key <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], quit\n");
     }
 }
 
@@ -838,9 +911,9 @@ static void layout_json(Sbuf *b)
         sb_printf(b, ",\"art\":");
         sb_str(b, s->art);
         sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d,"
-                  "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d}",
+                  "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d,\"pad\":%d}",
                   s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h,
-                  lights_color(s), s->color >= 0, s->buddy != NULL);
+                  lights_color(s), s->color >= 0, s->buddy != NULL, s->pad != NULL);
     }
     sb_printf(b, "],\"monitors\":[");
     for (i = 0; i < cfg.nmonitors; i++) {
@@ -1062,6 +1135,7 @@ static void conn_detach(Conn *c)
     if (!s) return;
     if (s->in == c) s->in = NULL;
     if (s->kbd == c) s->kbd = NULL;
+    if (s->pad == c) s->pad = NULL;
     if (s->clip == c) s->clip = NULL;
     if (s->buddy == c) s->buddy = NULL;
     if (s->sound == c) s->sound = NULL;
@@ -1075,6 +1149,7 @@ static void kick(Conn *old)
     Screen *s = old->screen;
     if (s && s->in == old) s->in = NULL;
     if (s && s->kbd == old) s->kbd = NULL;
+    if (s && s->pad == old) s->pad = NULL;
     if (s && s->clip == old) s->clip = NULL;
     if (s && s->buddy == old) s->buddy = NULL;
     if (s && s->sound == old) s->sound = NULL;
@@ -1118,6 +1193,11 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
         if (s->kbd && s->kbd != c) kick(s->kbd);
         s->kbd = c;
     }
+    if (c->caps & RKM_CAP_PAD) {                /* a game pad player: the pad only */
+        c->caps &= ~(RKM_CAP_INPUT | RKM_CAP_CLIP);
+        if (s->pad && s->pad != c) kick(s->pad);
+        s->pad = c;
+    }
 
     if (c->caps & RKM_CAP_INPUT) {
         if (s->in && s->in != c) kick(s->in);       /* same machine came back */
@@ -1139,12 +1219,13 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     if (c->caps & RKM_CAP_SOUND) s->sound = c;
     w[1] = RKM_OK;
     send_frame(c, RKM_WELCOME, w, 2);
-    logmsg("%s: connected from %s, %dx%d%s%s%s%s", s->name, c->peer, s->w, s->h,
+    logmsg("%s: connected from %s, %dx%d%s%s%s%s%s", s->name, c->peer, s->w, s->h,
            c->caps & RKM_CAP_INPUT ? " input" : "", c->caps & RKM_CAP_CLIP ? " clipboard" : "",
-           c->caps & RKM_CAP_REL ? " relative" : "", c->caps & RKM_CAP_KEYS ? " hardware-keyboard" : "");
+           c->caps & RKM_CAP_REL ? " relative" : "", c->caps & RKM_CAP_KEYS ? " hardware-keyboard" : "",
+           c->caps & RKM_CAP_PAD ? " game-pad" : "");
 
     if (s == active) {
-        if (c->caps & (RKM_CAP_INPUT | RKM_CAP_KEYS)) do_enter(s);   /* agent restarted under the pointer */
+        if (c->caps & (RKM_CAP_INPUT | RKM_CAP_KEYS | RKM_CAP_PAD)) do_enter(s);   /* agent restarted under the pointer */
         else clip_sync(s);
     }
     relayout();
@@ -1190,6 +1271,10 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
         break;
     case RKM_CLIP_END:
         if (c->clip_in_active) clip_received(c);
+        break;
+    case RKM_RUMBLE:                           /* the game shakes the pad */
+        if (len >= 5 && c == c->screen->pad && c->screen == active)
+            pad_rumble(RKM_GET16(p + 1), RKM_GET16(p + 3));
         break;
     case RKM_SOUND_EVENT:                      /* how the chirps went: to the panels too */
         if (len >= 8) {
@@ -1401,10 +1486,12 @@ int main(int argc, char **argv)
         struct pollfd pfd[MAX_CONNS + MAX_DEVICES + 6];
         Conn *pc[MAX_CONNS + MAX_DEVICES + 6];
         int infds[MAX_DEVICES], nin, n = 0, timeout = 100, base_in, xfd, xi = -1, ci = -1, pi = -1, di = -1;
+        int gi = -1;
 
         pfd[n].fd = lfd; pfd[n].events = POLLIN; pc[n++] = NULL;
         if (cfd >= 0) { ci = n; pfd[n].fd = cfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
         if (pfd_listen >= 0) { pi = n; pfd[n].fd = pfd_listen; pfd[n].events = POLLIN; pc[n++] = NULL; }
+        if (pad_fd() >= 0) { gi = n; pfd[n].fd = pad_fd(); pfd[n].events = POLLIN; pc[n++] = NULL; }
         if (ddc_fd() >= 0) { di = n; pfd[n].fd = ddc_fd(); pfd[n].events = POLLIN; pc[n++] = NULL; }
         xfd = extron_fd();
         if (xfd >= 0) { xi = n; pfd[n].fd = xfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
@@ -1428,6 +1515,7 @@ int main(int argc, char **argv)
         if (ci >= 0 && (pfd[ci].revents & POLLIN)) accept_conn(cfd, CONN_CTL);
         if (pi >= 0 && (pfd[pi].revents & POLLIN)) accept_conn(pfd_listen, CONN_PANEL);
         if (di >= 0 && (pfd[di].revents & POLLIN)) ddc_readable(ddc_changed);
+        if (gi >= 0 && pfd[gi].revents) pad_readable();
         if (xi >= 0 && pfd[xi].revents) extron_readable();
         for (i = 0; i < nin; i++)
             if (pfd[base_in + i].revents) input_readable(infds[i]);
@@ -1445,6 +1533,8 @@ int main(int argc, char **argv)
             now_ms() - active->last_move_ms >= active->min_move_ms)
             flush_move(active);
         input_tick();
+        pad_tick();
+        pad_grab(active && !active->local);
         lights_tick();
         extron_tick();
         housekeeping();
@@ -1453,6 +1543,7 @@ int main(int argc, char **argv)
     }
 
     if (active) do_leave(active);
+    pad_grab(0);
     lights_set(0xFFFFFFFF);                     /* the keyboard's own lighting again */
     for (i = 0; i < MAX_CONNS; i++)
         if (conns[i].kind != CONN_FREE) { conn_flush(&conns[i]); close(conns[i].fd); }

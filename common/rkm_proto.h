@@ -32,6 +32,9 @@
 #define RKM_WHEEL      0x15  /* dy16,dx16 signed, 120 units = one notch           */
 #define RKM_KEY        0x16  /* usage,state,mods                                  */
 #define RKM_RESET      0x17  /* (none)  release everything                        */
+#define RKM_PAD        0x18  /* pad,buttons16,lt,rt,lx16,ly16,rx16,ry16  whole    */
+                             /* game controller state (RKM_CAP_PAD agents)        */
+#define RKM_RUMBLE     0x19  /* A->H pad,strong16,weak16  0..65535 each           */
 /* clipboard, both directions */
 #define RKM_CLIP_BEGIN 0x20  /* format,total32                                    */
 #define RKM_CLIP_DATA  0x21  /* bytes (<= RKM_CLIP_CHUNK)                         */
@@ -52,6 +55,8 @@
                              /* the pointer and clipboard                         */
 #define RKM_CAP_BUDDY  0x10  /* can show the desk buddy window (RKM_BUDDY)        */
 #define RKM_CAP_SOUND  0x20  /* can play test chirps on its speakers (RKM_SOUND)  */
+#define RKM_CAP_PAD    0x40  /* plays a game controller (a console's pad port):   */
+                             /* gets ENTER, LEAVE, PAD and RESET only             */
 
 /* HELLO charset: encoding the agent uses for clipboard text */
 #define RKM_CS_UTF8     0
@@ -94,6 +99,27 @@
 #define RKM_MOD_SHIFT  (RKM_MOD_LSHIFT | RKM_MOD_RSHIFT)
 #define RKM_MOD_ALT    (RKM_MOD_LALT | RKM_MOD_RALT)
 #define RKM_MOD_GUI    (RKM_MOD_LGUI | RKM_MOD_RGUI)
+
+/* RKM_PAD buttons: an Xbox-style pad.  Sticks are signed, -32768..32767,
+ * right and UP positive; triggers 0..255.  ENTER, LEAVE and RESET mean
+ * "back to neutral" for a pad agent; PAD frames carry the whole state. */
+#define RKM_PAD_A      0x0001
+#define RKM_PAD_B      0x0002
+#define RKM_PAD_X      0x0004
+#define RKM_PAD_Y      0x0008
+#define RKM_PAD_LB     0x0010
+#define RKM_PAD_RB     0x0020
+#define RKM_PAD_BACK   0x0040   /* View / Select */
+#define RKM_PAD_START  0x0080   /* Menu */
+#define RKM_PAD_GUIDE  0x0100   /* the Xbox button */
+#define RKM_PAD_LS     0x0200   /* stick clicks */
+#define RKM_PAD_RS     0x0400
+#define RKM_PAD_UP     0x0800
+#define RKM_PAD_DOWN   0x1000
+#define RKM_PAD_LEFT   0x2000
+#define RKM_PAD_RIGHT  0x4000
+#define RKM_PAD_SHARE  0x8000
+#define RKM_PAD_LEN    13
 
 /* CLIP_BEGIN format */
 #define RKM_CLIP_TEXT  1
