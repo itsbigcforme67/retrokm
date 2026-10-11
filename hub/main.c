@@ -259,6 +259,12 @@ static void resolve_monitors(void)
             if (!m->cur || (!ready(m->cur) && ready(s))) m->cur = s;
         }
     }
+    /* a box (the RetroTINK, a switcher in front of it) shows whichever
+     * console is wired into it, through any number of boxes */
+    for (i = 0; i < cfg.nmonitors; i++) {
+        Monitor *m = &cfg.monitors[i];
+        for (k = 0; m->cur && m->cur->plugged && k < MAX_SCREENS; k++) m->cur = m->cur->plugged;
+    }
 }
 
 static Monitor *monitor_showing(const Screen *s)
@@ -743,6 +749,25 @@ void hub_pad(const PadState *in)
 
 /* ---- commands (hotkeys and the control socket) -------------------------- */
 
+/* Say which console is wired into a box (it cannot tell us itself). */
+static int plug_console(Screen *c, Screen *box, Conn *r, int panel)
+{
+    if (!box) {
+        ctl_printf(r, panel ? "error no such box\n" : "error: no such box\n");
+        return -1;
+    }
+    if (c && c->via != box) {
+        ctl_printf(r, panel ? "error %s cannot go into %s\n" : "error: %s cannot go into %s\n", c->name, box->name);
+        return -1;
+    }
+    if (box->plugged == c) return 0;
+    box->plugged = c;
+    logmsg("%s: %s plugged in", box->name, c ? c->name : "nothing");
+    config_save_state();
+    relayout();
+    return 0;
+}
+
 static void cmd_status(Conn *r)
 {
     int i;
@@ -759,6 +784,8 @@ static void cmd_status(Conn *r)
                    s->clip ? s->clip->peer : "-");
         if (s->kbd) ctl_printf(r, " keyboard=%s", s->kbd->peer);
         if (s->pad) ctl_printf(r, " pad=%s", s->pad->peer);
+        if (s->via) ctl_printf(r, " via=%s", s->via->name);
+        if (s->plugged) ctl_printf(r, " plugged=%s", s->plugged->name);
         if (s->extron_input) ctl_printf(r, " extron-in=%d", s->extron_input);
         ctl_printf(r, "\n");
     }
@@ -816,6 +843,13 @@ static void run_command(char *cmd, Conn *r)
         int u = key_by_name(argv[1]);
         if (u < 0) ctl_printf(r, "error: unknown key %s\n", argv[1]);
         else { hub_key(hid_to_evdev(u), u, atoi(argv[2])); ctl_printf(r, "ok\n"); }
+    } else if (!strcasecmp(argv[0], "plug") && argc == 2) {
+        /* plug <console>: it is the one wired into its box now */
+        Screen *s = screen_by_name(argv[1]);
+        if (!s || !s->via) ctl_printf(r, "error: %s is not a console behind a box\n", argv[1]);
+        else if (plug_console(s, s->via, r, 0) == 0) ctl_printf(r, "ok\n");
+    } else if (!strcasecmp(argv[0], "unplug") && argc == 2) {
+        if (plug_console(NULL, screen_by_name(argv[1]), r, 0) == 0) ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "pad") && argc >= 2) {
         /* pad <buttons hex> [lt rt lx ly rx ry]: as if the real pad did it */
         PadState ps;
@@ -852,7 +886,8 @@ static void run_command(char *cmd, Conn *r)
     } else {
         ctl_printf(r, "error: commands are status, goto <screen>, show <screen> [monitor], "
                       "tie <in> <out>, lock [on|off], rel <dx> <dy>, btn <n> <0|1>, "
-                      "key <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], quit\n");
+                      "key <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], plug <console>, "
+                      "unplug <box>, quit\n");
     }
 }
 
@@ -911,9 +946,13 @@ static void layout_json(Sbuf *b)
         sb_printf(b, ",\"art\":");
         sb_str(b, s->art);
         sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d,"
-                  "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d,\"pad\":%d}",
+                  "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d,\"pad\":%d,\"via\":",
                   s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h,
                   lights_color(s), s->color >= 0, s->buddy != NULL, s->pad != NULL);
+        sb_str(b, s->via ? s->via->name : "");
+        sb_printf(b, ",\"plugged\":");
+        sb_str(b, s->plugged ? s->plugged->name : "");
+        sb_printf(b, "}");
     }
     sb_printf(b, "],\"monitors\":[");
     for (i = 0; i < cfg.nmonitors; i++) {
@@ -1075,6 +1114,13 @@ static void run_panel_command(char *cmd, Conn *r)
         s->color = !strcasecmp(argv[2], "default") ? s->config_color : (long)(strtoul(argv[2], NULL, 16) & 0xFFFFFF);
         config_save_state();
         if (s == active) lights_set(lights_color(s));
+    } else if (!strcasecmp(argv[0], "plug") && argc == 2) {
+        /* plug <console>: the cable from it now goes into its box */
+        Screen *s = screen_by_name(argv[1]);
+        if (!s || !s->via) ctl_printf(r, "error %s is not a console behind a box\n", argv[1]);
+        else plug_console(s, s->via, r, 1);
+    } else if (!strcasecmp(argv[0], "unplug") && argc == 2) {
+        plug_console(NULL, screen_by_name(argv[1]), r, 1);
     } else if (!strcasecmp(argv[0], "goto") && argc == 2) {
         Screen *s = screen_by_name(argv[1]);
         if (!s || !ready(s)) ctl_printf(r, "error %s is offline\n", argv[1]);

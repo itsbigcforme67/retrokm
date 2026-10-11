@@ -26,12 +26,12 @@ build/xq: tests/xq.c
 test: all build/xq
 	python3 tests/e2e.py
 
-# Game pad routing; needs only the hub.
-test-pad: hub
-	python3 tests/pad_test.py
+# Consoles behind boxes and game pad routing; needs only the hub.
+test-consoles: hub
+	python3 tests/consoles_test.py
 
 clean:
 	$(MAKE) -C hub clean
 	rm -rf build
 
-.PHONY: all hub test test-pad clean
+.PHONY: all hub test test-consoles clean

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Game pad routing through the hub, no X needed: a simulated pad player
+"""Consoles behind boxes (RetroTINK, switchers) and game pad routing, no X
+needed: a simulated pad player
 (the Xbox dongle) and a simulated PC agent; the pad is played through the
 control socket's "pad" command.  Run after building hub/retrokm-hub."""
 import os, socket, struct, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TMP = tempfile.mkdtemp(prefix="rkm-pad-")
+TMP = tempfile.mkdtemp(prefix="rkm-consoles-")
 PORT, CTL = 24960, 24961
 failures = []
 
@@ -62,6 +63,15 @@ pad = none
 
 [screen pc]
 [screen xbox]
+via = switcher
+[screen ps2]
+via = switcher
+[screen switcher]
+via = tink
+[screen dreamcast]
+via = tink
+[screen tink]
+agent = no
 [screen dell]
 
 [monitor left]
@@ -69,13 +79,26 @@ pos = 0,0
 screen = pc
 [monitor right]
 pos = 1,0
-screen = xbox
+screen = tink
 """ % (PORT, CTL))
 log = open(TMP + "/hub.log", "w")
 hub = subprocess.Popen([ROOT + "/hub/retrokm-hub", "-v", "-c", conf], stdout=log, stderr=subprocess.STDOUT)
 try:
     time.sleep(0.4)
     ctl = Ctl()
+    # consoles behind boxes: nothing plugged, the monitor shows the tink itself
+    st = ctl("status")
+    check("box monitor shows the box with nothing plugged", "shows=tink" in st, True)
+    ctl("plug switcher"); ctl("plug xbox")
+    check("console through two boxes reaches the monitor", "shows=xbox" in ctl("status"), True)
+    check("plug refuses the wrong box", "error" in ctl("plug pc"), True)
+    check("plugs are saved", sorted(l for l in open(conf + ".state") if l.startswith("plug")),
+          ["plug switcher xbox\n", "plug tink switcher\n"])
+    ctl("plug dreamcast")
+    check("re-plugging the tink changes the monitor", "shows=dreamcast" in ctl("status"), True)
+    ctl("unplug tink")
+    check("unplugged: the tink again", "shows=tink" in ctl("status"), True)
+    ctl("plug switcher")
     pc = FakeAgent("pc", caps=1)
     xb = FakeAgent("xbox", caps=0x40)
     time.sleep(0.3)
@@ -108,6 +131,10 @@ try:
     xb.send(0x19, struct.pack(">BHH", 0, 0xC000, 0x4000))   # rumble, no real pad here
     time.sleep(0.1)
     check("rumble without a real pad is harmless", "active: xbox" in ctl("status"), True)
+
+    ctl("goto pc"); xb.take()
+    ctl("rel 5000 0")                         # the mouse walks onto the tink's monitor
+    check("the mouse reaches the xbox through the tink", "active: xbox" in ctl("status"), True)
 
     xb2 = FakeAgent("xbox", caps=0x40)        # the dongle rebooted
     time.sleep(0.3)

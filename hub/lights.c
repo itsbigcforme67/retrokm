@@ -145,5 +145,7 @@ unsigned long lights_color(const Screen *s)
     if (!strcmp(s->art, "octane")) return 0x2EC4B6;
     if (!strcmp(s->art, "dreamcast")) return 0xF97316;
     if (!strcmp(s->art, "retrotink")) return 0xE11D48;
+    if (!strcmp(s->art, "xbox")) return 0x22C55E;
+    if (!strcmp(s->art, "ps2")) return 0x3B5BDB;
     return 0xA78BFA;
 }
