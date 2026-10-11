@@ -170,9 +170,19 @@ unplugged), links/toggles in the state file, kinds in one table
 (`acc_kinds`). `make test-consoles` passes. Panel checked in the desktop
 build (screenshots); Tab5 and lil' C firmware build. `xboxpad/` is the
 Atom S3R original-Xbox pad (a pad player, `player 1-4`).
+Done 2026-10-11: hub installed; the Tab5 runs lil' C's firmware (the
+standard now: `cd lilc/firmware && pio run -e tab5-ota -t upload`). The
+Xbox pad runs on the owner's **Atom EchoS3R** (MAC ...F4:C8, 192.168.1.206,
+xboxpad.local; same ESP32-S3, no screen), first flashed by catching its
+~4 s serial/JTAG window at boot (its old audio firmware had no serial),
+now OTA with `xboxpad/update.sh xbox`. On the laptop Linux binds xpad
+("Microsoft X-Box pad v2"); `xboxpad/xpadtest.py` passes 21/21 (every
+button, axis, rumble round trip), presses land in ~50 ms.
+Fixed then: the hub link's "went quiet" check used a `now` taken before
+reading, so a frame read in the same pass made it reconnect (dropping
+presses). The PS/2 keyboard (injector/) had the same bug: fixed in the
+source, `injector/update.sh octanekb` still to run.
 To do:
-- `./install-laptop.sh` (sudo) for the hub, OTA the Tab5 panel (or lil' C).
-- First USB flash of the Atom S3R, then `xboxpad/xpadtest.py`.
 - Check the Elite's mapping on Linux (USB and Bluetooth) with the hub's
   `-v` log; real Xbox with an Xbox-to-USB adapter.
 - Out of focus, a machine gets keys but not the pointer or mouse buttons.

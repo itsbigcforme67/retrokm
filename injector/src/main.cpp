@@ -348,7 +348,8 @@ static void pollHub() {
     if (errno != EAGAIN && errno != EWOULDBLOCK) { hubClose("link error, reconnecting"); return; }
     break;
   }
-  if (now - lastRx > 30000) hubClose("hub went quiet, reconnecting");  // it pings every 5 s
+  // (millis() again: a frame read just now moved lastRx past `now`)
+  if (millis() - lastRx > 30000) hubClose("hub went quiet, reconnecting");  // it pings every 5 s
 }
 
 // ------------------------------------------------------------ settings

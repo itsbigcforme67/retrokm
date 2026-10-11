@@ -1,6 +1,7 @@
 # Xbox pad (RetroKM)
 
-An **M5Stack Atom S3R** that plays an **original Xbox controller** (a
+An **M5Stack Atom S3R** (or the screenless **Atom EchoS3R**, which is what
+runs it on this desk) that plays an **original Xbox controller** (a
 Microsoft "Controller S", USB 045E:0289, XID class) on the Xbox's pad port,
 driven by the RetroKM hub. The game pad plugged into (or paired with) the
 laptop follows the keyboard: while the `xbox` screen has the keyboard, the
@@ -36,7 +37,10 @@ The port powers the Atom.
 
    then `./install-laptop.sh`.
 3. First flash over USB (a fresh board is a serial port):
-   `~/.platformio/penv/bin/pio run -e atoms3r -t upload`.
+   `~/.platformio/penv/bin/pio run -e atoms3r -t upload`. A board whose
+   firmware owns the USB port (the EchoS3R's audio firmware, or this one in
+   xbox mode) still shows Espressif's serial/JTAG port for a few seconds
+   when plugged in: start esptool waiting for /dev/ttyACM* and replug.
    After that: `./update.sh xbox` (over WiFi).
 
 ## Two USB modes
