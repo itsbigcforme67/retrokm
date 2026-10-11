@@ -7,10 +7,12 @@ laptop follows the keyboard: while the `xbox` screen has the keyboard, the
 Elite plays the Xbox, just as the keyboard types on the Octane through the
 NanoC6. The game's rumble comes back and shakes the real pad.
 
-Switching without the mouse: **Guide + RB / Guide + LB** on the pad hands
-keyboard and pad to the next / previous screen that has a pad (or the
-laptop). While the laptop has the keyboard the hub leaves the pad alone,
-so laptop games see it as usual.
+Which controllers drive the Xbox is set on the panel's accessories page
+(lines from controllers to machines). A controller drives the machine in
+focus if linked; with "receive inputs while out of focus" on (long-press
+the Xbox) it drives it all the time. **Guide + RB / Guide + LB** moves the
+focus to the next / previous machine the pad is linked to. While the laptop
+is a target the hub leaves the pad alone, so laptop games see it as usual.
 
 ## Hookup
 
@@ -54,7 +56,12 @@ Like the PS/2 keyboard: the log goes as UDP to the hub's host port 24853,
 settings come on UDP 24854 (and USB serial in pc mode):
 
     echo show | nc -u -w1 xboxpad.local 24854
-    show | name <screen> | label <board name> | hub <host> | mode pc|xbox | reboot
+    show | name <screen> | label <board name> | hub <host> | player 1-4 | mode pc|xbox | reboot
+
+`player` is which pad port of the console this dongle sits in (one dongle
+per port). On the panel's accessories page, each controller linked to the
+Xbox is a player there (P1, P2, ...; long-press to change, several on P1
+merge into one).
 
 The screen shows the mode, whether the Xbox has taken the pad, the hub link,
 whether this screen has the pad right now, the buttons and the rumble.
