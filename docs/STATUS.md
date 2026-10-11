@@ -150,6 +150,22 @@ icon (left click) calls him. Panel code moved to `panel/lib/rkm_panel`
 - the stand-alone panel firmware still builds (`pio run -e tab5`), but the
   Tab5 is meant to run lil' C's firmware now, which includes the desk map.
 
+## Game pad and the Xbox pad (2026-10-11, built, not on hardware)
+
+The owner asked for controller switching like the keyboard: the pad
+connects to the hub and the hub forwards it. Hub: `hub/pad.c` reads an
+Xbox-style pad (xpad over USB, or Bluetooth) and sends RKM_PAD to the
+active screen's pad player (RKM_CAP_PAD); RUMBLE comes back; Guide+RB/LB
+switches screens; the desktop keeps the pad while the laptop is active.
+`make test-pad` passes. `xboxpad/` is the Atom S3R original-Xbox pad
+(first written stand-alone in `XBOX DONGLE/` with BLE input, now a hub
+client). To do:
+- `./install-laptop.sh` (sudo) with an `[screen xbox]` section and the
+  Xbox's Extron input (not known yet).
+- First USB flash of the Atom S3R, then `xboxpad/xpadtest.py` on the laptop.
+- Check the Elite's mapping on Linux (USB and Bluetooth) with the hub's
+  `-v` log; real Xbox with an Xbox-to-USB adapter.
+
 ## Open ideas / next steps
 
 - **Set-3 keys:** verify key by key on the Octane (the table was written
