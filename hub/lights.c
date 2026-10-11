@@ -144,5 +144,6 @@ unsigned long lights_color(const Screen *s)
     if (!strcmp(s->art, "armbox")) return 0xE5E7EB;
     if (!strcmp(s->art, "octane")) return 0x2EC4B6;
     if (!strcmp(s->art, "dreamcast")) return 0xF97316;
+    if (!strcmp(s->art, "retrotink")) return 0xE11D48;
     return 0xA78BFA;
 }
