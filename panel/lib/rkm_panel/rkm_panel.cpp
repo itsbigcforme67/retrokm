@@ -164,15 +164,39 @@ static uint32_t colorOf(int i) {
   return m.color ? m.color : machineColor(m.art, i);
 }
 
-static Rect cardRect(int i) {
-  int n = std::max<int>(1, lay.machines.size());
+// Slot `i` of `n` cards in a row, centred, at height y
+static Rect rowRect(int i, int n, int y, int h, int maxW = 290) {
+  n = std::max(1, n);
   int gap = 16;
-  int w = std::min(290, (AW - (n - 1) * gap) / n);
+  int w = std::min(maxW, (AW - (n - 1) * gap) / n);
   int x0 = AX + (AW - (n * w + (n - 1) * gap)) / 2;
-  return {x0 + i * (w + gap), CY, w, CH};
+  return {x0 + i * (w + gap), y, w, h};
 }
-static void plugPos(int i, int& x, int& y) {
-  Rect r = cardRect(i);
+
+// The desk page's cards: machines not hidden behind a box (consoles in the
+// RetroTINK live on its page; the RetroTINK's card stands in for them here)
+static std::vector<int> desk;  // machine indices, in card order
+static void computeDesk() {
+  desk.clear();
+  for (size_t i = 0; i < lay.machines.size(); i++)
+    if (lay.onDesk(i)) desk.push_back((int)i);
+}
+// The machine whose desk card stands for machine i (itself, or its box)
+static int deskOwner(int i) {
+  for (int n = 0; i >= 0 && n < 32; n++) {
+    if (lay.onDesk(i)) return i;
+    i = lay.machineIndex(lay.machines[i].via);
+  }
+  return -1;
+}
+static int slotOf(int i) {
+  i = deskOwner(i);
+  for (size_t k = 0; k < desk.size(); k++) if (desk[k] == i) return (int)k;
+  return -1;
+}
+static Rect cardRect(int slot) { return rowRect(slot, desk.size(), CY, CH); }
+static void plugPos(int i, int& x, int& y) {  // the knob of machine i's desk card
+  Rect r = cardRect(std::max(0, slotOf(i)));
   x = r.x + r.w / 2;
   y = r.y;
 }
@@ -180,6 +204,9 @@ static void plugPos(int i, int& x, int& y) {
 // ------------------------------------------------------------ touch
 
 enum DragKind { D_NONE, D_PRESS_CARD, D_CABLE, D_PRESS_MON, D_MON, D_PLUG, D_PRESS_LOCK, D_PRESS_BACK,
+                D_PRESS_TAB,   // a page tab in the header (dragIdx = which)
+                D_WIRE,        // a box page: a console's cable being carried to a box
+                D_BOXPLUG,     // a box page: a cable being pulled out of a box (dragIdx = the box)
                 D_LONG,        // the long press that opened the options: ignore until let go
                 D_MENU_TAP,    // a press on an options button (dragIdx = which)
                 D_PICK_SV, D_PICK_HUE };
@@ -189,6 +216,29 @@ static int dragIdx = -1;          // machine (cable) or monitor (mon, plug)
 static int pressX, pressY, curX, curY;
 static Rect lockBtn{0, 0, 0, 0};
 static Rect backBtn{0, 0, 0, 0};
+
+// ------------------------------------------------------------ pages
+//
+// The panel shows one page at a time, picked from tabs in the header: the
+// desk (monitors and machines), and a page for each box machines go through
+// that the hub cannot switch (the RetroTINK: which console is wired into it).
+// A new kind of page is a new Page subclass; header, toasts, the options
+// sheet and the two-layer drawing are shared.
+struct Page {
+  virtual ~Page() {}
+  virtual std::string key() const = 0;    // stays the same across layout updates
+  virtual std::string title() const = 0;  // on its tab
+  virtual const char* hint() const = 0;   // the help line along the bottom
+  virtual void draw() = 0;                // the page, on the scene layer
+  virtual void finger() = 0;              // whatever follows the finger, over it
+  virtual void press(int x, int y) = 0;   // sets drag / dragIdx
+  virtual void moved(bool far) = 0;       // the finger moved; far: past a tap
+  virtual void release() = 0;             // drag ended (page's own kinds)
+  virtual bool carrying() const = 0;      // something follows the finger now
+};
+static Page* page = nullptr;
+static std::vector<Rect> tabRects;
+static void showPage(int tab);
 
 static int monitorAt(int x, int y) {
   for (size_t i = 0; i < lay.monitors.size(); i++) {
@@ -207,13 +257,13 @@ static int plugAt(int x, int y) {  // a monitor's cable plug
   }
   return -1;
 }
-static int cardAt(int x, int y) {
-  for (size_t i = 0; i < lay.machines.size(); i++)
-    if (cardRect(i).has(x, y)) return (int)i;
-  int px, py;
-  for (size_t i = 0; i < lay.machines.size(); i++) {  // the knob sticks out
-    plugPos(i, px, py);
-    if ((x - px) * (x - px) + (y - py) * (y - py) < 26 * 26) return (int)i;
+static int cardAt(int x, int y) {  // a machine index
+  for (size_t k = 0; k < desk.size(); k++)
+    if (cardRect(k).has(x, y)) return desk[k];
+  for (size_t k = 0; k < desk.size(); k++) {  // the knob sticks out
+    Rect r = cardRect(k);
+    int px = r.x + r.w / 2, py = r.y;
+    if ((x - px) * (x - px) + (y - py) * (y - py) < 26 * 26) return desk[k];
   }
   return -1;
 }
@@ -340,15 +390,21 @@ static void menuButton(int b) {
   sceneDirty = true;
 }
 
-static void release() {
+// A tap on a machine: give it the keyboard (and the pad)
+static void tapCard(int i) {
+  Machine& m = lay.machines[i];
+  if (!m.via.empty() && !m.ready) say(m.label + " has no controller dongle yet");
+  else if (!m.agent) say(m.label + " is video only: no keyboard or mouse");
+  else if (!m.ready) say(m.label + " is offline (its agent is not running)");
+  else { hub.send("goto " + m.name); lay.active = m.name; }
+}
+
+// The desk page's own touches
+static void deskRelease() {
   switch (drag) {
-  case D_PRESS_CARD: {
-    Machine& m = lay.machines[dragIdx];
-    if (!m.agent) say(m.label + " is video only: no keyboard or mouse");
-    else if (!m.ready) say(m.label + " is offline (its agent is not running)");
-    else { hub.send("goto " + m.name); lay.active = m.name; }
+  case D_PRESS_CARD:
+    tapCard(dragIdx);
     break;
-  }
   case D_CABLE: {
     int ni = monitorAt(curX, curY);
     if (ni >= 0) plugInto(dragIdx, ni);
@@ -357,7 +413,7 @@ static void release() {
   case D_PLUG: {
     int ni = monitorAt(curX, curY);
     Monitor& from = lay.monitors[dragIdx];
-    int mi = lay.machineIndex(from.shows);
+    int mi = deskOwner(lay.machineIndex(from.shows));  // a console: its box goes with the plug
     if (ni == dragIdx) break;
     if (ni >= 0 && mi >= 0) plugInto(mi, ni, dragIdx);
     else if (lay.switcherOnline) { hub.send("untie " + from.name); from.shows.clear(); }
@@ -388,12 +444,35 @@ static void release() {
     else say(verb + "the switcher, output " + std::to_string(m.output) + " (VGA)");
     break;
   }
+  default:
+    break;
+  }
+}
+
+static void deskPress(int x, int y) {
+  int i;
+  if ((i = plugAt(x, y)) >= 0) { drag = D_PLUG; dragIdx = i; }
+  else if ((i = monitorAt(x, y)) >= 0) { drag = D_PRESS_MON; dragIdx = i; }
+  else if ((i = cardAt(x, y)) >= 0) { drag = D_PRESS_CARD; dragIdx = i; }
+}
+
+static void deskMoved(bool far) {
+  if (drag == D_PRESS_CARD && far) { drag = D_CABLE; sceneDirty = true; }
+  if (drag == D_PRESS_MON && far) { drag = D_MON; gridFrozen = true; sceneDirty = true; }
+}
+
+// Touches that work the same on every page, then the page's own
+static void release() {
+  switch (drag) {
   case D_PRESS_LOCK:
     hub.send("lock");
     lay.locked = !lay.locked;
     break;
   case D_PRESS_BACK:
     if (backBtn.has(curX, curY)) wantBack = true;
+    break;
+  case D_PRESS_TAB:
+    if (dragIdx < (int)tabRects.size() && tabRects[dragIdx].has(curX, curY)) showPage(dragIdx);
     break;
   case D_MENU_TAP: {  // still on the button it went down on?
     const Rect& r = dragIdx == B_DEFAULT ? BTN_DEFAULT : dragIdx == B_USE ? BTN_USE : BTN_DONE;
@@ -405,6 +484,7 @@ static void release() {
     pickTo(curX, curY, true);
     break;
   default:
+    if (page) page->release();
     break;
   }
   drag = D_NONE;
@@ -417,6 +497,7 @@ static void touchInput(bool down, int x, int y) {
   if (down && !was) {  // press
     pressX = curX = x; pressY = curY = y;
     int i;
+    drag = D_NONE;
     pressAt = nowMs();
     if (embedded && backBtn.has(x, y)) drag = D_PRESS_BACK;
     else if (!hub.connected() || !lay.valid) drag = D_NONE;
@@ -430,17 +511,18 @@ static void touchInput(bool down, int x, int y) {
       else drag = D_NONE;
     }
     else if (lockBtn.has(x, y)) drag = D_PRESS_LOCK;
-    else if ((i = plugAt(x, y)) >= 0) { drag = D_PLUG; dragIdx = i; }
-    else if ((i = monitorAt(x, y)) >= 0) { drag = D_PRESS_MON; dragIdx = i; }
-    else if ((i = cardAt(x, y)) >= 0) { drag = D_PRESS_CARD; dragIdx = i; }
+    else {
+      for (i = 0; i < (int)tabRects.size(); i++)
+        if (tabRects[i].has(x, y)) { drag = D_PRESS_TAB; dragIdx = i; }
+      if (drag != D_PRESS_TAB && page) page->press(x, y);
+    }
     sceneDirty = true;
   } else if (down && was) {  // move
     if ((x != curX || y != curY) && drag != D_NONE && drag != D_LONG && drag != D_MENU_TAP) fingerDirty = true;
     curX = x; curY = y;
     if (drag == D_PICK_SV || drag == D_PICK_HUE) { pickTo(x, y, false); fingerDirty = false; }
     bool far = abs(x - pressX) + abs(y - pressY) > 14;
-    if (drag == D_PRESS_CARD && far) { drag = D_CABLE; sceneDirty = true; }
-    if (drag == D_PRESS_MON && far) { drag = D_MON; gridFrozen = true; sceneDirty = true; }
+    if (page) page->moved(far);
   } else if (!down && was) {
     release();
   }
@@ -580,45 +662,55 @@ static void drawPlugSocket(const Monitor& m, const Rect& cell) {
   G->drawRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(0x0A0C0F));
 }
 
-static void drawCard(int i, bool pressed) {
+// A machine's card: picture, name, a status line, and the knob on top its
+// cable comes out of.  The same card on the desk and on a box's page.
+static void drawCard(int i, const Rect& r, bool pressed) {
   Machine& m = lay.machines[i];
-  Rect r = cardRect(i);
   uint32_t col = colorOf(i);
   bool kbd = m.name == lay.active;
+  bool console = !m.via.empty();
   G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(pressed ? 0x262D37 : PANEL_BG));
   if (kbd)
     for (int k = 0; k < 3; k++) G->drawRoundRect(r.x + k, r.y + k, r.w - 2 * k, r.h - 2 * k, 14 - k, C(ACCENT));
   else
     G->drawRoundRect(r.x, r.y, r.w, r.h, 14, C(LINE));
-  bool lit = m.ready || !m.agent;  // consoles have no agent to wait for
-  drawArt(*G, m.art, r.x + r.w / 2, r.y + 84, std::min(1.0f, (r.w - 40) / 160.0f), lit ? 0 : 0.45f,
-          pressed ? 0x262D37 : PANEL_BG);
-  text(m.label.c_str(), r.x + r.w / 2, r.y + 158, lit ? TEXT : MUTED, &fonts::FreeSansBold12pt7b);
+  bool lit = m.ready || !m.agent || console;  // consoles and boxes have no agent to wait for
+  float sc = std::min(1.0f, (r.w - 40) / 160.0f);
+  drawArt(*G, m.art, r.x + r.w / 2, r.y + (int)(r.h * 0.41f), sc, lit ? 0 : 0.45f, pressed ? 0x262D37 : PANEL_BG);
+  text(m.label.c_str(), r.x + r.w / 2, r.y + r.h - 46, lit ? TEXT : MUTED, &fonts::FreeSansBold12pt7b);
   // status line
-  int y = r.y + 188;
-  const char* st = !m.agent ? "video only"
-                 : !m.ready ? "offline"
-                 : kbd ? "keyboard"
-                 : m.kbd && !m.soft ? "PS/2 only"   // booting, or no agent: keys still work
-                 : m.kbd ? "online + PS/2" : "online";
-  char wire[24];
+  int y = r.y + r.h - 16;
+  std::string st;
+  if (kbd) st = console ? "keyboard + pad" : "keyboard";
+  else if (!m.plugged.empty()) st = std::string("has ") + labelOf(m.plugged);
+  else if (lay.isBox(m.name)) st = "nothing in it";
+  else if (console) st = m.pad ? "pad dongle" : "no pad dongle";
+  else if (!m.agent) st = "video only";
+  else if (!m.ready) st = "offline";
+  else if (m.kbd && !m.soft) st = "PS/2 only";   // booting, or no agent: keys still work
+  else st = m.kbd ? "online + PS/2" : "online";
+  char wire[32];
   bool own = false;
   for (auto& mon : lay.monitors) if (mon.fixed == m.name) own = true;
-  if (m.input) snprintf(wire, sizeof wire, "in %d", m.input);
+  Machine* box = console ? lay.machine(m.via) : nullptr;
+  bool inBox = box && box->plugged == m.name;
+  if (console && (inBox || !m.input)) snprintf(wire, sizeof wire, inBox ? "plugged in" : "unplugged");
+  else if (m.input) snprintf(wire, sizeof wire, "in %d", m.input);
   else snprintf(wire, sizeof wire, own ? "own screen" : "not wired");
   G->setFont(&fonts::FreeSans9pt7b);
-  int w1 = G->textWidth(st), w2 = G->textWidth(wire);
+  int w1 = G->textWidth(st.c_str()), w2 = G->textWidth(wire);
   int x = r.x + r.w / 2 - (14 + w1 + 22 + w2 + 16) / 2;
-  G->fillSmoothCircle(x + 5, y, 5, C(m.ready ? OK_C : 0x59606B));
-  text(st, x + 14, y, m.ready ? 0xC9D1DB : MUTED, &fonts::FreeSans9pt7b, middle_left);
+  bool good = m.ready || (lay.isBox(m.name) && !m.plugged.empty());
+  G->fillSmoothCircle(x + 5, y, 5, C(good ? OK_C : 0x59606B));
+  text(st.c_str(), x + 14, y, good ? 0xC9D1DB : MUTED, &fonts::FreeSans9pt7b, middle_left);
   int cx = x + 14 + w1 + 22;
   G->fillSmoothRoundRect(cx - 8, y - 11, w2 + 16, 22, 11, C(0x2B323C));
   text(wire, cx, y, 0xC9D1DB, &fonts::FreeSans9pt7b, middle_left);
   // the knob the cables come out of
-  int px, py;
-  plugPos(i, px, py);
+  int px = r.x + r.w / 2, py = r.y;
+  bool wired = m.input || inBox || (console && box);
   G->fillSmoothCircle(px, py, 12, C(0x0A0C0F));
-  G->fillSmoothCircle(px, py, 9, C(m.input ? col : 0x4B5563));
+  G->fillSmoothCircle(px, py, 9, C(wired ? col : 0x4B5563));
 }
 
 static int chip(int right, int y, const char* s, uint32_t dot, uint32_t fg = 0xC9D1DB, Rect* out = nullptr) {
@@ -630,6 +722,33 @@ static int chip(int right, int y, const char* s, uint32_t dot, uint32_t fg = 0xC
   text(s, x + (dot ? 26 : 12), y, fg, &fonts::FreeSans9pt7b, middle_left);
   if (out) *out = {x, y - 15, w, 30};
   return x - 10;
+}
+
+static int pageCount();
+static Page* pageAt(int i);
+
+// The page tabs, from x; returns where they end
+static int drawTabs(int x) {
+  tabRects.clear();
+  int n = lay.valid ? pageCount() : 0;
+  if (n < 2) {  // just the desk: a plain word, as before there were pages
+    text("desk", x + 4, HEAD_H / 2 + 1, MUTED, &fonts::FreeSans12pt7b, middle_left);
+    return x + 60;
+  }
+  G->setFont(&fonts::FreeSans12pt7b);
+  for (int i = 0; i < n; i++) {
+    Page* p = pageAt(i);
+    std::string t = p->title();
+    int w = G->textWidth(t.c_str()) + 32;
+    Rect r{x, 9, w, HEAD_H - 18};
+    bool on = p == page, held = drag == D_PRESS_TAB && dragIdx == i;
+    G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, r.h / 2, C(on ? 0x2B3A33 : held ? 0x2A303A : 0x1A1F26));
+    if (on) G->drawRoundRect(r.x, r.y, r.w, r.h, r.h / 2, C(ACCENT));
+    text(t.c_str(), r.x + w / 2, HEAD_H / 2 + 1, on ? TEXT : MUTED, &fonts::FreeSans12pt7b);
+    tabRects.push_back(r);
+    x += w + 8;
+  }
+  return x;
 }
 
 static void drawHeader() {
@@ -651,7 +770,7 @@ static void drawHeader() {
     tx0 = backBtn.x + backBtn.w + 18;
   }
   text("RetroKM", tx0, HEAD_H / 2, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
-  text("desk", tx0 + 116, HEAD_H / 2 + 1, MUTED, &fonts::FreeSans12pt7b, middle_left);
+  int tabsEnd = drawTabs(tx0 + 112);
   int x = SW - 20, y = HEAD_H / 2;
   if (hub.connected() && lay.valid) {
     x = chip(x, y, lay.locked ? "edges locked" : "edges free", 0, lay.locked ? 0xFBBF24 : 0xC9D1DB, &lockBtn);
@@ -667,7 +786,7 @@ static void drawHeader() {
   if (!toast.empty() && nowMs() < toastUntil) {
     G->setFont(&fonts::FreeSans12pt7b);
     int w = G->textWidth(toast.c_str()) + 40;
-    int tx = std::max(embedded ? 420 : 250, std::min(SW / 2 - w / 2, x - w));
+    int tx = std::max(tabsEnd + 12, std::min(SW / 2 - w / 2, x - w));
     G->fillSmoothRoundRect(tx, 9, w, HEAD_H - 18, 19, C(0x3B2F14));
     text(toast.c_str(), tx + w / 2, HEAD_H / 2, 0xFDE68A, &fonts::FreeSans12pt7b);
   }
@@ -683,6 +802,7 @@ static int otherInputMachine(const Monitor& m) {
 }
 
 static void drawMenu();
+static void deskDraw();
 
 static void drawScene() {
   G = &scene;
@@ -702,13 +822,17 @@ static void drawScene() {
     text(buf, SW / 2, SH / 2, MUTED, &fonts::FreeSans12pt7b);
     return;
   }
-
-  // desk surface
+  // the surfaces: the page's top area and the card shelf
   G->fillSmoothRoundRect(AX - 8, AY - 4, AW + 16, AH + 8, 16, C(0x181C22));
   G->fillSmoothRoundRect(AX - 8, CY - 22, AW + 16, CH + 30, 16, C(0x12151A));
-  text("drag a machine onto a monitor   |   pull a plug off to unplug   |   "
-       "drag monitors to rearrange   |   tap a machine for the keyboard",
-       SW / 2, SH - 9, 0x5B6573, &fonts::FreeSans9pt7b);
+  if (page) {
+    text(page->hint(), SW / 2, SH - 9, 0x5B6573, &fonts::FreeSans9pt7b);
+    page->draw();
+  }
+  drawMenu();
+}
+
+static void deskDraw() {
 
   // drop slots next to the monitors while one is being moved
   if (drag == D_MON) {
@@ -768,10 +892,8 @@ static void drawScene() {
   }
 
   // machines
-  for (size_t i = 0; i < lay.machines.size(); i++)
-    drawCard(i, (drag == D_PRESS_CARD || drag == D_CABLE || drag == D_LONG) && (int)i == dragIdx);
-  drawMenu();
-
+  for (size_t k = 0; k < desk.size(); k++)
+    drawCard(desk[k], cardRect(k), (drag == D_PRESS_CARD || drag == D_CABLE || drag == D_LONG) && desk[k] == dragIdx);
 }
 
 static void button(const Rect& r, const char* label, uint32_t bg, uint32_t fg) {
@@ -830,12 +952,15 @@ static void outline(const MonGeo& geo, uint32_t col) {  // around a monitor, on 
 // Whatever is under the finger, drawn over the scene; ink collects its extent
 static void drawFinger() {
   G = &frame;
-  if (!lay.valid) return;
+  if (lay.valid && page) page->finger();
+}
+
+static void deskFinger() {
   if (drag == D_CABLE || drag == D_PLUG) {  // the monitor it would land on
     int ni = monitorAt(curX, curY);
     if (ni >= 0) {
       auto& m = lay.monitors[ni];
-      int mi = drag == D_CABLE ? dragIdx : lay.machineIndex(lay.monitors[dragIdx].shows);
+      int mi = drag == D_CABLE ? dragIdx : deskOwner(lay.machineIndex(lay.monitors[dragIdx].shows));
       bool okDrop = m.fixed.empty() && mi >= 0 && lay.machines[mi].input && lay.switcherOnline;
       if (mi >= 0 && m.shared == lay.machines[mi].name) okDrop = true;  // its other input
       if (drag == D_PLUG && ni == dragIdx) okDrop = true;
@@ -882,6 +1007,269 @@ static void drawFinger() {
     drawPlugSocket(m, cell);
     ink.add(cell.x - 12, cell.y - 12, cell.x + cell.w + 20, cell.y + cell.h + 50);
   }
+}
+
+// ------------------------------------------------------------ the pages
+
+struct DeskPage : Page {
+  std::string key() const override { return ""; }
+  std::string title() const override { return "desk"; }
+  const char* hint() const override {
+    return "drag a machine onto a monitor   |   pull a plug off to unplug   |   "
+           "drag monitors to rearrange   |   tap a machine for the keyboard";
+  }
+  void draw() override { deskDraw(); }
+  void finger() override { deskFinger(); }
+  void press(int x, int y) override { deskPress(x, y); }
+  void moved(bool far) override { deskMoved(far); }
+  void release() override { deskRelease(); }
+  bool carrying() const override { return drag == D_CABLE || drag == D_PLUG || drag == D_MON; }
+};
+
+// A box the hub cannot switch (the RetroTINK) and everything behind it: the
+// box on top, boxes in front of it (a switcher) in the middle, the consoles
+// on the shelf.  Drag a console's cable into its box to say it is plugged
+// in; pull a cable out of a box to unplug it.  Built from the layout alone,
+// so a new box in the hub config gets its page without code.
+struct BoxPage : Page {
+  std::string root;  // the box at the top
+  explicit BoxPage(const std::string& r) : root(r) {}
+
+  std::string key() const override { return root; }
+  std::string title() const override {
+    if (lay.rootBoxes().size() < 2) return "consoles";
+    return labelOf(root);
+  }
+  const char* hint() const override {
+    return "drag a console's cable into the box it is plugged into   |   pull a cable out to unplug   |   "
+           "tap a console for the keyboard and pad";
+  }
+
+  struct Item { int mi; Rect r; bool box; };
+  std::vector<Item> items;
+
+  // Where everything goes, from the layout
+  void place() {
+    items.clear();
+    int ri = lay.machineIndex(root);
+    if (ri < 0) return;
+    std::vector<std::vector<int>> rows;  // boxes in front of the root, by depth
+    std::vector<int> consoles;
+    for (size_t i = 0; i < lay.machines.size(); i++) {
+      if ((int)i == ri || lay.rootOf(i) != ri) continue;
+      if (lay.isBox(lay.machines[i].name)) {
+        size_t d = lay.depthOf(i);
+        if (rows.size() < d) rows.resize(d);
+        rows[d - 1].push_back((int)i);
+      } else {
+        consoles.push_back((int)i);
+      }
+    }
+    int rootH = rows.empty() ? 190 : 150;
+    int rootY = rows.empty() ? AY + 70 : AY + 8;
+    items.push_back({ri, {SW / 2 - 330, rootY, 660, rootH}, true});
+    int top = rootY + rootH + 60, bottom = CY - 40;
+    int rh = rows.empty() ? 0 : std::min(140, (bottom - top) / (int)rows.size() - 20);
+    for (size_t d = 0; d < rows.size(); d++)
+      for (size_t k = 0; k < rows[d].size(); k++) {
+        Rect r = rowRect(k, rows[d].size(), top + d * (rh + 20), rh, 300);
+        items.push_back({rows[d][k], r, true});
+      }
+    for (size_t k = 0; k < consoles.size(); k++)
+      items.push_back({consoles[k], rowRect(k, consoles.size(), CY, CH), false});
+  }
+
+  const Item* item(int mi) const {
+    for (auto& it : items) if (it.mi == mi) return &it;
+    return nullptr;
+  }
+  // a cable leaves an item from the top, and goes into a box at the bottom
+  static void outPos(const Item& it, int& x, int& y) { x = it.r.x + it.r.w / 2; y = it.r.y; }
+  static void inPos(const Item& it, int& x, int& y) { x = it.r.x + it.r.w / 2; y = it.r.y + it.r.h; }
+
+  int boxAt(int x, int y) const {
+    for (auto& it : items)
+      if (it.box && Rect{it.r.x - 10, it.r.y - 10, it.r.w + 20, it.r.h + 40}.has(x, y)) return it.mi;
+    return -1;
+  }
+  int itemAt(int x, int y) const {
+    for (auto& it : items) {
+      int kx, ky;
+      outPos(it, kx, ky);
+      bool knob = it.mi != lay.machineIndex(root) && (x - kx) * (x - kx) + (y - ky) * (y - ky) < 26 * 26;
+      if (it.r.has(x, y) || knob) return it.mi;
+    }
+    return -1;
+  }
+  int socketAt(int x, int y) const {  // a box with a cable in it
+    for (auto& it : items) {
+      if (!it.box || lay.machines[it.mi].plugged.empty()) continue;
+      int sx, sy;
+      inPos(it, sx, sy);
+      if ((x - sx) * (x - sx) + (y - sy) * (y - sy) < 30 * 30) return it.mi;
+    }
+    return -1;
+  }
+
+  // Where the box's picture ends up: the console the chain leads to
+  int endOf(int mi) const {
+    for (int n = 0; mi >= 0 && n < 32 && !lay.machines[mi].plugged.empty(); n++)
+      mi = lay.machineIndex(lay.machines[mi].plugged);
+    return mi;
+  }
+
+  void drawBox(const Item& it, bool pressed, bool isRoot) {
+    const Machine& m = lay.machines[it.mi];
+    const Rect& r = it.r;
+    uint32_t col = colorOf(it.mi);
+    G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 16, C(pressed ? 0x262D37 : PANEL_BG));
+    G->drawRoundRect(r.x, r.y, r.w, r.h, 16, C(mix(col, PANEL_BG, 0.45f)));
+    float sc = std::min(1.3f, (r.h - 30) / 120.0f);
+    int ax = r.x + (int)(100 * sc) + 10;
+    drawArt(*G, m.art, ax, r.y + r.h / 2, sc, 0, pressed ? 0x262D37 : PANEL_BG);
+    int tx = ax + (int)(90 * sc) + 6;
+    text(m.label.c_str(), tx, r.y + 30, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
+    std::string l1, l2;
+    int end = drag == D_BOXPLUG && dragIdx == it.mi ? it.mi : endOf(it.mi);
+    l1 = end != it.mi ? std::string("showing ") + labelOf(lay.machines[end].name) : "nothing plugged in";
+    if (isRoot) {  // where the box itself goes
+      std::string on;
+      for (auto& mon : lay.monitors)
+        if (!mon.capture && (mon.fixed == m.name || (!mon.sharedOn && m.input && mon.input == m.input)))
+          on += (on.empty() ? "" : ", ") + (mon.label.empty() ? mon.name : mon.label);
+      if (m.input) l2 = "into the switcher, input " + std::to_string(m.input) + (on.empty() ? "" : "  -  on " + on);
+    } else {
+      Machine* up = lay.machine(m.via);
+      bool in = up && up->plugged == m.name;
+      l2 = std::string(in ? "plugged into " : "not plugged into ") + labelOf(m.via);
+    }
+    text(l1.c_str(), tx, r.y + 62, end != it.mi ? 0xC9D1DB : MUTED, &fonts::FreeSans12pt7b, middle_left);
+    if (!l2.empty()) text(l2.c_str(), tx, r.y + 92, MUTED, &fonts::FreeSans9pt7b, middle_left);
+    // its input socket
+    int sx, sy;
+    inPos(it, sx, sy);
+    bool pulling = drag == D_BOXPLUG && dragIdx == it.mi;
+    Machine* in = pulling ? nullptr : lay.machine(m.plugged);
+    G->fillSmoothRoundRect(sx - 14, sy - 7, 28, 14, 4, C(in ? colorOf(lay.machineIndex(in->name)) : 0x3A414C));
+    G->drawRoundRect(sx - 14, sy - 7, 28, 14, 4, C(0x0A0C0F));
+    if (!isRoot) {  // and the knob its own cable leaves from
+      int kx, ky;
+      outPos(it, kx, ky);
+      G->fillSmoothCircle(kx, ky, 12, C(0x0A0C0F));
+      G->fillSmoothCircle(kx, ky, 9, C(col));
+    }
+  }
+
+  void draw() override {
+    place();
+    int ri = lay.machineIndex(root);
+    bool held = drag == D_PRESS_CARD || drag == D_WIRE || drag == D_LONG;
+    for (auto& it : items) {
+      if (it.box) drawBox(it, held && it.mi == dragIdx, it.mi == ri);
+      else drawCard(it.mi, it.r, held && it.mi == dragIdx);
+    }
+    // the cables that are plugged in (not one being pulled out)
+    for (auto& it : items) {
+      if (!it.box || (drag == D_BOXPLUG && it.mi == dragIdx)) continue;
+      const Item* src = item(lay.machineIndex(lay.machines[it.mi].plugged));
+      if (!src) continue;
+      int x0, y0, x1, y1;
+      outPos(*src, x0, y0);
+      inPos(it, x1, y1);
+      cable(x0, y0, x1, y1, colorOf(src->mi));
+    }
+  }
+
+  void finger() override {
+    place();
+    int from = -1;
+    if (drag == D_WIRE) {
+      from = dragIdx;
+      int bi = boxAt(curX, curY);
+      if (bi >= 0 && bi != dragIdx) {
+        const Item* b = item(bi);
+        bool ok = lay.machines[dragIdx].via == lay.machines[bi].name;
+        for (int i = 0; i < 4; i++)
+          G->drawRoundRect(b->r.x - 6 - i, b->r.y - 6 - i, b->r.w + 12 + 2 * i, b->r.h + 12 + 2 * i, 18,
+                           C(ok ? ACCENT : BAD_C));
+        ink.add(b->r.x - 12, b->r.y - 12, b->r.x + b->r.w + 12, b->r.y + b->r.h + 12);
+      }
+    } else if (drag == D_BOXPLUG) {
+      from = lay.machineIndex(lay.machines[dragIdx].plugged);
+    }
+    const Item* src = item(from);
+    if (!src) return;
+    int x0, y0;
+    outPos(*src, x0, y0);
+    uint32_t col = colorOf(from);
+    cable(x0, y0, curX, curY, col);
+    G->fillSmoothRoundRect(curX - 12, curY - 7, 24, 14, 4, C(col));
+    ink.add(curX - 14, curY - 9, curX + 14, curY + 9);
+  }
+
+  void press(int x, int y) override {
+    place();
+    int i;
+    if ((i = socketAt(x, y)) >= 0) { drag = D_BOXPLUG; dragIdx = i; }
+    else if ((i = itemAt(x, y)) >= 0) { drag = D_PRESS_CARD; dragIdx = i; }
+  }
+
+  void moved(bool far) override {
+    if (drag == D_PRESS_CARD && far && !lay.machines[dragIdx].via.empty()) { drag = D_WIRE; sceneDirty = true; }
+  }
+
+  void release() override {
+    place();
+    if (drag == D_PRESS_CARD) {  // a tap: the keyboard and pad to it (a box: to what is in it)
+      int end = endOf(dragIdx);
+      if (lay.isBox(lay.machines[dragIdx].name) && end == dragIdx)
+        say(lay.machines[dragIdx].label + " has nothing plugged in");
+      else tapCard(end);
+    } else if (drag == D_WIRE) {
+      int bi = boxAt(curX, curY);
+      Machine& m = lay.machines[dragIdx];
+      if (bi < 0 || bi == dragIdx) return;
+      Machine& b = lay.machines[bi];
+      if (m.via != b.name) { say(m.label + "'s cable goes to the " + labelOf(m.via)); return; }
+      if (b.plugged == m.name) return;
+      hub.send("plug " + m.name);
+      b.plugged = m.name;  // the hub confirms in a moment
+      say(m.label + " plugged in");
+    } else if (drag == D_BOXPLUG) {
+      if (boxAt(curX, curY) == dragIdx) return;  // put back where it was
+      Machine& b = lay.machines[dragIdx];
+      hub.send("unplug " + b.name);
+      say(labelOf(b.plugged) + std::string(" unplugged"));
+      b.plugged.clear();
+    }
+  }
+
+  bool carrying() const override { return drag == D_WIRE || drag == D_BOXPLUG; }
+};
+
+static DeskPage deskPage;
+static std::vector<BoxPage> boxPages;
+
+static int pageCount() { return 1 + (int)boxPages.size(); }
+static Page* pageAt(int i) { return i <= 0 ? (Page*)&deskPage : (Page*)&boxPages[i - 1]; }
+
+static void showPage(int tab) {
+  Page* p = pageAt(std::max(0, std::min(tab, pageCount() - 1)));
+  if (p == page) return;
+  page = p;
+  drag = D_NONE;
+  menuIdx = -1;
+  sceneDirty = true;
+}
+
+// After each layout: one page per root box; stay on the same page if it is still there
+static void buildPages() {
+  std::string was = page ? page->key() : "";
+  boxPages.clear();
+  for (int ri : lay.rootBoxes()) boxPages.emplace_back(lay.machines[ri].name);
+  page = &deskPage;
+  for (auto& b : boxPages) if (b.key() == was) page = &b;
+  if (was != page->key()) drag = D_NONE;
 }
 
 // The sprites are portrait (the panel's own layout) and drawn on through
@@ -933,7 +1321,7 @@ static void push(const Box* b) {  // frame -> panel (null: all of it)
 static Box lastInk;
 static void render() {
   static bool frameStale = true;  // frame does not hold the scene yet
-  bool under = drag == D_CABLE || drag == D_PLUG || drag == D_MON;
+  bool under = page && page->carrying();
   if (sceneDirty) {  // the whole thing
     sceneDirty = fingerDirty = false;
     drawScene();
@@ -1041,6 +1429,7 @@ void rkmPanelBegin(const char* host, int port, bool inside) {
     }
   }
 #endif
+  page = &deskPage;
   hub.begin(host, port);
   hub.onLine = [](const std::string& line) {
     if (line.rfind("layout ", 0) == 0) {
@@ -1054,6 +1443,8 @@ void rkmPanelBegin(const char* host, int port, bool inside) {
         bool sameMachines = l.machines.size() == lay.machines.size();
         lay = l;
         if (!sameMachines) drag = D_NONE;
+        computeDesk();
+        buildPages();
         sceneDirty = true;
       }
     } else if (line.rfind("error ", 0) == 0) {
