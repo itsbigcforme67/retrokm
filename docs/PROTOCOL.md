@@ -100,28 +100,49 @@ corner, then one MOVEREL to the entry point. Target-side pointer
 acceleration makes this approximate; turn acceleration off on the target
 where possible.
 
-## Game controllers
+## Accessories and game controllers
 
-A game pad plugged into (or paired with) the hub's machine follows the
-keyboard: the screen that has the keyboard gets the pad too. A device with
-the `PAD` capability (the Xbox dongle, playing an original Xbox controller
-on a console's pad port) gets ENTER, LEAVE, PAD and RESET; all four but PAD
-mean "let go of everything, sticks to the centre".
+Accessories are the things you hold: the keyboard + mouse, and each game
+pad plugged into or paired with the hub's machine. Each is linked to the
+machines it may drive (lines on the panel's accessories page), many to
+many; links are kept in the state file. An accessory's input goes to the
+machine in focus (the green box: where the pointer is, or tapped on the
+panel) if it is linked there, and also to every linked machine whose
+"receive inputs while out of focus" toggle for that kind of accessory is
+on. The keyboard + mouse can only be moved into machines it is linked to;
+out of focus a machine gets its keys, not the pointer. Kinds are a table in
+the hub (`acc_kinds`); the layout JSON lists them, so a new kind needs no
+panel change.
 
-PAD carries the whole state every time, so a lost or late frame never
-leaves a button stuck: buttons (`RKM_PAD_*` bits: A 0001, B 0002, X 0004,
-Y 0008, LB 0010, RB 0020, Back 0040, Start 0080, Guide 0100, LS 0200,
-RS 0400, up 0800, down 1000, left 2000, right 4000, Share 8000), the
-triggers 0..255, and the sticks -32768..32767 with right and **up**
-positive. The hub sends one whenever the pad changes.
+A pad linked to a machine is a player there (P1..P4); several pads on the
+same player are merged into one (buttons OR'ed, the larger stick
+deflection wins). A device with the `PAD` capability (the Xbox dongle,
+playing an original Xbox controller on a console's pad port) plays one
+player and gets ENTER, LEAVE, PAD and RESET; all but PAD mean "let go of
+everything, sticks to the centre". Up to four may connect for one screen.
 
-The agent sends RUMBLE (strong and weak motor, 0..65535) whenever the game
-changes it; the hub plays it on the real pad while that screen has it.
+PAD carries one player's whole state every time (`pad` = player - 1), so a
+lost frame never leaves a button stuck: buttons (`RKM_PAD_*` bits: A 0001,
+B 0002, X 0004, Y 0008, LB 0010, RB 0020, Back 0040, Start 0080, Guide
+0100, LS 0200, RS 0400, up 0800, down 1000, left 2000, right 4000, Share
+8000), the triggers 0..255, and the sticks -32768..32767 with right and
+**up** positive. The hub sends one whenever that player's state changes,
+and the current state on ENTER.
 
-While the hub's own desktop has the keyboard, the pad is left to the
-desktop (games on the hub machine see it as usual). Elsewhere the hub
-grabs it. Guide + RB / Guide + LB hands the keyboard and pad to the next /
-previous screen that takes a pad (and the hub's desktop), without the mouse.
+The agent sends RUMBLE (its player, strong and weak motor, 0..65535)
+whenever the game changes it; the hub plays it on the real pads that are
+that player there right now.
+
+While the hub's own desktop is a target of a pad, the pad is left to the
+desktop (games on the hub machine see it as usual) and others get copies;
+otherwise the hub grabs it. Guide + RB / Guide + LB moves the focus to the
+next / previous machine that pad is linked to.
+
+Panel and control commands: `link <accessory> <screen> [player]`,
+`unlink <accessory> <screen>`, `always <screen> <kind> on|off`,
+`color <accessory> <rrggbb>|default`. The control port's
+`pad <hex> [lt rt lx ly rx ry]` plays a scripts-only pad: player 1 on the
+machine in focus.
 
 ## Consoles behind boxes (panel and control commands)
 

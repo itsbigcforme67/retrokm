@@ -108,7 +108,7 @@ try:
     pc.take(); xb.take()
 
     ctl("goto xbox")
-    check("pad player gets ENTER", [t for t, _ in xb.take()], [0x10])
+    check("pad player gets ENTER and the pad as it is", [t for t, _ in xb.take()], [0x10, 0x18])
     pc.take()
     ctl("pad 0809 10 255 1000 -2000 32767 -32768")
     check("pad state reaches the player", xb.take(), [pad(0x0809, 10, 255, 1000, -2000, 32767, -32768)])
@@ -122,11 +122,11 @@ try:
     ctl("pad 0100"); ctl("pad 0120")          # Guide, then Guide + RB
     check("Guide+RB hands the keyboard and pad over", "active: xbox" in ctl("status"), True)
     got = xb.take()
-    check("...the player gets ENTER, the combo is not passed on", [t for t, _ in got], [0x10])
+    check("...the player gets ENTER, the combo is not passed on", got, [(0x10, b""), pad(0)])
     ctl("pad 0100")                           # RB up, Guide still held: held back
     ctl("pad 0000")
     ctl("pad 0001")
-    check("combo buttons held back until Guide is let go", xb.take(), [pad(0), pad(0), pad(1)])
+    check("combo buttons held back until Guide is let go", xb.take(), [pad(1)])
 
     xb.send(0x19, struct.pack(">BHH", 0, 0xC000, 0x4000))   # rumble, no real pad here
     time.sleep(0.1)
@@ -140,7 +140,40 @@ try:
     time.sleep(0.3)
     check("a new pad connection replaces the old one", ("closed", b"") in xb.pump(0.3), True)
     ctl("pad 0002")
-    check("...and gets the pad", [f for f in xb2.take() if f[0] == 0x18], [pad(2)])
+    check("...and gets the pad (as it is, then the change)", [f for f in xb2.take() if f[0] == 0x18], [pad(1), pad(2)])
+
+    # --- accessories: links, players, out of focus -----------------------------
+    ctl("pad 0")
+    st = ctl("status")
+    check("the keyboard is an accessory linked everywhere",
+          "accessory keyboard" in st and "pc xbox ps2" in st.split("accessory keyboard")[1].split("\n")[0], True)
+    ctl("unlink keyboard xbox")
+    ctl("goto pc"); xb2.take(); pc.take()
+    ctl("rel 5000 0")
+    check("the mouse cannot reach a machine the keyboard is not linked to", "active: pc" in ctl("status"), True)
+    ctl("link keyboard xbox")
+    pc2 = FakeAgent("dell", caps=1)
+    time.sleep(0.2)
+    ctl("always dell kbm on")
+    pc.take(); pc2.take()
+    ctl("key a 1"); ctl("key a 0")
+    check("keys reach the machine in focus", [t for t, _ in pc.take()].count(0x16), 2)
+    check("...and a linked machine that takes keys out of focus", [t for t, _ in pc2.take()].count(0x16), 2)
+    ctl("always dell kbm off"); pc2.take()
+    ctl("key b 1"); ctl("key b 0")
+    check("...not once that is off", [t for t, _ in pc2.take()].count(0x16), 0)
+
+    # the xbox takes pad input while out of focus; scripts are player 1 everywhere
+    ctl("always xbox pad on")
+    xb2.take()
+    ctl("pad 0004")
+    check("a pad machine out of focus still gets the pad when told to", xb2.take(), [pad(4)])
+    ctl("always xbox pad off")
+    check("...and lets go when that is turned off", [t for t, _ in xb2.take()], [0x11])
+    ctl("pad 0")
+    st = ctl("status")
+    check("toggles are saved", sorted(l.strip() for l in open(conf + ".state") if l.startswith("always")), [])
+    check("links are saved", "link keyboard xbox 1" in open(conf + ".state").read(), True)
 finally:
     hub.terminate()
     print("\nlogs in", TMP)

@@ -8,6 +8,60 @@
 
 Config cfg;
 
+static void copy(char *dst, size_t n, const char *src);
+
+/* Kinds of accessory: id (config, state file, panel) and what the panel calls it */
+const AccKind acc_kinds[ACC_KINDS] = {
+    { "kbm", "keyboard + mouse" },
+    { "pad", "gamepads" },
+};
+
+int acc_kind(const char *id)
+{
+    int k;
+    for (k = 0; k < ACC_KINDS; k++)
+        if (!strcmp(acc_kinds[k].id, id)) return k;
+    return -1;
+}
+
+Accessory *acc_by_name(const char *name)
+{
+    int i;
+    for (i = 0; i < cfg.nacc; i++)
+        if (!strcmp(cfg.acc[i].name, name)) return &cfg.acc[i];
+    return NULL;
+}
+
+static Accessory *acc_new(const char *name, int kind, const char *label)
+{
+    Accessory *a;
+    if (cfg.nacc >= MAX_ACC) return NULL;
+    a = &cfg.acc[cfg.nacc++];
+    memset(a, 0, sizeof *a);
+    copy(a->name, sizeof a->name, name);
+    copy(a->label, sizeof a->label, label);
+    a->kind = kind;
+    a->color = -1;
+    return a;
+}
+
+/* A pad seen for the first time is linked to the hub's own desktop, where
+ * it is plugged in; draw lines on the panel to send it elsewhere. */
+Accessory *acc_add(const char *name, int kind, const char *label)
+{
+    Accessory *a = acc_by_name(name);
+    int i;
+    if (a) {
+        copy(a->label, sizeof a->label, label);
+        return a;
+    }
+    if (!(a = acc_new(name, kind, label))) return NULL;
+    for (i = 0; i < cfg.nscreens; i++)
+        if (screen_is_desktop(&cfg.screens[i])) a->player[i] = 1;
+    config_save_state();
+    return a;
+}
+
 static void load_state(void);
 
 static char mon_fixed[MAX_MONITORS][32];   /* resolved after the whole file is read */
@@ -307,6 +361,11 @@ bad:
         return -1;
     }
     for (i = 0; i < cfg.nscreens; i++) cfg.screens[i].config_color = cfg.screens[i].color;
+    {   /* the keyboard + mouse: may reach every machine until told otherwise */
+        Accessory *k = acc_new("keyboard", ACC_KBM, "Keyboard + mouse");
+        copy(k->about, sizeof k->about, "the USB keyboard and mouse on the hub");
+        for (i = 0; i < cfg.nscreens; i++) k->player[i] = 1;
+    }
     load_state();
     return 0;
 }
@@ -316,8 +375,11 @@ bad:
 static void load_state(void)
 {
     FILE *f = fopen(cfg.state_path, "r");
-    char line[128], name[32];
+    char line[256], name[32];
     int col, row, on;
+    unsigned char seen[MAX_ACC];        /* accessories whose links the file lists */
+
+    memset(seen, 0, sizeof seen);
 
     if (!f) return;
     while (fgets(line, sizeof line, f)) {
@@ -336,6 +398,27 @@ static void load_state(void)
             else if (sscanf(line, "plug %31s %31s", name, what) == 2 && (s = screen_by_name(what)) &&
                      s->via && !strcmp(s->via->name, name))
                 s->via->plugged = s;
+            else if (sscanf(line, "accessory %31s %31s %n", name, what, &col) == 2 && acc_kind(what) >= 0) {
+                char *label = trim(line + col);
+                Accessory *a = acc_by_name(name);
+                if (!a) a = acc_new(name, acc_kind(what), label);
+                if (a && !seen[a - cfg.acc]) {      /* the file says where it is linked */
+                    seen[a - cfg.acc] = 1;
+                    memset(a->player, 0, sizeof a->player);
+                }
+            }
+            else if (sscanf(line, "link %31s %31s %d", name, what, &on) == 3) {
+                Accessory *a = acc_by_name(name);
+                if (a && (s = screen_by_name(what)) && on >= 1 && on <= MAX_PLAYERS)
+                    a->player[s - cfg.screens] = (unsigned char)on;
+            }
+            else if (sscanf(line, "always %31s %31s", name, what) == 2 && (s = screen_by_name(name)) &&
+                     acc_kind(what) >= 0)
+                s->always[acc_kind(what)] = 1;
+            else if (sscanf(line, "acolor %31s %x", name, &rgb) == 2) {
+                Accessory *a = acc_by_name(name);
+                if (a) a->color = (long)(rgb & 0xFFFFFF);
+            }
         }
     }
     fclose(f);
@@ -360,6 +443,19 @@ int config_save_state(void)
     for (i = 0; i < cfg.nscreens; i++)
         if (cfg.screens[i].color != cfg.screens[i].config_color && cfg.screens[i].color >= 0)
             fprintf(f, "color %s %06lx\n", cfg.screens[i].name, (unsigned long)cfg.screens[i].color);
+    for (i = 0; i < cfg.nacc; i++) {                 /* accessories and where they are linked */
+        const Accessory *a = &cfg.acc[i];
+        int k;
+        fprintf(f, "accessory %s %s %s\n", a->name, acc_kinds[a->kind].id, a->label);
+        for (k = 0; k < cfg.nscreens; k++)
+            if (a->player[k]) fprintf(f, "link %s %s %d\n", a->name, cfg.screens[k].name, a->player[k]);
+        if (a->color >= 0) fprintf(f, "acolor %s %06lx\n", a->name, (unsigned long)a->color);
+    }
+    for (i = 0; i < cfg.nscreens; i++) {
+        int k;
+        for (k = 0; k < ACC_KINDS; k++)
+            if (cfg.screens[i].always[k]) fprintf(f, "always %s %s\n", cfg.screens[i].name, acc_kinds[k].id);
+    }
     for (i = 0; i < cfg.nscreens; i++)               /* which console is wired into each box */
         if (cfg.screens[i].plugged) fprintf(f, "plug %s %s\n", cfg.screens[i].name, cfg.screens[i].plugged->name);
     if (fclose(f) != 0 || rename(tmp, cfg.state_path) != 0) {

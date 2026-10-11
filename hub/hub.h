@@ -13,6 +13,15 @@
 #define MAX_DEVICES   16
 #define EXTRON_MAX_IO 64
 #define MAX_AREAS     8
+#define MAX_ACC       12          /* accessories: the keyboard + mouse, game pads */
+#define MAX_PADS      4           /* game pads open at once */
+#define MAX_PLAYERS   4           /* pad players (dongles) per screen */
+
+/* Kinds of accessory.  A new kind (a mic, a headset): add it here and to
+ * acc_kinds[] in config.c; the panel builds its toggles from the layout. */
+enum { ACC_KBM, ACC_PAD, ACC_KINDS };
+typedef struct { const char *id, *label; } AccKind;
+extern const AccKind acc_kinds[ACC_KINDS];
 
 struct Screen;
 
@@ -55,7 +64,9 @@ typedef struct Screen {
     Conn *clip;                  /* connection with RKM_CAP_CLIP */
     Conn *buddy;                 /* connection with RKM_CAP_BUDDY */
     Conn *sound;                 /* connection with RKM_CAP_SOUND */
-    Conn *pad;                   /* plays a game pad (RKM_CAP_PAD) */
+    Conn *pads[MAX_PLAYERS];     /* pad players (RKM_CAP_PAD): the Xbox dongle(s) */
+    int always[ACC_KINDS];       /* receive this kind of input while out of focus */
+    char about[160];             /* how it is attached, for the panel (built by the hub) */
     long long last_input_ms;     /* the hub last sent it input (0 = never) */
     long long last_key_ms;       /* ... a key */
     unsigned clip_gen;           /* hub clipboard generation this screen has */
@@ -98,6 +109,20 @@ typedef struct PadState {
     short lx, ly, rx, ry;        /* right and up positive */
 } PadState;
 
+/* Something you hold, linked to the machines it may drive: the keyboard +
+ * mouse, a game pad.  Pads are remembered (state file) while unplugged. */
+typedef struct Accessory {
+    char name[32];               /* stable id: "keyboard", "pad-045e0b22-1a2b3c" */
+    char label[64];
+    char about[96];              /* how it is attached */
+    int kind;                    /* ACC_* */
+    int present;
+    long color;                  /* its lines on the panel; -1 = from its kind */
+    unsigned char player[MAX_SCREENS];   /* 0 = not linked; pads: player 1..4 there */
+    PadState st;                 /* pads: as last read */
+    int scripted;                /* the control port's pad: not saved, not on the panel */
+} Accessory;
+
 typedef struct Hotkey {
     unsigned char mods;          /* RKM_MOD_CTRL etc, side-insensitive */
     unsigned char usage;
@@ -127,6 +152,8 @@ typedef struct Config {
     int nmonitors;
     Hotkey hotkeys[MAX_HOTKEYS];
     int nhotkeys;
+    Accessory acc[MAX_ACC];      /* [0] is the keyboard + mouse */
+    int nacc;
 } Config;
 
 extern Config cfg;
@@ -139,15 +166,19 @@ void hub_motion(int dx, int dy);
 void hub_button(int btn, int down);
 void hub_wheel(int dy, int dx);
 void hub_key(int evcode, int usage, int state);
-void hub_pad(const PadState *p);
+void hub_pad(Accessory *a);             /* a pad's state changed (a->st) */
 void hub_extron_changed(void);
 int hub_routing(void);                  /* some screen is taking input */
 Screen *screen_by_name(const char *name);
+int screen_is_desktop(const Screen *s); /* the hub's own desktop (uinput, or an agent on this machine) */
 Monitor *monitor_by_name(const char *name);
 
 /* config.c */
 int config_load(const char *path);
 int config_save_state(void);
+Accessory *acc_by_name(const char *name);
+Accessory *acc_add(const char *name, int kind, const char *label);   /* known, or new with default links */
+int acc_kind(const char *id);           /* -1 if unknown */
 
 /* keymap.c */
 int evdev_to_hid(int code);
@@ -161,13 +192,12 @@ int input_fds(int *fds, int max);
 void input_readable(int fd);
 void input_tick(void);
 
-/* pad.c */
-int pad_fd(void);                       /* -1: no pad */
-void pad_readable(void);
-void pad_tick(void);
-void pad_grab(int on);
-void pad_rumble(unsigned strong, unsigned weak);
-const char *pad_name(void);
+/* pad.c: game pads (several), each one an Accessory */
+int pad_fds(int *fds, int max);
+void pad_readable(int fd);
+void pad_tick(void);                    /* hotplug, and grab each pad unless the desktop reads it */
+void pad_rumble(Accessory *a, unsigned strong, unsigned weak);
+int hub_pad_on_desktop(const Accessory *a);   /* main.c: the hub's own desktop is a target */
 
 /* uinput.c */
 int uinput_open(const char *name);
