@@ -42,6 +42,7 @@ static void close_pad(const char *why)
 static int try_open(const char *p, int filter)
 {
     unsigned char keybits[KEY_MAX / 8 + 1], absbits[ABS_MAX / 8 + 1];
+    struct input_id id;
     int f, a;
 
     f = open(p, O_RDWR | O_NONBLOCK | O_CLOEXEC);    /* write: force feedback */
@@ -53,7 +54,11 @@ static int try_open(const char *p, int filter)
     ioctl(f, EVIOCGNAME(sizeof name - 1), name);
     ioctl(f, EVIOCGBIT(EV_KEY, sizeof keybits), keybits);
     ioctl(f, EVIOCGBIT(EV_ABS, sizeof absbits), absbits);
-    if (!strncmp(name, "RetroKM", 7) ||
+    memset(&id, 0, sizeof id);
+    ioctl(f, EVIOCGID, &id);
+    /* never our own output: the Xbox dongle plugged into this machine for
+     * testing shows up as an original Xbox pad (045E:0289) */
+    if (!strncmp(name, "RetroKM", 7) || (id.vendor == 0x045E && id.product == 0x0289) ||
         (filter && !(BIT(keybits, BTN_SOUTH) && BIT(absbits, ABS_X) && BIT(absbits, ABS_Y)))) {
         close(f);
         return -1;
