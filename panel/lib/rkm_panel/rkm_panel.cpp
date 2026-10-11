@@ -205,14 +205,16 @@ static void plugPos(int i, int& x, int& y) {  // the knob of machine i's desk ca
 
 enum DragKind { D_NONE, D_PRESS_CARD, D_CABLE, D_PRESS_MON, D_MON, D_PLUG, D_PRESS_LOCK, D_PRESS_BACK,
                 D_PRESS_TAB,   // a page tab in the header (dragIdx = which)
-                D_WIRE,        // a box page: a console's cable being carried to a box
-                D_BOXPLUG,     // a box page: a cable being pulled out of a box (dragIdx = the box)
+                D_PRESS_ACC,   // accessories page: a press on an accessory (dragIdx = which)
+                D_ACCWIRE,     // ... its line being drawn to a machine
+                D_LINEPLUG,    // ... a line's end pulled off a machine (dragIdx = accessory, dragIdx2 = machine)
                 D_LONG,        // the long press that opened the options: ignore until let go
                 D_MENU_TAP,    // a press on an options button (dragIdx = which)
                 D_PICK_SV, D_PICK_HUE };
 static uint32_t pressAt;  // when the finger went down
 static DragKind drag = D_NONE;
 static int dragIdx = -1;          // machine (cable) or monitor (mon, plug)
+static int dragIdx2 = -1;         // a second index where a drag needs one
 static int pressX, pressY, curX, curY;
 static Rect lockBtn{0, 0, 0, 0};
 static Rect backBtn{0, 0, 0, 0};
@@ -273,6 +275,15 @@ static const char* labelOf(const std::string& name) {
   return m ? m->label.c_str() : name.c_str();
 }
 
+// The machine whose cable reaches the switcher for mi: itself, or the box
+// it is behind (the RetroTINK); null if neither is on the switcher
+static const Machine* switchedVia(int mi) {
+  if (mi < 0) return nullptr;
+  const Machine* m = &lay.machines[mi];
+  for (int n = 0; m && !m->input && !m->via.empty() && n < 8; n++) m = lay.machine(m->via);
+  return m && m->input ? m : nullptr;
+}
+
 // Plugging machine mi into monitor ni (from a dragged cable)
 static void plugInto(int mi, int ni, int fromMon = -1) {
   Machine& mc = lay.machines[mi];
@@ -291,13 +302,25 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
                              : std::string("That monitor is wired straight to ") + labelOf(mon.fixed));
     return;
   }
-  if (!mc.input) { say(mc.label + " is not wired to the switcher"); return; }
+  // a console behind a box (the RetroTINK): plug it in there, and put the
+  // box's way into the switcher on this monitor
+  const Machine* road = switchedVia(mi);
+  if (!road) { say(mc.label + " is not wired to the switcher"); return; }
   if (!lay.switcherOnline) { say("The switcher is not connected to the hub"); return; }
   if (fromMon >= 0 && fromMon != ni) {
     hub.send("untie " + lay.monitors[fromMon].name);
     lay.monitors[fromMon].shows.clear();
   }
-  hub.send("tie " + mc.name + " " + mon.name);
+  if (road != &mc) {  // every box on the way gets the one before it
+    const Machine* c = &mc;
+    for (int n = 0; c != road && n < 8; n++) {
+      hub.send("plug " + c->name);
+      if (Machine* b = lay.machine(c->via)) b->plugged = c->name;
+      c = lay.machine(c->via);
+    }
+    say(mc.label + " goes through the " + labelOf(mc.via));
+  }
+  hub.send("tie " + road->name + " " + mon.name);
   if (mon.sharedOn) {
     mon.sharedOn = false;
     if (mon.ddc == 1) say("Switching the " + mon.name + " monitor to VGA");
@@ -306,21 +329,39 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
   mon.shows = mc.name;  // the hub confirms in a moment
 }
 
-// ------------------------------------------------------------ machine options
+// ------------------------------------------------------------ options sheet
 
-// Long-press a machine: a sheet with its colour (a hue bar and a
-// saturation/brightness square) and a button to give it the keyboard.
-static int menuIdx = -1;
+// Long-press a machine or an accessory: a sheet with its colour (a hue bar
+// and a saturation/brightness square), for a machine its "receive inputs
+// while out of focus" toggles (one per kind of accessory the hub lists) and
+// the players of the pads linked to it, for a pad its player on each
+// machine, and how it is attached.
+static int menuIdx = -1;       // the machine (or accessory, menuAcc) the sheet is about
+static bool menuAcc = false;
 static float pickH, pickS, pickV;
 static uint32_t lastColorSend;
-static const Rect MENU{250, 100, 780, 520};
-static const Rect SV{290, 250, 300, 210};
-static const Rect HUE{290, 486, 300, 30};
-static const Rect PREVIEW{640, 250, 350, 96};
-static const Rect BTN_DEFAULT{640, 372, 166, 54};
-static const Rect BTN_USE{824, 372, 166, 54};
-static const Rect BTN_DONE{640, 462, 350, 54};
-enum { B_DEFAULT = 1, B_USE, B_DONE };
+static const Rect MENU{70, 74, 1140, 630};
+static const Rect SV{MENU.x + 30, MENU.y + 158, 300, 186};
+static const Rect HUE{MENU.x + 30, MENU.y + 360, 300, 28};
+static const Rect PREVIEW{MENU.x + 30, MENU.y + 408, 300, 56};
+// Everything tappable on the sheet is listed as it is drawn
+enum HitKind { H_DEFAULT, H_USE, H_DONE, H_TOGGLE, H_PLAYER };
+struct Hit { Rect r; HitKind kind; int a, b, c; };
+static std::vector<Hit> hits;
+
+// An accessory's colour: picked, or one for its kind and place
+static uint32_t accColor(int i) {
+  if (i < 0 || i >= (int)lay.accessories.size()) return 0x6B7280;
+  const Accessory& a = lay.accessories[i];
+  if (a.color >= 0) return (uint32_t)a.color;
+  if (a.kind == "kbm") return 0x60A5FA;
+  static const uint32_t pal[] = {0xF472B6, 0xFACC15, 0xA78BFA, 0x2DD4BF, 0xFB923C};
+  return pal[i % 5];
+}
+static uint32_t sheetColor() { return menuAcc ? accColor(menuIdx) : colorOf(menuIdx); }
+static const std::string& sheetName() {
+  return menuAcc ? lay.accessories[menuIdx].name : lay.machines[menuIdx].name;
+}
 
 static uint32_t hsv(float h, float s, float v) {
   float c = v * s, x = c * (1 - fabsf(fmodf(h / 60.0f, 2) - 1)), m = v - c, r, g, b;
@@ -343,9 +384,10 @@ static void toHsv(uint32_t rgb, float& h, float& s, float& v) {
   if (h < 0) h += 360;
 }
 
-static void openMenu(int i) {
+static void openMenu(int i, bool acc = false) {
   menuIdx = i;
-  toHsv(colorOf(i), pickH, pickS, pickV);
+  menuAcc = acc;
+  toHsv(sheetColor(), pickH, pickS, pickV);
   sceneDirty = true;
 }
 
@@ -363,29 +405,47 @@ static void pickTo(int x, int y, bool final) {
   } else if (drag == D_PICK_HUE) {
     pickH = std::min(359.9f, std::max(0.0f, (x - HUE.x) * 360.0f / HUE.w));
   }
-  Machine& m = lay.machines[menuIdx];
-  m.color = hsv(pickH, pickS, pickV);
-  m.colorSet = true;
+  uint32_t c = hsv(pickH, pickS, pickV);
+  if (menuAcc) lay.accessories[menuIdx].color = c;
+  else { lay.machines[menuIdx].color = c; lay.machines[menuIdx].colorSet = true; }
   if (final || nowMs() - lastColorSend > 120) {
     lastColorSend = nowMs();
-    hub.send("color " + m.name + " " + hex6(m.color));
+    hub.send("color " + sheetName() + " " + hex6(c));
   }
   sceneDirty = true;
 }
 
-static void menuButton(int b) {
-  Machine& m = lay.machines[menuIdx];
-  if (b == B_DEFAULT) {
-    hub.send("color " + m.name + " default");
-    m.color = 0;  // the hub sends the real one back
-    m.colorSet = false;
-    toHsv(colorOf(menuIdx), pickH, pickS, pickV);
-  } else if (b == B_USE) {
-    if (!m.agent) say(m.label + " is video only: no keyboard or mouse");
-    else if (!m.ready) say(m.label + " is offline");
-    else { hub.send("goto " + m.name); lay.active = m.name; menuIdx = -1; }
-  } else if (b == B_DONE) {
+static void tapCard(int i);
+
+static void menuHit(const Hit& h) {
+  switch (h.kind) {
+  case H_DEFAULT:
+    hub.send("color " + sheetName() + " default");
+    if (menuAcc) lay.accessories[menuIdx].color = -1;
+    else { lay.machines[menuIdx].color = 0; lay.machines[menuIdx].colorSet = false; }  // the hub sends the real one
+    toHsv(sheetColor(), pickH, pickS, pickV);
+    break;
+  case H_USE:
+    tapCard(menuIdx);
+    if (lay.active == lay.machines[menuIdx].name) menuIdx = -1;
+    break;
+  case H_DONE:
     menuIdx = -1;
+    break;
+  case H_TOGGLE: {  // a = kind
+    Machine& m = lay.machines[menuIdx];
+    if ((int)m.always.size() <= h.a) m.always.resize(h.a + 1, 0);
+    m.always[h.a] = !m.always[h.a];
+    hub.send("always " + m.name + " " + lay.kinds[h.a].id + (m.always[h.a] ? " on" : " off"));
+    break;
+  }
+  case H_PLAYER: {  // a = accessory, b = machine, c = player
+    Accessory& a = lay.accessories[h.a];
+    const std::string& sc = lay.machines[h.b].name;
+    hub.send("link " + a.name + " " + sc + " " + std::to_string(h.c));
+    for (auto& l : a.links) if (l.screen == sc) l.player = h.c;
+    break;
+  }
   }
   sceneDirty = true;
 }
@@ -474,11 +534,9 @@ static void release() {
   case D_PRESS_TAB:
     if (dragIdx < (int)tabRects.size() && tabRects[dragIdx].has(curX, curY)) showPage(dragIdx);
     break;
-  case D_MENU_TAP: {  // still on the button it went down on?
-    const Rect& r = dragIdx == B_DEFAULT ? BTN_DEFAULT : dragIdx == B_USE ? BTN_USE : BTN_DONE;
-    if (r.has(curX, curY)) menuButton(dragIdx);
+  case D_MENU_TAP:  // still on what it went down on?
+    if (dragIdx >= 0 && dragIdx < (int)hits.size() && hits[dragIdx].r.has(curX, curY)) menuHit(hits[dragIdx]);
     break;
-  }
   case D_PICK_SV:
   case D_PICK_HUE:
     pickTo(curX, curY, true);
@@ -504,11 +562,11 @@ static void touchInput(bool down, int x, int y) {
     else if (menuIdx >= 0) {  // the options sheet takes every touch while it is open
       if (SV.has(x, y)) { drag = D_PICK_SV; pickTo(x, y, false); }
       else if (Rect{HUE.x, HUE.y - 10, HUE.w, HUE.h + 20}.has(x, y)) { drag = D_PICK_HUE; pickTo(x, y, false); }
-      else if (BTN_DEFAULT.has(x, y)) { drag = D_MENU_TAP; dragIdx = B_DEFAULT; }
-      else if (BTN_USE.has(x, y)) { drag = D_MENU_TAP; dragIdx = B_USE; }
-      else if (BTN_DONE.has(x, y)) { drag = D_MENU_TAP; dragIdx = B_DONE; }
       else if (!MENU.has(x, y)) { menuIdx = -1; drag = D_NONE; }  // tap outside: close
-      else drag = D_NONE;
+      else {
+        for (i = 0; i < (int)hits.size(); i++)
+          if (hits[i].r.has(x, y)) { drag = D_MENU_TAP; dragIdx = i; }
+      }
     }
     else if (lockBtn.has(x, y)) drag = D_PRESS_LOCK;
     else {
@@ -662,29 +720,61 @@ static void drawPlugSocket(const Monitor& m, const Rect& cell) {
   G->drawRoundRect(geo.plugX - 9, geo.plugY - 5, 18, 10, 3, C(0x0A0C0F));
 }
 
-// A machine's card: picture, name, a status line, and the knob on top its
-// cable comes out of.  The same card on the desk and on a box's page.
-static void drawCard(int i, const Rect& r, bool pressed) {
+// The first font in the list that fits s into w (the last one otherwise)
+static const lgfx::IFont* fit(const char* s, int w, std::initializer_list<const lgfx::IFont*> fonts) {
+  const lgfx::IFont* f = nullptr;
+  for (auto* c : fonts) {
+    f = c;
+    G->setFont(c);
+    if (G->textWidth(s) <= w) break;
+  }
+  return f;
+}
+
+// s cut down with "..." until it fits w in font f
+static std::string ellipsize(const std::string& s, int w, const lgfx::IFont* f) {
+  G->setFont(f);
+  if (G->textWidth(s.c_str()) <= w) return s;
+  std::string t = s;
+  while (!t.empty() && G->textWidth((t + "...").c_str()) > w) t.pop_back();
+  return t + "...";
+}
+
+// A little game pad, centred on x,y: the badge for "a controller is linked"
+static void padGlyph(int x, int y, float k, uint32_t col, uint32_t bg) {
+  G->fillSmoothRoundRect(x - (int)(13 * k), y - (int)(6 * k), (int)(26 * k), (int)(12 * k), (int)(6 * k), C(col));
+  G->fillSmoothCircle(x - (int)(10 * k), y + (int)(4 * k), (int)(5 * k), C(col));   // grips
+  G->fillSmoothCircle(x + (int)(10 * k), y + (int)(4 * k), (int)(5 * k), C(col));
+  G->fillRect(x - (int)(10 * k), y - (int)(1 * k), (int)(5 * k), (int)(2 * k), C(bg));  // d-pad
+  G->fillRect(x - (int)(8.5f * k), y - (int)(3 * k), (int)(2 * k), (int)(6 * k), C(bg));
+  G->fillSmoothCircle(x + (int)(7 * k), y - (int)(1 * k), (int)(1.6f * k), C(bg));   // buttons
+  G->fillSmoothCircle(x + (int)(10 * k), y + (int)(1 * k), (int)(1.6f * k), C(bg));
+}
+
+// A machine's card: picture, name, a status line, the knob on top its
+// cable comes out of, and a controller badge in the corner when a pad is
+// linked to it.  The same card on both pages.
+static void drawCard(int i, const Rect& r, bool pressed, bool knob = true) {
   Machine& m = lay.machines[i];
-  uint32_t col = colorOf(i);
+  uint32_t col = colorOf(i), bg = pressed ? 0x262D37 : PANEL_BG;
   bool kbd = m.name == lay.active;
   bool console = !m.via.empty();
-  G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(pressed ? 0x262D37 : PANEL_BG));
+  G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(bg));
   if (kbd)
     for (int k = 0; k < 3; k++) G->drawRoundRect(r.x + k, r.y + k, r.w - 2 * k, r.h - 2 * k, 14 - k, C(ACCENT));
   else
     G->drawRoundRect(r.x, r.y, r.w, r.h, 14, C(LINE));
-  bool lit = m.ready || !m.agent || console;  // consoles and boxes have no agent to wait for
-  float sc = std::min(1.0f, (r.w - 40) / 160.0f);
-  drawArt(*G, m.art, r.x + r.w / 2, r.y + (int)(r.h * 0.41f), sc, lit ? 0 : 0.45f, pressed ? 0x262D37 : PANEL_BG);
-  text(m.label.c_str(), r.x + r.w / 2, r.y + r.h - 46, lit ? TEXT : MUTED, &fonts::FreeSansBold12pt7b);
-  // status line
+  bool lit = m.ready || !m.agent || console;  // consoles have no agent to wait for
+  float sc = std::min(1.0f, (r.w - 30) / 160.0f);
+  drawArt(*G, m.art, r.x + r.w / 2, r.y + (int)(r.h * 0.41f), sc, lit ? 0 : 0.45f, bg);
+  const lgfx::IFont* lf = fit(m.label.c_str(), r.w - 14,
+                              {&fonts::FreeSansBold12pt7b, &fonts::FreeSansBold9pt7b, &fonts::FreeSans9pt7b, &fonts::Font2});
+  text(m.label.c_str(), r.x + r.w / 2, r.y + r.h - 46, lit ? TEXT : MUTED, lf);
+  // status line: a dot and what it is doing, and how it is wired if there is room
   int y = r.y + r.h - 16;
   std::string st;
-  if (kbd) st = console ? "keyboard + pad" : "keyboard";
-  else if (!m.plugged.empty()) st = std::string("has ") + labelOf(m.plugged);
-  else if (lay.isBox(m.name)) st = "nothing in it";
-  else if (console) st = m.pad ? "pad dongle" : "no pad dongle";
+  if (kbd) st = "in focus";
+  else if (console) st = m.pads ? "pad dongle" : "no dongle";
   else if (!m.agent) st = "video only";
   else if (!m.ready) st = "offline";
   else if (m.kbd && !m.soft) st = "PS/2 only";   // booting, or no agent: keys still work
@@ -693,22 +783,41 @@ static void drawCard(int i, const Rect& r, bool pressed) {
   bool own = false;
   for (auto& mon : lay.monitors) if (mon.fixed == m.name) own = true;
   Machine* box = console ? lay.machine(m.via) : nullptr;
-  bool inBox = box && box->plugged == m.name;
-  if (console && (inBox || !m.input)) snprintf(wire, sizeof wire, inBox ? "plugged in" : "unplugged");
-  else if (m.input) snprintf(wire, sizeof wire, "in %d", m.input);
+  if (m.input) snprintf(wire, sizeof wire, "in %d", m.input);
+  else if (box) snprintf(wire, sizeof wire, box->plugged == m.name ? "via %s" : "unplugged",
+                         box->art == "retrotink" ? "tink" : box->name.c_str());
   else snprintf(wire, sizeof wire, own ? "own screen" : "not wired");
-  G->setFont(&fonts::FreeSans9pt7b);
+  const lgfx::IFont* sf = &fonts::FreeSans9pt7b;
+  G->setFont(sf);
   int w1 = G->textWidth(st.c_str()), w2 = G->textWidth(wire);
-  int x = r.x + r.w / 2 - (14 + w1 + 22 + w2 + 16) / 2;
-  bool good = m.ready || (lay.isBox(m.name) && !m.plugged.empty());
+  bool both = 14 + w1 + 22 + w2 + 16 <= r.w - 10;
+  if (!both && 14 + w1 > r.w - 10) { sf = &fonts::Font2; G->setFont(sf); w1 = G->textWidth(st.c_str()); }
+  int x = r.x + r.w / 2 - (both ? 14 + w1 + 22 + w2 + 16 : 14 + w1) / 2;
+  bool good = m.ready || (!m.agent && !console);
   G->fillSmoothCircle(x + 5, y, 5, C(good ? OK_C : 0x59606B));
-  text(st.c_str(), x + 14, y, good ? 0xC9D1DB : MUTED, &fonts::FreeSans9pt7b, middle_left);
-  int cx = x + 14 + w1 + 22;
-  G->fillSmoothRoundRect(cx - 8, y - 11, w2 + 16, 22, 11, C(0x2B323C));
-  text(wire, cx, y, 0xC9D1DB, &fonts::FreeSans9pt7b, middle_left);
+  text(st.c_str(), x + 14, y, good ? 0xC9D1DB : MUTED, sf, middle_left);
+  if (both) {
+    int cx = x + 14 + w1 + 22;
+    G->fillSmoothRoundRect(cx - 8, y - 11, w2 + 16, 22, 11, C(0x2B323C));
+    text(wire, cx, y, 0xC9D1DB, &fonts::FreeSans9pt7b, middle_left);
+  }
+  // a controller linked to it: the badge in the top right corner
+  int here = lay.padsLinked(m.name, true), all = lay.padsLinked(m.name, false);
+  if (all) {
+    int bx = r.x + r.w - 26, by = r.y + 22;
+    G->fillSmoothRoundRect(bx - 20, by - 13, 40, 26, 13, C(0x0F1216));
+    padGlyph(bx, by, 0.95f, here ? 0xE8ECF1 : 0x59606B, 0x0F1216);
+    if (all > 1) {
+      char nb[4];
+      snprintf(nb, sizeof nb, "%d", all);
+      G->fillSmoothCircle(bx + 18, by - 11, 9, C(ACCENT));
+      text(nb, bx + 18, by - 10, 0x0B0D10, &fonts::Font2);
+    }
+  }
   // the knob the cables come out of
+  if (!knob) return;
   int px = r.x + r.w / 2, py = r.y;
-  bool wired = m.input || inBox || (console && box);
+  bool wired = switchedVia(i) != nullptr;
   G->fillSmoothCircle(px, py, 12, C(0x0A0C0F));
   G->fillSmoothCircle(px, py, 9, C(wired ? col : 0x4B5563));
 }
@@ -774,7 +883,7 @@ static void drawHeader() {
   int x = SW - 20, y = HEAD_H / 2;
   if (hub.connected() && lay.valid) {
     x = chip(x, y, lay.locked ? "edges locked" : "edges free", 0, lay.locked ? 0xFBBF24 : 0xC9D1DB, &lockBtn);
-    std::string k = lay.active.empty() ? std::string("keyboard: nobody") : std::string("keyboard: ") + labelOf(lay.active);
+    std::string k = lay.active.empty() ? std::string("focus: nobody") : std::string("focus: ") + labelOf(lay.active);
     x = chip(x, y, k.c_str(), ACCENT);
     if (!lay.switcherPresent) x = chip(x, y, "no switcher", 0x59606B);
     else x = chip(x, y, lay.switcherOnline ? "switcher" : "switcher offline", lay.switcherOnline ? OK_C : BAD_C);
@@ -867,7 +976,7 @@ static void deskDraw() {
   for (size_t ni = 0; ni < lay.monitors.size(); ni++) {
     auto& m = lay.monitors[ni];
     int mi = lay.machineIndex(m.shows);
-    if (mi < 0) continue;
+    if (mi < 0 || slotOf(mi) < 0) continue;  // (an empty RetroTINK: no card to come from)
     if ((drag == D_PLUG || drag == D_MON) && (int)ni == dragIdx) continue;
     MonGeo geo = geoOf(m);
     int px, py;
@@ -878,7 +987,7 @@ static void deskDraw() {
   for (size_t ni = 0; ni < lay.monitors.size(); ni++) {
     auto& m = lay.monitors[ni];
     int oi = otherInputMachine(m);
-    if (oi < 0 || (drag == D_MON && (int)ni == dragIdx)) continue;
+    if (oi < 0 || slotOf(oi) < 0 || (drag == D_MON && (int)ni == dragIdx)) continue;
     MonGeo geo = geoOf(m);
     int px, py;
     plugPos(oi, px, py);
@@ -902,44 +1011,128 @@ static void button(const Rect& r, const char* label, uint32_t bg, uint32_t fg) {
 }
 
 static void drawMenu() {
-  if (menuIdx < 0 || menuIdx >= (int)lay.machines.size()) { menuIdx = -1; return; }
-  Machine& m = lay.machines[menuIdx];
-  uint32_t col = colorOf(menuIdx);
-  // shade the desk behind it: every other row and column
+  hits.clear();
+  int nItems = menuAcc ? (int)lay.accessories.size() : (int)lay.machines.size();
+  if (menuIdx < 0 || menuIdx >= nItems) { menuIdx = -1; return; }
+  uint32_t col = sheetColor();
+  const std::string& label = menuAcc ? lay.accessories[menuIdx].label : lay.machines[menuIdx].label;
+  // shade the page behind it: every other row and column
   for (int y = HEAD_H + 1; y < SH; y += 2) G->drawFastHLine(0, y, SW, C(0x07080A));
   for (int x = 0; x < SW; x += 2) G->drawFastVLine(x, HEAD_H + 1, SH - HEAD_H - 1, C(0x07080A));
   G->fillSmoothRoundRect(MENU.x + 8, MENU.y + 10, MENU.w, MENU.h, 20, C(0x050608));
   G->fillSmoothRoundRect(MENU.x, MENU.y, MENU.w, MENU.h, 20, C(PANEL_BG));
   G->drawRoundRect(MENU.x, MENU.y, MENU.w, MENU.h, 20, C(col));
-  drawArt(*G, m.art, MENU.x + 80, MENU.y + 70, 0.55f, 0, PANEL_BG);
-  text(m.label.c_str(), MENU.x + 150, MENU.y + 52, TEXT, &fonts::FreeSansBold18pt7b, middle_left);
-  text(m.name.c_str(), MENU.x + 152, MENU.y + 92, MUTED, &fonts::FreeSans12pt7b, middle_left);
-  text("colour", SV.x, SV.y - 22, MUTED, &fonts::FreeSans12pt7b, middle_left);
-  // saturation (across) by brightness (down) for the picked hue
+  // title
+  std::string art = menuAcc ? (lay.accessories[menuIdx].kind == "kbm" ? "keyboard" : "gamepad") : lay.machines[menuIdx].art;
+  drawArt(*G, art, MENU.x + 76, MENU.y + 62, 0.55f, 0, PANEL_BG);
+  text(label.c_str(), MENU.x + 150, MENU.y + 46, TEXT,
+       fit(label.c_str(), MENU.w - 200, {&fonts::FreeSansBold18pt7b, &fonts::FreeSansBold12pt7b}), middle_left);
+  std::string sub = menuAcc ? (lay.accessories[menuIdx].kind == "kbm" ? "keyboard + mouse" : "game controller")
+                            : lay.machines[menuIdx].name;
+  text(sub.c_str(), MENU.x + 152, MENU.y + 86, MUTED, &fonts::FreeSans12pt7b, middle_left);
+
+  // column 1: colour
+  text(menuAcc ? "line colour" : "colour", SV.x, SV.y - 22, MUTED, &fonts::FreeSans12pt7b, middle_left);
   for (int y = 0; y < SV.h; y++) {
     float v = 1 - y / (float)(SV.h - 1);
     for (int x = 0; x < SV.w; x++) G->drawPixel(SV.x + x, SV.y + y, C(hsv(pickH, x / (float)(SV.w - 1), v)));
   }
-  for (int x = 0; x < HUE.w; x++)
-    G->drawFastVLine(HUE.x + x, HUE.y, HUE.h, C(hsv(x * 360.0f / HUE.w, 1, 1)));
-  // where the pick is
+  for (int x = 0; x < HUE.w; x++) G->drawFastVLine(HUE.x + x, HUE.y, HUE.h, C(hsv(x * 360.0f / HUE.w, 1, 1)));
   int cx = SV.x + (int)(pickS * (SV.w - 1)), cy = SV.y + (int)((1 - pickV) * (SV.h - 1));
   G->drawCircle(cx, cy, 9, C(0x000000));
   G->drawCircle(cx, cy, 10, C(0xFFFFFF));
   int hx = HUE.x + (int)(pickH / 360 * HUE.w);
   G->fillRect(hx - 3, HUE.y - 6, 6, HUE.h + 12, C(0xFFFFFF));
   G->drawRect(hx - 4, HUE.y - 7, 8, HUE.h + 14, C(0x000000));
-  // preview: what the cables and the keyboard will look like
-  G->fillSmoothRoundRect(PREVIEW.x, PREVIEW.y, PREVIEW.w, PREVIEW.h, 14, C(col));
-  std::string hx6 = "#" + hex6(col);
+  G->fillSmoothRoundRect(PREVIEW.x, PREVIEW.y, PREVIEW.w, PREVIEW.h, 12, C(col));
   uint32_t ink = ((col >> 16 & 255) * 3 + (col >> 8 & 255) * 6 + (col & 255)) / 10 > 140 ? 0x111111 : 0xFFFFFF;
-  text(hx6.c_str(), PREVIEW.x + PREVIEW.w / 2, PREVIEW.y + 34, ink, &fonts::FreeSansBold18pt7b);
-  text(m.colorSet ? "picked" : "default", PREVIEW.x + PREVIEW.w / 2, PREVIEW.y + 70, ink, &fonts::FreeSans9pt7b);
-  bool usable = m.agent && m.ready;
-  button(BTN_DEFAULT, "default", 0x2B323C, m.colorSet ? TEXT : MUTED);
-  button(BTN_USE, m.name == lay.active ? "in use" : "use it", usable ? 0x1F4D3A : 0x2B323C,
-         usable ? TEXT : MUTED);
-  button(BTN_DONE, "done", 0x2B323C, TEXT);
+  bool picked = menuAcc ? lay.accessories[menuIdx].color >= 0 : lay.machines[menuIdx].colorSet;
+  std::string hx6 = "#" + hex6(col) + (picked ? "  picked" : "  default");
+  text(hx6.c_str(), PREVIEW.x + PREVIEW.w / 2, PREVIEW.y + PREVIEW.h / 2, ink, &fonts::FreeSansBold12pt7b);
+  Rect bDef{SV.x, MENU.y + 480, 300, 50};
+  button(bDef, "default colour", 0x2B323C, picked ? TEXT : MUTED);
+  hits.push_back({bDef, H_DEFAULT, 0, 0, 0});
+
+  // column 2: what it takes, and who plays it
+  int x2 = MENU.x + 380, w2 = 360, y = MENU.y + 136;
+  auto playerRow = [&](const std::string& name, int ai, int mi, int cur) {
+    const lgfx::IFont* f = fit(name.c_str(), w2 - 4 * 50 - 14, {&fonts::FreeSans12pt7b, &fonts::FreeSans9pt7b});
+    text(ellipsize(name, w2 - 4 * 50 - 14, f).c_str(), x2, y + 18, TEXT, f, middle_left);
+    for (int p = 1; p <= 4; p++) {
+      Rect b{x2 + w2 - (5 - p) * 50, y, 44, 36};
+      bool on = p == cur;
+      G->fillSmoothRoundRect(b.x, b.y, b.w, b.h, 9, C(on ? accColor(ai) : 0x2B323C));
+      text(("P" + std::to_string(p)).c_str(), b.x + b.w / 2, b.y + b.h / 2, on ? 0x0B0D10 : 0xC9D1DB,
+           &fonts::FreeSansBold9pt7b);
+      hits.push_back({b, H_PLAYER, ai, mi, p});
+    }
+    y += 46;
+  };
+  if (!menuAcc) {
+    Machine& m = lay.machines[menuIdx];
+    text("receive inputs while out of focus", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+    y += 26;
+    for (size_t k = 0; k < lay.kinds.size(); k++) {
+      bool on = k < m.always.size() && m.always[k];
+      Rect sw{x2 + w2 - 66, y, 62, 34};
+      text(lay.kinds[k].label.c_str(), x2, y + 17, TEXT, &fonts::FreeSans12pt7b, middle_left);
+      G->fillSmoothRoundRect(sw.x, sw.y, sw.w, sw.h, 17, C(on ? 0x1F7A55 : 0x2B323C));
+      G->fillSmoothCircle(on ? sw.x + sw.w - 17 : sw.x + 17, sw.y + 17, 13, C(on ? 0xE8ECF1 : 0x8A93A0));
+      hits.push_back({Rect{x2, y - 4, w2, 42}, H_TOGGLE, (int)k, 0, 0});
+      y += 48;
+    }
+    y += 14;
+    bool any = false;
+    for (size_t ai = 0; ai < lay.accessories.size(); ai++) {
+      const Accessory& a = lay.accessories[ai];
+      const Link* l = a.link(m.name);
+      if (a.kind != "pad" || !l) continue;
+      if (!any) { text("controllers (player)", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left); y += 26; any = true; }
+      playerRow(a.label + (a.present ? "" : " (away)"), (int)ai, menuIdx, l->player);
+    }
+    if (!any) text("no controllers linked (accessories page)", x2, y, 0x6B7482, &fonts::FreeSans9pt7b, middle_left);
+  } else {
+    const Accessory& a = lay.accessories[menuIdx];
+    text(a.kind == "pad" ? "player on each machine" : "may reach", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+    y += 26;
+    for (auto& l : a.links) {
+      int mi = lay.machineIndex(l.screen);
+      if (mi < 0) continue;
+      if (a.kind == "pad") playerRow(lay.machines[mi].label, menuIdx, mi, l.player);
+      else { text(lay.machines[mi].label.c_str(), x2, y + 12, TEXT, &fonts::FreeSans12pt7b, middle_left); y += 32; }
+      if (y > MENU.y + MENU.h - 60) break;
+    }
+    if (a.links.empty()) text("not linked to anything yet", x2, y, 0x6B7482, &fonts::FreeSans9pt7b, middle_left);
+  }
+
+  // column 3: how it is attached
+  int x3 = MENU.x + 790, w3 = 320;
+  y = MENU.y + 136;
+  text("about", x3, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+  y += 30;
+  std::string about = menuAcc ? lay.accessories[menuIdx].about : lay.machines[menuIdx].about;
+  if (menuAcc && !lay.accessories[menuIdx].present && lay.accessories[menuIdx].kind == "pad")
+    about = "not connected now\n" + about;
+  size_t p0 = 0;
+  while (p0 <= about.size() && y < MENU.y + 470) {
+    size_t p1 = about.find('\n', p0);
+    if (p1 == std::string::npos) p1 = about.size();
+    std::string ln = about.substr(p0, p1 - p0);
+    if (!ln.empty())
+      text(ln.c_str(), x3, y, 0xC9D1DB, fit(ln.c_str(), w3, {&fonts::FreeSans9pt7b, &fonts::Font2}), middle_left);
+    y += 26;
+    p0 = p1 + 1;
+  }
+  Rect bDone{x3, MENU.y + 548, w3, 54};
+  if (!menuAcc) {
+    Machine& m = lay.machines[menuIdx];
+    bool usable = m.ready;
+    Rect bUse{x3, MENU.y + 480, w3, 54};
+    button(bUse, m.name == lay.active ? "in focus" : "focus it", usable ? 0x1F4D3A : 0x2B323C, usable ? TEXT : MUTED);
+    hits.push_back({bUse, H_USE, 0, 0, 0});
+  }
+  button(bDone, "done", 0x2B323C, TEXT);
+  hits.push_back({bDone, H_DONE, 0, 0, 0});
 }
 
 static void outline(const MonGeo& geo, uint32_t col) {  // around a monitor, on the finger layer
@@ -961,7 +1154,7 @@ static void deskFinger() {
     if (ni >= 0) {
       auto& m = lay.monitors[ni];
       int mi = drag == D_CABLE ? dragIdx : deskOwner(lay.machineIndex(lay.monitors[dragIdx].shows));
-      bool okDrop = m.fixed.empty() && mi >= 0 && lay.machines[mi].input && lay.switcherOnline;
+      bool okDrop = m.fixed.empty() && switchedVia(mi) && lay.switcherOnline;
       if (mi >= 0 && m.shared == lay.machines[mi].name) okDrop = true;  // its other input
       if (drag == D_PLUG && ni == dragIdx) okDrop = true;
       outline(geoOf(m), okDrop ? ACCENT : BAD_C);
@@ -997,7 +1190,7 @@ static void deskFinger() {
     Rect home = grid.cell(m.col, m.row);
     Rect cell = {home.x + curX - pressX, home.y + curY - pressY, home.w, home.h};
     int mi = lay.machineIndex(m.shows);
-    if (mi >= 0) {
+    if (mi >= 0 && slotOf(mi) >= 0) {
       MonGeo geo = geoOf(m, cell);
       int px, py;
       plugPos(mi, px, py);
@@ -1012,11 +1205,11 @@ static void deskFinger() {
 // ------------------------------------------------------------ the pages
 
 struct DeskPage : Page {
-  std::string key() const override { return ""; }
-  std::string title() const override { return "desk"; }
+  std::string key() const override { return "displays"; }
+  std::string title() const override { return "displays"; }
   const char* hint() const override {
     return "drag a machine onto a monitor   |   pull a plug off to unplug   |   "
-           "drag monitors to rearrange   |   tap a machine for the keyboard";
+           "drag monitors to rearrange   |   tap a machine to focus it   |   hold for options";
   }
   void draw() override { deskDraw(); }
   void finger() override { deskFinger(); }
@@ -1026,250 +1219,190 @@ struct DeskPage : Page {
   bool carrying() const override { return drag == D_CABLE || drag == D_PLUG || drag == D_MON; }
 };
 
-// A box the hub cannot switch (the RetroTINK) and everything behind it: the
-// box on top, boxes in front of it (a switcher) in the middle, the consoles
-// on the shelf.  Drag a console's cable into its box to say it is plugged
-// in; pull a cable out of a box to unplug it.  Built from the layout alone,
-// so a new box in the hub config gets its page without code.
-struct BoxPage : Page {
-  std::string root;  // the box at the top
-  explicit BoxPage(const std::string& r) : root(r) {}
-
-  std::string key() const override { return root; }
-  std::string title() const override {
-    if (lay.rootBoxes().size() < 2) return "consoles";
-    return labelOf(root);
-  }
+// The things you hold (keyboard + mouse, game pads) along the top, the
+// machines along the bottom, and a line for each link: drag from an
+// accessory to a machine to link it, pull a line's end off a machine to
+// unlink it (or drop it on another machine).  Lines into a machine sit side
+// by side on its top edge; pads show their player there.
+struct AccessoriesPage : Page {
+  std::string key() const override { return "accessories"; }
+  std::string title() const override { return "accessories"; }
   const char* hint() const override {
-    return "drag a console's cable into the box it is plugged into   |   pull a cable out to unplug   |   "
-           "tap a console for the keyboard and pad";
+    return "drag from an accessory to a machine to link them   |   pull a line off to unlink   |   "
+           "tap a machine to focus it   |   hold for options";
   }
 
-  struct Item { int mi; Rect r; bool box; };
-  std::vector<Item> items;
+  static const int TOP_Y = AY + 30, TOP_H = 176;
+  Rect accRect(int i) const { return rowRect(i, lay.accessories.size(), TOP_Y, TOP_H, 240); }
+  static void accKnob(const Rect& r, int& x, int& y) { x = r.x + r.w / 2; y = r.y + r.h; }
 
-  // Where everything goes, from the layout
-  void place() {
-    items.clear();
-    int ri = lay.machineIndex(root);
-    if (ri < 0) return;
-    std::vector<std::vector<int>> rows;  // boxes in front of the root, by depth
-    std::vector<int> consoles;
-    for (size_t i = 0; i < lay.machines.size(); i++) {
-      if ((int)i == ri || lay.rootOf(i) != ri) continue;
-      if (lay.isBox(lay.machines[i].name)) {
-        size_t d = lay.depthOf(i);
-        if (rows.size() < d) rows.resize(d);
-        rows[d - 1].push_back((int)i);
-      } else {
-        consoles.push_back((int)i);
-      }
-    }
-    int rootH = rows.empty() ? 190 : 150;
-    int rootY = rows.empty() ? AY + 70 : AY + 8;
-    items.push_back({ri, {SW / 2 - 330, rootY, 660, rootH}, true});
-    int top = rootY + rootH + 60, bottom = CY - 40;
-    int rh = rows.empty() ? 0 : std::min(140, (bottom - top) / (int)rows.size() - 20);
-    for (size_t d = 0; d < rows.size(); d++)
-      for (size_t k = 0; k < rows[d].size(); k++) {
-        Rect r = rowRect(k, rows[d].size(), top + d * (rh + 20), rh, 300);
-        items.push_back({rows[d][k], r, true});
-      }
-    for (size_t k = 0; k < consoles.size(); k++)
-      items.push_back({consoles[k], rowRect(k, consoles.size(), CY, CH), false});
+  // Where accessory ai's line ends on machine mi's card (or false)
+  bool lineEnd(int ai, int mi, int& x, int& y) const {
+    int slot = -1;
+    for (size_t k = 0; k < desk.size(); k++) if (desk[k] == mi) slot = (int)k;
+    if (slot < 0) return false;
+    const std::string& sc = lay.machines[mi].name;
+    int n = 0, j = -1;
+    for (size_t a = 0; a < lay.accessories.size(); a++)
+      if (lay.accessories[a].link(sc)) { if ((int)a == ai) j = n; n++; }
+    if (j < 0) return false;
+    Rect r = cardRect(slot);
+    int step = std::min(26, (r.w - 40) / std::max(1, n));
+    x = r.x + r.w / 2 + (int)((j - (n - 1) / 2.0f) * step);
+    y = r.y;
+    return true;
   }
 
-  const Item* item(int mi) const {
-    for (auto& it : items) if (it.mi == mi) return &it;
-    return nullptr;
-  }
-  // a cable leaves an item from the top, and goes into a box at the bottom
-  static void outPos(const Item& it, int& x, int& y) { x = it.r.x + it.r.w / 2; y = it.r.y; }
-  static void inPos(const Item& it, int& x, int& y) { x = it.r.x + it.r.w / 2; y = it.r.y + it.r.h; }
-
-  int boxAt(int x, int y) const {
-    for (auto& it : items)
-      if (it.box && Rect{it.r.x - 10, it.r.y - 10, it.r.w + 20, it.r.h + 40}.has(x, y)) return it.mi;
-    return -1;
-  }
-  int itemAt(int x, int y) const {
-    for (auto& it : items) {
+  int accAt(int x, int y) const {
+    for (size_t i = 0; i < lay.accessories.size(); i++) {
+      Rect r = accRect(i);
       int kx, ky;
-      outPos(it, kx, ky);
-      bool knob = it.mi != lay.machineIndex(root) && (x - kx) * (x - kx) + (y - ky) * (y - ky) < 26 * 26;
-      if (it.r.has(x, y) || knob) return it.mi;
-    }
-    return -1;
-  }
-  int socketAt(int x, int y) const {  // a box with a cable in it
-    for (auto& it : items) {
-      if (!it.box || lay.machines[it.mi].plugged.empty()) continue;
-      int sx, sy;
-      inPos(it, sx, sy);
-      if ((x - sx) * (x - sx) + (y - sy) * (y - sy) < 30 * 30) return it.mi;
+      accKnob(r, kx, ky);
+      if (r.has(x, y) || (x - kx) * (x - kx) + (y - ky) * (y - ky) < 26 * 26) return (int)i;
     }
     return -1;
   }
 
-  // Where the box's picture ends up: the console the chain leads to
-  int endOf(int mi) const {
-    for (int n = 0; mi >= 0 && n < 32 && !lay.machines[mi].plugged.empty(); n++)
-      mi = lay.machineIndex(lay.machines[mi].plugged);
-    return mi;
-  }
-
-  void drawBox(const Item& it, bool pressed, bool isRoot) {
-    const Machine& m = lay.machines[it.mi];
-    const Rect& r = it.r;
-    uint32_t col = colorOf(it.mi);
-    G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 16, C(pressed ? 0x262D37 : PANEL_BG));
-    G->drawRoundRect(r.x, r.y, r.w, r.h, 16, C(mix(col, PANEL_BG, 0.45f)));
-    float sc = std::min(1.3f, (r.h - 30) / 120.0f);
-    int ax = r.x + (int)(100 * sc) + 10;
-    drawArt(*G, m.art, ax, r.y + r.h / 2, sc, 0, pressed ? 0x262D37 : PANEL_BG);
-    int tx = ax + (int)(90 * sc) + 6;
-    text(m.label.c_str(), tx, r.y + 30, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
-    std::string l1, l2;
-    int end = drag == D_BOXPLUG && dragIdx == it.mi ? it.mi : endOf(it.mi);
-    l1 = end != it.mi ? std::string("showing ") + labelOf(lay.machines[end].name) : "nothing plugged in";
-    if (isRoot) {  // where the box itself goes
-      std::string on;
-      for (auto& mon : lay.monitors)
-        if (!mon.capture && (mon.fixed == m.name || (!mon.sharedOn && m.input && mon.input == m.input)))
-          on += (on.empty() ? "" : ", ") + (mon.label.empty() ? mon.name : mon.label);
-      if (m.input) l2 = "into the switcher, input " + std::to_string(m.input) + (on.empty() ? "" : "  -  on " + on);
-    } else {
-      Machine* up = lay.machine(m.via);
-      bool in = up && up->plugged == m.name;
-      l2 = std::string(in ? "plugged into " : "not plugged into ") + labelOf(m.via);
-    }
-    text(l1.c_str(), tx, r.y + 62, end != it.mi ? 0xC9D1DB : MUTED, &fonts::FreeSans12pt7b, middle_left);
-    if (!l2.empty()) text(l2.c_str(), tx, r.y + 92, MUTED, &fonts::FreeSans9pt7b, middle_left);
-    // its input socket
-    int sx, sy;
-    inPos(it, sx, sy);
-    bool pulling = drag == D_BOXPLUG && dragIdx == it.mi;
-    Machine* in = pulling ? nullptr : lay.machine(m.plugged);
-    G->fillSmoothRoundRect(sx - 14, sy - 7, 28, 14, 4, C(in ? colorOf(lay.machineIndex(in->name)) : 0x3A414C));
-    G->drawRoundRect(sx - 14, sy - 7, 28, 14, 4, C(0x0A0C0F));
-    if (!isRoot) {  // and the knob its own cable leaves from
-      int kx, ky;
-      outPos(it, kx, ky);
-      G->fillSmoothCircle(kx, ky, 12, C(0x0A0C0F));
-      G->fillSmoothCircle(kx, ky, 9, C(col));
-    }
+  void drawAcc(int i, bool pressed) {
+    const Accessory& a = lay.accessories[i];
+    Rect r = accRect(i);
+    uint32_t col = accColor(i), bg = pressed ? 0x262D37 : PANEL_BG;
+    G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(bg));
+    G->drawRoundRect(r.x, r.y, r.w, r.h, 14, C(mix(col, bg, 0.5f)));
+    drawArt(*G, a.kind == "kbm" ? "keyboard" : "gamepad", r.x + r.w / 2, r.y + 62,
+            std::min(0.85f, (r.w - 40) / 180.0f), a.present ? 0 : 0.5f, bg);
+    text(a.label.c_str(), r.x + r.w / 2, r.y + r.h - 50, a.present ? TEXT : MUTED,
+         fit(a.label.c_str(), r.w - 14, {&fonts::FreeSansBold12pt7b, &fonts::FreeSansBold9pt7b, &fonts::FreeSans9pt7b, &fonts::Font2}));
+    int n = 0;
+    for (auto& l : a.links) { int mi = lay.machineIndex(l.screen); if (mi >= 0 && lay.onDesk(mi)) n++; }
+    std::string st = !a.present ? "not connected" : std::to_string(n) + (n == 1 ? " machine" : " machines");
+    G->fillSmoothCircle(r.x + r.w / 2 - G->textWidth(st.c_str()) / 2 - 12, r.y + r.h - 22, 5,
+                        C(a.present ? OK_C : 0x59606B));
+    text(st.c_str(), r.x + r.w / 2 + 2, r.y + r.h - 22, a.present ? 0xC9D1DB : MUTED, &fonts::FreeSans9pt7b);
+    int kx, ky;
+    accKnob(r, kx, ky);
+    G->fillSmoothCircle(kx, ky, 12, C(0x0A0C0F));
+    G->fillSmoothCircle(kx, ky, 9, C(col));
   }
 
   void draw() override {
-    place();
-    int ri = lay.machineIndex(root);
-    bool held = drag == D_PRESS_CARD || drag == D_WIRE || drag == D_LONG;
-    for (auto& it : items) {
-      if (it.box) drawBox(it, held && it.mi == dragIdx, it.mi == ri);
-      else drawCard(it.mi, it.r, held && it.mi == dragIdx);
-    }
-    // the cables that are plugged in (not one being pulled out)
-    for (auto& it : items) {
-      if (!it.box || (drag == D_BOXPLUG && it.mi == dragIdx)) continue;
-      const Item* src = item(lay.machineIndex(lay.machines[it.mi].plugged));
-      if (!src) continue;
-      int x0, y0, x1, y1;
-      outPos(*src, x0, y0);
-      inPos(it, x1, y1);
-      cable(x0, y0, x1, y1, colorOf(src->mi));
+    for (size_t i = 0; i < lay.accessories.size(); i++) drawAcc(i, (drag == D_PRESS_ACC || drag == D_ACCWIRE || drag == D_LONG) && dragIdx == (int)i);
+    for (size_t k = 0; k < desk.size(); k++)
+      drawCard(desk[k], cardRect(k), (drag == D_PRESS_CARD || drag == D_LONG) && desk[k] == dragIdx, false);
+    // the lines, with a plug (and the player) where each one ends
+    for (size_t ai = 0; ai < lay.accessories.size(); ai++) {
+      const Accessory& a = lay.accessories[ai];
+      int kx, ky;
+      accKnob(accRect(ai), kx, ky);
+      uint32_t col = accColor(ai);
+      for (auto& l : a.links) {
+        int mi = lay.machineIndex(l.screen), ex, ey;
+        if (drag == D_LINEPLUG && dragIdx == (int)ai && dragIdx2 == mi) continue;
+        if (!lineEnd(ai, mi, ex, ey)) continue;
+        cable(ex, ey, kx, ky, col, a.present ? SOLID : FAINT);
+        G->fillSmoothRoundRect(ex - 6, ey - 9, 12, 14, 3, C(col));
+        if (a.kind == "pad") {
+          std::string pl = "P" + std::to_string(l.player);
+          G->fillSmoothRoundRect(ex - 13, ey - 34, 26, 20, 6, C(0x0F1216));
+          text(pl.c_str(), ex, ey - 24, col, &fonts::FreeSansBold9pt7b);
+        }
+      }
     }
   }
 
   void finger() override {
-    place();
     int from = -1;
-    if (drag == D_WIRE) {
+    if (drag == D_ACCWIRE) {
       from = dragIdx;
-      int bi = boxAt(curX, curY);
-      if (bi >= 0 && bi != dragIdx) {
-        const Item* b = item(bi);
-        bool ok = lay.machines[dragIdx].via == lay.machines[bi].name;
+      int mi = cardAt(curX, curY);
+      if (mi >= 0) {
+        Rect r = cardRect(slotOf(mi));
         for (int i = 0; i < 4; i++)
-          G->drawRoundRect(b->r.x - 6 - i, b->r.y - 6 - i, b->r.w + 12 + 2 * i, b->r.h + 12 + 2 * i, 18,
-                           C(ok ? ACCENT : BAD_C));
-        ink.add(b->r.x - 12, b->r.y - 12, b->r.x + b->r.w + 12, b->r.y + b->r.h + 12);
+          G->drawRoundRect(r.x - 6 - i, r.y - 6 - i, r.w + 12 + 2 * i, r.h + 12 + 2 * i, 18, C(ACCENT));
+        ink.add(r.x - 12, r.y - 12, r.x + r.w + 12, r.y + r.h + 12);
       }
-    } else if (drag == D_BOXPLUG) {
-      from = lay.machineIndex(lay.machines[dragIdx].plugged);
+    } else if (drag == D_LINEPLUG) {
+      from = dragIdx;
     }
-    const Item* src = item(from);
-    if (!src) return;
-    int x0, y0;
-    outPos(*src, x0, y0);
-    uint32_t col = colorOf(from);
-    cable(x0, y0, curX, curY, col);
-    G->fillSmoothRoundRect(curX - 12, curY - 7, 24, 14, 4, C(col));
-    ink.add(curX - 14, curY - 9, curX + 14, curY + 9);
+    if (from < 0) return;
+    int kx, ky;
+    accKnob(accRect(from), kx, ky);
+    uint32_t col = accColor(from);
+    cable(curX, curY, kx, ky, col);
+    G->fillSmoothRoundRect(curX - 7, curY - 9, 14, 16, 3, C(col));
+    ink.add(curX - 10, curY - 12, curX + 10, curY + 10);
   }
 
   void press(int x, int y) override {
-    place();
+    for (size_t ai = 0; ai < lay.accessories.size(); ai++)  // a line's end first: it sits on a card's edge
+      for (auto& l : lay.accessories[ai].links) {
+        int mi = lay.machineIndex(l.screen), ex, ey;
+        if (lineEnd(ai, mi, ex, ey) && abs(x - ex) < 12 && y > ey - 38 && y < ey + 12) {
+          drag = D_LINEPLUG; dragIdx = (int)ai; dragIdx2 = mi;
+          return;
+        }
+      }
     int i;
-    if ((i = socketAt(x, y)) >= 0) { drag = D_BOXPLUG; dragIdx = i; }
-    else if ((i = itemAt(x, y)) >= 0) { drag = D_PRESS_CARD; dragIdx = i; }
+    if ((i = accAt(x, y)) >= 0) { drag = D_PRESS_ACC; dragIdx = i; }
+    else if ((i = cardAt(x, y)) >= 0) { drag = D_PRESS_CARD; dragIdx = i; }
   }
 
   void moved(bool far) override {
-    if (drag == D_PRESS_CARD && far && !lay.machines[dragIdx].via.empty()) { drag = D_WIRE; sceneDirty = true; }
+    if (drag == D_PRESS_ACC && far) { drag = D_ACCWIRE; sceneDirty = true; }
+  }
+
+  void link(int ai, int mi, int player) {
+    Accessory& a = lay.accessories[ai];
+    const std::string& sc = lay.machines[mi].name;
+    hub.send("link " + a.name + " " + sc + (player ? " " + std::to_string(player) : ""));
+    if (!a.link(sc)) a.links.push_back({sc, player ? player : 1});  // the hub says which player
+  }
+  void unlink(int ai, int mi) {
+    Accessory& a = lay.accessories[ai];
+    const std::string& sc = lay.machines[mi].name;
+    hub.send("unlink " + a.name + " " + sc);
+    for (size_t k = 0; k < a.links.size(); k++)
+      if (a.links[k].screen == sc) { a.links.erase(a.links.begin() + k); break; }
   }
 
   void release() override {
-    place();
-    if (drag == D_PRESS_CARD) {  // a tap: the keyboard and pad to it (a box: to what is in it)
-      int end = endOf(dragIdx);
-      if (lay.isBox(lay.machines[dragIdx].name) && end == dragIdx)
-        say(lay.machines[dragIdx].label + " has nothing plugged in");
-      else tapCard(end);
-    } else if (drag == D_WIRE) {
-      int bi = boxAt(curX, curY);
-      Machine& m = lay.machines[dragIdx];
-      if (bi < 0 || bi == dragIdx) return;
-      Machine& b = lay.machines[bi];
-      if (m.via != b.name) { say(m.label + "'s cable goes to the " + labelOf(m.via)); return; }
-      if (b.plugged == m.name) return;
-      hub.send("plug " + m.name);
-      b.plugged = m.name;  // the hub confirms in a moment
-      say(m.label + " plugged in");
-    } else if (drag == D_BOXPLUG) {
-      if (boxAt(curX, curY) == dragIdx) return;  // put back where it was
-      Machine& b = lay.machines[dragIdx];
-      hub.send("unplug " + b.name);
-      say(labelOf(b.plugged) + std::string(" unplugged"));
-      b.plugged.clear();
+    if (drag == D_PRESS_CARD) {
+      tapCard(dragIdx);
+    } else if (drag == D_PRESS_ACC) {
+      const Accessory& a = lay.accessories[dragIdx];
+      say(a.label + (a.present ? "" : " is not connected") + "  -  hold it for options");
+    } else if (drag == D_ACCWIRE) {
+      int mi = cardAt(curX, curY);
+      if (mi < 0) return;
+      if (lay.accessories[dragIdx].link(lay.machines[mi].name)) { say("Already linked"); return; }
+      link(dragIdx, mi, 0);
+    } else if (drag == D_LINEPLUG) {
+      int mi = cardAt(curX, curY);
+      if (mi == dragIdx2) return;                 // put back
+      const Link* l = lay.accessories[dragIdx].link(lay.machines[dragIdx2].name);
+      int player = l ? l->player : 0;
+      unlink(dragIdx, dragIdx2);
+      if (mi >= 0 && !lay.accessories[dragIdx].link(lay.machines[mi].name)) link(dragIdx, mi, player);
     }
   }
 
-  bool carrying() const override { return drag == D_WIRE || drag == D_BOXPLUG; }
+  bool carrying() const override { return drag == D_ACCWIRE || drag == D_LINEPLUG; }
 };
 
 static DeskPage deskPage;
-static std::vector<BoxPage> boxPages;
+static AccessoriesPage accessoriesPage;
+static Page* const pages[] = {&deskPage, &accessoriesPage};  // a new page: add it here
 
-static int pageCount() { return 1 + (int)boxPages.size(); }
-static Page* pageAt(int i) { return i <= 0 ? (Page*)&deskPage : (Page*)&boxPages[i - 1]; }
+static int pageCount() { return (int)(sizeof pages / sizeof pages[0]); }
+static Page* pageAt(int i) { return pages[std::max(0, std::min(i, pageCount() - 1))]; }
 
 static void showPage(int tab) {
-  Page* p = pageAt(std::max(0, std::min(tab, pageCount() - 1)));
+  Page* p = pageAt(tab);
   if (p == page) return;
   page = p;
   drag = D_NONE;
   menuIdx = -1;
   sceneDirty = true;
-}
-
-// After each layout: one page per root box; stay on the same page if it is still there
-static void buildPages() {
-  std::string was = page ? page->key() : "";
-  boxPages.clear();
-  for (int ri : lay.rootBoxes()) boxPages.emplace_back(lay.machines[ri].name);
-  page = &deskPage;
-  for (auto& b : boxPages) if (b.key() == was) page = &b;
-  if (was != page->key()) drag = D_NONE;
 }
 
 // The sprites are portrait (the panel's own layout) and drawn on through
@@ -1444,7 +1577,6 @@ void rkmPanelBegin(const char* host, int port, bool inside) {
         lay = l;
         if (!sameMachines) drag = D_NONE;
         computeDesk();
-        buildPages();
         sceneDirty = true;
       }
     } else if (line.rfind("error ", 0) == 0) {
@@ -1497,8 +1629,8 @@ bool rkmPanelLoop() {
   }
 
   // a long press on a machine opens its options
-  if (drag == D_PRESS_CARD && nowMs() - pressAt > 550) {
-    openMenu(dragIdx);
+  if ((drag == D_PRESS_CARD || drag == D_PRESS_ACC) && nowMs() - pressAt > 550) {
+    openMenu(dragIdx, drag == D_PRESS_ACC);
     drag = D_LONG;
   }
 

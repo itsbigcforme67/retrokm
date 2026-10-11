@@ -992,7 +992,7 @@ static void cmd_status(Conn *r)
         const Accessory *a = &cfg.acc[i];
         int k, any = 0;
         if (a->scripted) continue;
-        ctl_printf(r, "accessory %-24s %s %s ->", a->name, acc_kinds[a->kind].id, a->present ? "here" : "away");
+        ctl_printf(r, "accessory %-24s %s %s ->", a->name, acc_kinds[a->kind].id, a->present || a->kind == ACC_KBM ? "here" : "away");
         for (k = 0; k < cfg.nscreens; k++)
             if (a->player[k]) {
                 ctl_printf(r, a->kind == ACC_PAD ? " %s:P%d" : " %s", cfg.screens[k].name, a->player[k]);
