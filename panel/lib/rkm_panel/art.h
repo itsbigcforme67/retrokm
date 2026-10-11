@@ -156,6 +156,20 @@ static void artDreamcast(Pen& p) {
   }
 }
 
+// RetroTINK 5X: low black box with a little blue OLED and a row of buttons
+static void artRetrotink(Pen& p) {
+  p.ellipse(4, 26, 70, 6, 0x0B0C0E);
+  p.quad(-58, -4, 42, -4, 60, -18, -40, -18, 0x2A2C31);          // top
+  p.quad(42, -4, 60, -18, 60, 4, 42, 20, 0x111215);              // side
+  p.rrect(-58, -6, 100, 26, 3, 0x1C1D21);                        // front
+  p.rect(-58, -6, 100, 1, 0x3A3C42);
+  p.rect(-48, 0, 30, 13, 0x05070A);                              // OLED
+  p.rect(-45, 3, 18, 2, 0x5AB8FF);
+  p.rect(-45, 7, 12, 2, 0x5AB8FF);
+  for (int i = 0; i < 4; i++) p.dot(-4 + i * 9, 7, 2.6f, 0x4B4E55);  // buttons
+  p.dot(34, 7, 2, 0xE11D48);                                     // power LED
+}
+
 static void artGeneric(Pen& p) {
   p.ellipse(0, 52, 60, 5, 0x0B0C0E);
   p.rrect(-50, -40, 100, 90, 6, 0x6B7280);
@@ -171,6 +185,7 @@ static void drawArt(Gfx& g, const std::string& art, int cx, int cy, float scale,
   else if (art == "armbox") artArmbox(p);
   else if (art == "octane") artOctane(p);
   else if (art == "dreamcast") artDreamcast(p);
+  else if (art == "retrotink") artRetrotink(p);
   else artGeneric(p);
 }
 
@@ -181,6 +196,7 @@ static uint32_t machineColor(const std::string& art, int index) {
   if (art == "dreamcast") return 0xF97316;
   if (art == "armbox") return 0xE5E7EB;
   if (art == "octane") return 0x2EC4B6;
+  if (art == "retrotink") return 0xE11D48;
   static const uint32_t pal[] = {0xF472B6, 0xA78BFA, 0xFB7185, 0x84CC16, 0xFACC15};
   return pal[index % 5];
 }
