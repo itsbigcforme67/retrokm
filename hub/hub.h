@@ -55,6 +55,7 @@ typedef struct Screen {
     Conn *clip;                  /* connection with RKM_CAP_CLIP */
     Conn *buddy;                 /* connection with RKM_CAP_BUDDY */
     Conn *sound;                 /* connection with RKM_CAP_SOUND */
+    Conn *pad;                   /* plays a game pad (RKM_CAP_PAD) */
     long long last_input_ms;     /* the hub last sent it input (0 = never) */
     long long last_key_ms;       /* ... a key */
     unsigned clip_gen;           /* hub clipboard generation this screen has */
@@ -88,6 +89,13 @@ typedef struct Monitor {
     int ddc_shared, ddc_switcher;   /* its input codes for the shared machine / switcher */
 } Monitor;
 
+/* A game pad's state, as on the wire (RKM_PAD). */
+typedef struct PadState {
+    unsigned buttons;            /* RKM_PAD_* */
+    unsigned char lt, rt;        /* 0..255 */
+    short lx, ly, rx, ry;        /* right and up positive */
+} PadState;
+
 typedef struct Hotkey {
     unsigned char mods;          /* RKM_MOD_CTRL etc, side-insensitive */
     unsigned char usage;
@@ -101,6 +109,7 @@ typedef struct Config {
     char state_path[256];        /* monitor positions moved from the panel */
     char devices[MAX_DEVICES][128];
     int ndevices;                /* 0 = auto-detect */
+    char pad[128];               /* game pad: "auto" (default), "none" or a path */
     int grab;
     double speed, accel;
     int follow_tie;              /* active screen follows the monitor on a tie */
@@ -128,6 +137,7 @@ void hub_motion(int dx, int dy);
 void hub_button(int btn, int down);
 void hub_wheel(int dy, int dx);
 void hub_key(int evcode, int usage, int state);
+void hub_pad(const PadState *p);
 void hub_extron_changed(void);
 int hub_routing(void);                  /* some screen is taking input */
 Screen *screen_by_name(const char *name);
@@ -148,6 +158,14 @@ int input_init(void);
 int input_fds(int *fds, int max);
 void input_readable(int fd);
 void input_tick(void);
+
+/* pad.c */
+int pad_fd(void);                       /* -1: no pad */
+void pad_readable(void);
+void pad_tick(void);
+void pad_grab(int on);
+void pad_rumble(unsigned strong, unsigned weak);
+const char *pad_name(void);
 
 /* uinput.c */
 int uinput_open(const char *name);

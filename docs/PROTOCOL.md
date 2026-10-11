@@ -42,6 +42,8 @@ Unknown types must be ignored, so new messages can be added later.
 | 0x15 | WHEEL | H>A | dy s16, dx s16; 120 units per notch, positive = away from the user / right |
 | 0x16 | KEY | H>A | usage u8, state u8 (0 up, 1 down, 2 repeat), modifiers u8 |
 | 0x17 | RESET | H>A | none. Release everything |
+| 0x18 | PAD | H>A | pad u8 (0), buttons u16, lt u8, rt u8, lx s16, ly s16, rx s16, ry s16 |
+| 0x19 | RUMBLE | A>H | pad u8 (0), strong u16, weak u16 |
 | 0x20 | CLIP_BEGIN | both | format u8 (1 = text), total length u32 |
 | 0x21 | CLIP_DATA | both | up to 480 bytes |
 | 0x22 | CLIP_END | both | none |
@@ -52,7 +54,8 @@ Unknown types must be ignored, so new messages can be added later.
 
 **caps**: bit 0 `INPUT` (can inject), bit 1 `CLIP` (has a clipboard),
 bit 2 `REL` (pointer is relative only), bit 3 `KEYS` (a hardware keyboard),
-bit 4 `BUDDY` (can show the desk buddy window), bit 5 `SOUND` (can play test chirps).
+bit 4 `BUDDY` (can show the desk buddy window), bit 5 `SOUND` (can play test chirps),
+bit 6 `PAD` (plays a game controller, see below).
 
 **charset**: 0 UTF-8, 1 ISO 8859-1, 2 Windows-1252, 3 MacRoman.
 **eol**: 0 LF, 1 CRLF, 2 CR. The agent always sends and receives clipboard
@@ -96,6 +99,29 @@ the pointer: one MOVEREL of (-30000, -30000) to pin it in the top-left
 corner, then one MOVEREL to the entry point. Target-side pointer
 acceleration makes this approximate; turn acceleration off on the target
 where possible.
+
+## Game controllers
+
+A game pad plugged into (or paired with) the hub's machine follows the
+keyboard: the screen that has the keyboard gets the pad too. A device with
+the `PAD` capability (the Xbox dongle, playing an original Xbox controller
+on a console's pad port) gets ENTER, LEAVE, PAD and RESET; all four but PAD
+mean "let go of everything, sticks to the centre".
+
+PAD carries the whole state every time, so a lost or late frame never
+leaves a button stuck: buttons (`RKM_PAD_*` bits: A 0001, B 0002, X 0004,
+Y 0008, LB 0010, RB 0020, Back 0040, Start 0080, Guide 0100, LS 0200,
+RS 0400, up 0800, down 1000, left 2000, right 4000, Share 8000), the
+triggers 0..255, and the sticks -32768..32767 with right and **up**
+positive. The hub sends one whenever the pad changes.
+
+The agent sends RUMBLE (strong and weak motor, 0..65535) whenever the game
+changes it; the hub plays it on the real pad while that screen has it.
+
+While the hub's own desktop has the keyboard, the pad is left to the
+desktop (games on the hub machine see it as usual). Elsewhere the hub
+grabs it. Guide + RB / Guide + LB hands the keyboard and pad to the next /
+previous screen that takes a pad (and the hub's desktop), without the mouse.
 
 ## Clipboard
 

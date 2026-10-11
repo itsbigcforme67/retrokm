@@ -10,6 +10,11 @@ accel = 0.5            # 0 = no acceleration
 # When the switcher puts another machine on the monitor under the pointer:
 # follow = start controlling that machine, stay = keep the current one.
 on_tie = follow
+# A game pad (Xbox-style, USB or Bluetooth) follows the keyboard to screens
+# that have a pad player (the Xbox dongle).  auto = the first one found,
+# none, or a /dev/input/by-id/... path.  Guide + RB / LB = next / previous
+# pad screen.
+#pad = auto
 #listen = 0.0.0.0
 #port = 24850
 #control_port = 24851  # text commands on 127.0.0.1; 0 disables
@@ -62,6 +67,12 @@ remap = leftalt:leftmeta, leftmeta:leftalt
 
 [screen g4]
 input = 4
+
+# A console played through the Xbox dongle (xboxpad/): it connects with
+# this name and gets the game pad while this screen has the keyboard
+#[screen xbox]
+#input = 6
+#label = Xbox
 
 # A console: video only, never gets the keyboard
 #[screen dreamcast]
