@@ -13,6 +13,7 @@ static void load_state(void);
 static char mon_fixed[MAX_MONITORS][32];   /* resolved after the whole file is read */
 static char mon_shared[MAX_MONITORS][32];
 static char area_mon[MAX_SCREENS][MAX_AREAS][32];
+static char scr_via[MAX_SCREENS][32];
 
 static char *trim(char *s)
 {
@@ -184,6 +185,7 @@ int config_load(const char *path)
                 if (sscanf(v, "%dx%d", &scr->w, &scr->h) != 2) goto bad;
             }
             else if (!strcasecmp(k, "input")) scr->extron_input = atoi(v);
+            else if (!strcasecmp(k, "via")) copy(scr_via[scr - cfg.screens], sizeof scr_via[0], v);
             else if (!strcasecmp(k, "speed")) scr->speed = atof(v);
             else if (!strcasecmp(k, "rate")) {
                 int hz = atoi(v);
@@ -283,6 +285,23 @@ bad:
             s->area_mon[k] = (int)(m - cfg.monitors);
         }
     }
+    for (i = 0; i < cfg.nscreens; i++) {
+        Screen *s = &cfg.screens[i];
+        if (!scr_via[i][0]) continue;
+        if (!(s->via = screen_by_name(scr_via[i]))) {
+            fprintf(stderr, "%s: screen %s: via names unknown screen %s\n", path, s->name, scr_via[i]);
+            return -1;
+        }
+    }
+    for (i = 0; i < cfg.nscreens; i++) {     /* boxes may chain (switcher -> tink), but not loop */
+        const Screen *s = &cfg.screens[i];
+        int n = 0;
+        while (s->via && n++ <= MAX_SCREENS) s = s->via;
+        if (n > MAX_SCREENS) {
+            fprintf(stderr, "%s: screen %s: its via chain loops\n", path, cfg.screens[i].name);
+            return -1;
+        }
+    }
     if (cfg.nscreens == 0) {
         fprintf(stderr, "%s: no [screen] sections\n", path);
         return -1;
@@ -311,8 +330,12 @@ static void load_state(void)
         } else {
             unsigned rgb;
             Screen *s;
+            char what[32];
             if (sscanf(line, "color %31s %x", name, &rgb) == 2 && (s = screen_by_name(name)))
                 s->color = (long)(rgb & 0xFFFFFF);
+            else if (sscanf(line, "plug %31s %31s", name, what) == 2 && (s = screen_by_name(what)) &&
+                     s->via && !strcmp(s->via->name, name))
+                s->via->plugged = s;
         }
     }
     fclose(f);
@@ -337,6 +360,8 @@ int config_save_state(void)
     for (i = 0; i < cfg.nscreens; i++)
         if (cfg.screens[i].color != cfg.screens[i].config_color && cfg.screens[i].color >= 0)
             fprintf(f, "color %s %06lx\n", cfg.screens[i].name, (unsigned long)cfg.screens[i].color);
+    for (i = 0; i < cfg.nscreens; i++)               /* which console is wired into each box */
+        if (cfg.screens[i].plugged) fprintf(f, "plug %s %s\n", cfg.screens[i].name, cfg.screens[i].plugged->name);
     if (fclose(f) != 0 || rename(tmp, cfg.state_path) != 0) {
         logmsg("cannot save %s", cfg.state_path);
         return -1;

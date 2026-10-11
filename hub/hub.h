@@ -72,6 +72,8 @@ typedef struct Screen {
     int no_agent;                /* video only (a console): never takes input */
     long color;                  /* keyboard lighting 0xRRGGBB, -1 = from its picture */
     long config_color;           /* what the config file said (panel picks are saved apart) */
+    struct Screen *via;          /* a console whose video goes through this box (the RetroTINK) */
+    struct Screen *plugged;      /* a box: the console wired into it now (set from the panel) */
 } Screen;
 
 typedef struct Monitor {

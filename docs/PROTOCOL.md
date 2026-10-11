@@ -123,6 +123,18 @@ desktop (games on the hub machine see it as usual). Elsewhere the hub
 grabs it. Guide + RB / Guide + LB hands the keyboard and pad to the next /
 previous screen that takes a pad (and the hub's desktop), without the mouse.
 
+## Consoles behind boxes (panel and control commands)
+
+Some screens are not on the switcher directly but go through a box that
+cannot be switched remotely: game consoles into the RetroTINK, by moving
+plugs. A console says `via = <box>` in the config; boxes may chain (a
+component switcher `via = retrotink`). Which console is wired into a box is
+told to the hub with `plug <console>` / `unplug <box>` (panel or control
+port) and kept in the state file. Wherever a box is shown, the hub treats
+the console plugged into it (through any chain of boxes) as the machine on
+that monitor, so the mouse, keyboard and game pad reach it. The layout JSON
+gives each screen `via` and `plugged`.
+
 ## Clipboard
 
 - An agent reports its clipboard (BEGIN, DATA..., END) when it changed
