@@ -35,6 +35,7 @@ static volatile sig_atomic_t quit;
 static Screen *active;           /* screen receiving input, or NULL */
 static Monitor *active_mon;      /* monitor the pointer is on, or NULL */
 static double px, py;            /* pointer, in the active screen's pixels */
+static long long ptr_moved_ms;   /* when the mouse last moved */
 static double rel_fx, rel_fy;    /* fractional remainder for relative agents */
 static unsigned char mods;       /* physical modifier state, HID bit order */
 static int buttons;              /* physical mouse buttons held (bit per button) */
@@ -578,6 +579,7 @@ void hub_motion(int dx, int dy)
     touched = 1;
 
     if (!s) return;
+    ptr_moved_ms = now_ms();
     s->last_input_ms = now_ms();
     mag = sqrt((double)dx * dx + (double)dy * dy);
     gain = cfg.speed * s->speed * (1.0 + cfg.accel * (mag > 30 ? 30 : mag) / 10.0);
@@ -1295,6 +1297,25 @@ static Monitor *monitor_at(int col, int row)
 
 /* activity {"screen":[seconds since input, seconds since a key],...}; -1 = never.
  * lil' C's bridge asks for this to stay out of the way of machines in use. */
+/* pointer <screen> <monitor> <fx> <fy> <idle s>: where the pointer is, as a
+ * fraction across and down the monitor it is on (lil' C watches it) */
+static void cmd_pointer(Conn *r)
+{
+    const Screen *s = active;
+    double x0 = 0, y0 = 0, w, h;
+    int ai;
+    if (!s || !active_mon) { ctl_printf(r, "pointer - - 0 0 -1\n"); return; }
+    w = s->w > 1 ? s->w : 1;
+    h = s->h > 1 ? s->h : 1;
+    if (has_areas(s) && (ai = area_at(s, px, py)) >= 0) {
+        x0 = s->area[ai][0]; y0 = s->area[ai][1];
+        w = s->area[ai][2]; h = s->area[ai][3];
+    }
+    ctl_printf(r, "pointer %s %s %.3f %.3f %.1f\n", s->name, active_mon->name,
+               clampd((px - x0) / w, 0, 1), clampd((py - y0) / h, 0, 1),
+               ptr_moved_ms ? (now_ms() - ptr_moved_ms) / 1000.0 : -1.0);
+}
+
 static void cmd_activity(Conn *r)
 {
     Sbuf b = { 0, 0, 0 };
@@ -1430,6 +1451,8 @@ static void run_panel_command(char *cmd, Conn *r)
         locked = argc >= 2 ? !strcasecmp(argv[1], "on") : !locked;
     } else if (!strcasecmp(argv[0], "activity")) {
         cmd_activity(r);
+    } else if (!strcasecmp(argv[0], "pointer")) {
+        cmd_pointer(r);
     } else if (!strcasecmp(argv[0], "buddy") && argc >= 3) {
         /* buddy <screen> show|hide [label]: lil' C's window on that machine */
         Screen *s = screen_by_name(argv[1]);

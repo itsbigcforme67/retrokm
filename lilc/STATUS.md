@@ -29,6 +29,13 @@ project with two firmware targets, plus a bridge on the PC:
 - Gaze: eyes decoupled from the neck (saccade, then the neck follows while the
   eyes counter-rotate); 63% of looks are glances; nearby targets with a centre
   pull; 8% of the time he tracks a floating object (the Tab5 shows an X cursor).
+- Watching the mouse (2026-10-13): while the mouse is moving, 40% of his looks
+  become 8-25 s of following the pointer across monitors, xeyes style, until
+  it stops for 2 s. The hub's `pointer` command gives monitor + spot; the
+  bridge (lilc_place.point_on, using each monitor's size and shape) sends
+  ptr_yaw/pitch/dir_x/dir_y in /api/presence, polled every 150 ms while he
+  watches. The Stack-chan turns round (lookFar, up to HEAD_FAR_YAW; stays on
+  its side past that); the Tab5 window stays put and only the eyes follow.
 
 ## New on 2026-10-10: one lil' C, wandering, desk control (flashed on both)
 

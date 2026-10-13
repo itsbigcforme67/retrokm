@@ -118,6 +118,11 @@ static volatile bool presHere = true;    // he is on this device
 static String presLabel, presKind;       // where he is ("the Tab5"), home/machine
 static Aim presAim;                      // which way to look to see him there
 static Aim tasksAim;                     // ... and where the Claude sessions run
+// The mouse, while it is moving: which way to look to see it (from the
+// bridge, which asks the RetroKM hub where the pointer is)
+static Aim ptrAim;
+static volatile bool ptrMoving = false;
+static volatile bool watchingPtr = false;  // following it about, xeyes style
 static volatile int presSeq = -1;        // bumps each time he moves
 static volatile uint32_t presArriveAt = 0;  // on his way here: when he gets here
 static String presFrom;                  // ... and where he is coming from
@@ -225,6 +230,8 @@ static void fetchPresence() {
   presAim.read(doc.as<JsonVariantConst>());
   tasksAim.read(doc.as<JsonVariantConst>(), "tasks_");
   presFrom = (const char*)(doc["from"] | "");
+  ptrMoving = !doc["ptr_yaw"].isNull();
+  if (ptrMoving) ptrAim.read(doc.as<JsonVariantConst>(), "ptr_");
   xSemaphoreGive(lock);
   if (here) presArriveAt = millis() + (uint32_t)(doc["eta_ms"] | 0);
   presSeq = seq;
@@ -389,7 +396,7 @@ static void netTask(void*) {
       setNotice("");
     }
     static uint32_t lastPres = 0;
-    if (bridgeOk && !videoActive() && millis() - lastPres > PRESENCE_POLL_MS) {
+    if (bridgeOk && !videoActive() && millis() - lastPres > (watchingPtr ? PTR_POLL_MS : PRESENCE_POLL_MS)) {
       lastPres = millis();
       fetchPresence();
     }
@@ -488,6 +495,7 @@ static uint32_t glanceUntil = 0;
 // Something drifting past that he follows (imaginary on the Stack-chan; an X
 // cursor floats across the Tab5 desktop). Head degrees, like lookX/Y.
 static bool tracking = false;
+static uint32_t watchUntil = 0;          // watching the mouse until then
 static float objX = 0, objY = 0, objVX = 0, objBaseY = 0;
 static uint32_t objSince = 0;
 static const uint32_t NECK_DELAY = 200;  // ms between eyes and head moving
@@ -1604,6 +1612,7 @@ void loop() {
   }
 #endif
 
+  if (mode != IDLE) watchingPtr = false;
   switch (mode) {
     case IDLE:
       if (bodyEmpty && (presHere || !presKnown)) settleIn(now);  // he's in it again
@@ -1625,7 +1634,34 @@ void loop() {
         barTap(t.x);
       }
       // Look around now and then
-      if (tracking) {  // follow the thing drifting past: eyes lock, head keeps up
+      if (watchingPtr) {  // the mouse, xeyes style: eyes on it, the head keeps up
+        if (!ptrMoving || now > watchUntil) {  // it stopped, or he got bored
+          watchingPtr = false;
+          lookX = constrain(lookX, -(float)SERVO_X_RANGE, (float)SERVO_X_RANGE);  // back to the desk
+          lookY = constrain(lookY, -(float)SERVO_Y_RANGE, (float)SERVO_Y_RANGE);
+          lookAt = now + 1500 + random(3000);
+        } else {
+          float x, y;
+          xSemaphoreTake(lock, portMAX_DELAY);
+          aimNeck(ptrAim, x, y);
+          xSemaphoreGive(lock);
+          glanceUntil = 0;
+#if DESKTOP
+          lookX = constrain(x, -(float)SERVO_X_RANGE, (float)SERVO_X_RANGE);
+          lookY = constrain(y, -(float)SERVO_Y_RANGE, (float)SERVO_Y_RANGE);
+          lookSince = now;  // the Tab5's window stays put; only the eyes follow
+#else
+          // The monitors are behind him: he turns round as far as his neck
+          // goes. Past that (right behind him) he stays on the side he is
+          // turned to, rather than whip round when it crosses the middle.
+          if (fabsf(x) > HEAD_FAR_YAW) x = head.x >= 0 ? HEAD_FAR_YAW : -HEAD_FAR_YAW;
+          lookX = x;
+          lookY = constrain(y, -(float)SERVO_Y_RANGE, (float)HEAD_FAR_PITCH);
+          lookSince = now - NECK_DELAY;
+          if (now > neckHeldUntil) head.lookFar(lookX, lookY);
+#endif
+        }
+      } else if (tracking) {  // follow the thing drifting past: eyes lock, head keeps up
         static uint32_t lastObj = now;
         float dt = min(0.1f, (now - lastObj) / 1000.0f);
         lastObj = now;
@@ -1645,7 +1681,10 @@ void loop() {
       } else if (now > lookAt && !stId) {  // (not while the mics listen)
         float x, y;
         int roll = random(100);
-        if (roll < 8) {  // something floats by
+        if (ptrMoving && roll < 40) {  // the mouse is moving about: watch it a while
+          watchingPtr = true;
+          watchUntil = now + 8000 + random(17000);
+        } else if (roll < 8) {  // something floats by
           startTracking();
         } else if (roll < 63) {  // just a glance with the eyes, then back
           nextSpot(x, y, 0.8f);
@@ -1659,7 +1698,7 @@ void loop() {
           lookAt = now + 6000 + random(8000);
         }
       }
-      if (!tracking && !stId && now - lookSince > NECK_DELAY && now > neckHeldUntil) head.look(lookX, lookY);
+      if (!tracking && !watchingPtr && !stId && now - lookSince > NECK_DELAY && now > neckHeldUntil) head.look(lookX, lookY);
       if (lastNeeds >= 0 && needsCount > lastNeeds) {  // a task wants you: glance at its PC (no sound)
         lookToward(tasksAim);
         lookAt = now + 1500;

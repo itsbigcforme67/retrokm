@@ -48,4 +48,5 @@
 #define MAX_RECORD_SECONDS 10
 #define TASK_POLL_MS 20000
 #define PRESENCE_POLL_MS 700   // asking the bridge where lil' C is
+#define PTR_POLL_MS      150   // ... while he watches the mouse
 #define VOLUME 160

@@ -26,6 +26,7 @@ class DeskLink:
         self.errors = []            # "error ..." lines from the hub, newest last
         self.on_buddy = None        # callback(screen, event) for buddy clicks
         self.on_sound = None        # callback(screen, id, status, channels, rate)
+        self.pointer = None         # (monitor, fx, fy, seconds since it moved, when heard)
         threading.Thread(target=self._run, daemon=True).start()
 
     # ------------------------------------------------------------ link
@@ -48,15 +49,18 @@ class DeskLink:
         while True:
             try:
                 s = socket.create_connection((self.host, self.port), timeout=5)
-                s.settimeout(1.0)
+                s.settimeout(0.15)
                 with self.lock:
                     self.sock = s
                 s.sendall(b"layout\n")
-                buf, last_ping = b"", time.time()
+                buf, last_ping, last_ptr = b"", time.time(), 0.0
                 while True:
                     if time.time() - last_ping > 1.0:  # also keeps the hub from dropping us
                         last_ping = time.time()
                         s.sendall(b"activity\nping\n")
+                    if time.time() - last_ptr > 0.15:  # where the mouse is, for lil' C to watch
+                        last_ptr = time.time()
+                        s.sendall(b"pointer\n")
                     try:
                         d = s.recv(65536)
                     except socket.timeout:
@@ -84,6 +88,13 @@ class DeskLink:
             try:
                 self.activity = {k: tuple(v) for k, v in json.loads(line[9:]).items()}
             except (ValueError, TypeError):
+                pass
+        elif line.startswith("pointer "):  # pointer <screen> <monitor> <fx> <fy> <idle s>
+            parts = line.split()
+            try:
+                self.pointer = None if parts[2] == "-" else (
+                    parts[2], float(parts[3]), float(parts[4]), float(parts[5]), time.time())
+            except (IndexError, ValueError):
                 pass
         elif line.startswith("sound "):  # sound <screen> <id> playing|done|failed <channels> <rate>
             parts = line.split()
@@ -119,6 +130,13 @@ class DeskLink:
         mons = self.monitors()
         order = [m for m in mons if not m.get("capture")] + [m for m in mons if m.get("capture")]
         return list(enumerate(order, 1))
+
+    def pointer_at(self, max_idle=2.0):
+        """(monitor, fx, fy) while the mouse is moving (within max_idle s), else None."""
+        p = self.pointer
+        if not p or time.time() - p[4] > 1.0 or p[3] < 0 or p[3] > max_idle:
+            return None
+        return p[:3]
 
     def idle(self, name):
         """Seconds since the hub last sent input to that machine (None: never)."""

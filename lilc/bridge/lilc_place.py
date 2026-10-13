@@ -18,6 +18,11 @@ desk top.
   up and put down) wins over all of that; those are kept in
   ~/.cache/lilc-workspace/measured.json.
 
+Monitors have a size: the hub's layout carries each one's shape (aw:ah),
+diagonal (inches10) and whether it is turned (portrait), so a spot on a
+screen (point_on(monitor, fx, fy), fractions across and down) has a place
+too; aim_at(from_home, point) looks there.  That is how he watches the mouse.
+
 aim(from_home, to_place) gives:
 - yaw/pitch: degrees for the Stack-chan's neck. 0 = facing the user;
   + yaw = towards the user's left (the convention the firmware's eyes and the
@@ -126,9 +131,28 @@ class DeskGeo:
 
     # ------------------------------------------------------------ looking
 
+    def monitor_size(self, name):
+        """(width, height) of its screen in cm, as it stands (22" 16:9 when not said)."""
+        m = self._monitors().get(name) or {}
+        aw, ah = max(1, m.get("aw", 16)), max(1, m.get("ah", 9))
+        d = (m.get("inches10") or 220) / 10.0 * 2.54
+        w, h = d * aw / math.hypot(aw, ah), d * ah / math.hypot(aw, ah)
+        return (h, w) if m.get("portrait") else (w, h)
+
+    def point_on(self, name, fx, fy):
+        """Where a spot on a monitor is (fx, fy: 0..1 across and down), in cm."""
+        c = self.monitor_pos(name)
+        if not c:
+            return None
+        w, h = self.monitor_size(name)
+        return (c[0] + (fx - 0.5) * w, c[1] + (0.5 - fy) * h, c[2])
+
     def aim(self, frm, to):
-        a, b = self.position(frm), self.position(to)
-        if not a or not b or frm == to:
+        return self.aim_at(frm, self.position(to) if frm != to else None)
+
+    def aim_at(self, frm, b):
+        a = self.position(frm)
+        if not a or not b:
             return {"yaw": 0, "pitch": 0, "dir_x": 0.0, "dir_y": 0.0, "known": False}
         vx, vy, vz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
         yaw = math.degrees(math.atan2(-vx, -vz)) * self.p["yaw_sign"]

@@ -279,7 +279,17 @@ class Presence:
                     "tasks_dir_x": tasks["dir_x"], "tasks_dir_y": tasks["dir_y"],
                     # still on his way: ms until he arrives, and where from
                     "eta_ms": int(max(0.0, self.arrive_at - time.time()) * 1000),
-                    "from": self.came_from}
+                    "from": self.came_from, **self._pointer_for(dev)}
+
+    def _pointer_for(self, dev):
+        """Which way to look to see the mouse, while it is moving (he
+        watches it now and then, like xeyes)."""
+        p = self.desk.pointer_at() if self.where == dev else None
+        spot = self.geo.point_on(*p) if p else None
+        if not spot:
+            return {}
+        a = self.geo.aim_at(dev, spot)
+        return {"ptr_yaw": a["yaw"], "ptr_pitch": a["pitch"], "ptr_dir_x": a["dir_x"], "ptr_dir_y": a["dir_y"]}
 
     # ------------------------------------------------------------ restlessness
 
