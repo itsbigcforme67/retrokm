@@ -48,6 +48,7 @@ typedef struct Conn {
     int line_len;
     /* panel */
     unsigned layout_sent;        /* hash of the last layout it was sent */
+    int trace;                   /* gets every mouse motion ("trace on"), for tuning */
 } Conn;
 
 typedef struct Screen {

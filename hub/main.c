@@ -616,6 +616,13 @@ void hub_motion(int dx, int dy)
     if (!s) return;
     ptr_moved_ms = now_ms();
     note_wiggle(dx, dy, ptr_moved_ms);
+    {   /* "trace on": m <ms> <dx> <dy> <wiggle> for each motion, raw */
+        int i;
+        char t[80];
+        int n = snprintf(t, sizeof t, "m %lld %d %d %.2f\n", ptr_moved_ms, dx, dy, wiggle_now(ptr_moved_ms));
+        for (i = 0; i < MAX_CONNS; i++)
+            if (conns[i].kind == CONN_PANEL && conns[i].trace && !conns[i].dead) conn_write(&conns[i], t, (size_t)n);
+    }
     s->last_input_ms = now_ms();
     mag = sqrt((double)dx * dx + (double)dy * dy);
     gain = cfg.speed * s->speed * (1.0 + cfg.accel * (mag > 30 ? 30 : mag) / 10.0);
@@ -1490,6 +1497,9 @@ static void run_panel_command(char *cmd, Conn *r)
         cmd_activity(r);
     } else if (!strcasecmp(argv[0], "pointer")) {
         cmd_pointer(r);
+    } else if (!strcasecmp(argv[0], "trace") && argc == 2) {
+        /* trace on|off: stream raw mouse motion to this connection */
+        r->trace = !strcasecmp(argv[1], "on");
     } else if (!strcasecmp(argv[0], "buddy") && argc >= 3) {
         /* buddy <screen> show|hide [label]: lil' C's window on that machine */
         Screen *s = screen_by_name(argv[1]);
