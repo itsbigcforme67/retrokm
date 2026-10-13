@@ -98,7 +98,10 @@ typedef struct Monitor {
     Screen *cur;                 /* resolved: what it shows right now */
     Screen *shared;              /* the monitor's other input shows this machine */
     int shared_on;               /* ... and is the one selected on the monitor */
-    int portrait;                /* drawn tall on the panel */
+    int portrait;                /* drawn tall on the panel (turned on its side) */
+    int aspect_w, aspect_h;      /* its shape, as it stands unturned (16:9, 4:3 ...) */
+    int inches10;                /* screen diagonal in tenths of an inch, 0 = not said */
+    int shape_set;               /* shape, size or turn picked on the panel (saved in the state file) */
     int capture;                 /* a capture card, not a screen on the desk */
     char label[48];              /* shown on the touch panel */
     char ddc[64];                /* DRM connector (or /dev/i2c-N) reaching it, for DDC/CI */

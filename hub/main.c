@@ -1244,8 +1244,9 @@ static void layout_json(Sbuf *b)
         sb_str(b, m->cur ? m->cur->name : "");
         sb_printf(b, ",\"shared\":");
         sb_str(b, m->shared ? m->shared->name : "");
-        sb_printf(b, ",\"sharedOn\":%d,\"portrait\":%d,\"capture\":%d,\"ddc\":%d,\"label\":", m->shared_on,
-                  m->portrait, m->capture, ddc_state(m, NULL));
+        sb_printf(b, ",\"sharedOn\":%d,\"portrait\":%d,\"aw\":%d,\"ah\":%d,\"inches10\":%d,"
+                  "\"capture\":%d,\"ddc\":%d,\"label\":", m->shared_on, m->portrait, m->aspect_w, m->aspect_h,
+                  m->inches10, m->capture, ddc_state(m, NULL));
         sb_str(b, m->label[0] ? m->label : m->name);
         sb_printf(b, "}");
     }
@@ -1373,6 +1374,21 @@ static void run_panel_command(char *cmd, Conn *r)
         m->col = col;
         m->row = row;
         logmsg("panel: monitor %s moved to %d,%d", m->name, col, row);
+        config_save_state();
+    } else if (!strcasecmp(argv[0], "shape") && argc == 6) {
+        /* shape <monitor> <aw> <ah> <inches*10> <turned 0|1>: how the panel draws it */
+        Monitor *m = monitor_by_name(argv[1]);
+        int aw = atoi(argv[2]), ah = atoi(argv[3]), in = atoi(argv[4]);
+        if (!m || aw < 1 || aw > 64 || ah < 1 || ah > 64 || in < 0 || in > 2000) {
+            ctl_printf(r, "error bad shape\n");
+            return;
+        }
+        m->aspect_w = aw;
+        m->aspect_h = ah;
+        m->inches10 = in;
+        m->portrait = atoi(argv[5]) != 0;
+        m->shape_set = 1;
+        logmsg("panel: monitor %s is %d:%d, %d.%d\"%s", m->name, aw, ah, in / 10, in % 10, m->portrait ? ", turned" : "");
         config_save_state();
     } else if (!strcasecmp(argv[0], "share") && argc >= 2) {
         /* share <monitor> [on|off]: which of its inputs the monitor shows */
@@ -1581,6 +1597,26 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     relayout();
 }
 
+/* A monitor the panel has not been told about takes its shape, which way
+ * up it stands and its size from what its machine says: rectangle r in
+ * pixels, mm = width and height in millimetres (0 = unknown). */
+static void monitor_shape_from(Monitor *m, const int *r, const unsigned char *mm)
+{
+    static const int shapes[][2] = { {4, 3}, {5, 4}, {3, 2}, {16, 10}, {16, 9}, {21, 9}, {32, 9} };
+    int w = r[2] > r[3] ? r[2] : r[3], h = r[2] > r[3] ? r[3] : r[2], k, best = 0;
+    double mw = RKM_GET16(mm), mh = RKM_GET16(mm + 2);
+    for (k = 1; k < 7; k++)              /* the nearest common shape */
+        if (fabs((double)w / h - (double)shapes[k][0] / shapes[k][1]) <
+            fabs((double)w / h - (double)shapes[best][0] / shapes[best][1])) best = k;
+    m->aspect_w = shapes[best][0];
+    m->aspect_h = shapes[best][1];
+    m->portrait = r[3] > r[2];
+    /* X reports 0, or made-up sizes like 160x90 mm (a projector, a capture
+     * card); only trust something the shape of the picture */
+    if (mw > 50 && mh > 50 && fabs(mw / mh - (double)r[2] / r[3]) < 0.1 * r[2] / r[3])
+        m->inches10 = (int)(sqrt(mw * mw + mh * mh) / 2.54 + 0.5);
+}
+
 /* The agent says where its monitors are (x16,y16,w16,h16 each): they become
  * the screen's areas, replacing any in the config file.  A rectangle that is
  * a shared monitor (one that only counts while that monitor is set to this
@@ -1595,10 +1631,10 @@ static void screen_monitors(Screen *s, const unsigned char *p, int n)
     if (n > MAX_AREAS) n = MAX_AREAS;
     for (i = 0; i < n; i++) {
         int *a = s->area[i];
-        a[0] = (int)RKM_GET16(p + 8 * i);
-        a[1] = (int)RKM_GET16(p + 8 * i + 2);
-        a[2] = (int)RKM_GET16(p + 8 * i + 4);
-        a[3] = (int)RKM_GET16(p + 8 * i + 6);
+        a[0] = (int)RKM_GET16(p + 12 * i);
+        a[1] = (int)RKM_GET16(p + 12 * i + 2);
+        a[2] = (int)RKM_GET16(p + 12 * i + 4);
+        a[3] = (int)RKM_GET16(p + 12 * i + 6);
         s->area_mon[i] = -1;
         order[i] = i;
     }
@@ -1620,8 +1656,11 @@ static void screen_monitors(Screen *s, const unsigned char *p, int n)
         mons[k] = m;
     }
     if (nmon == n) {
-        for (i = 0; i < n; i++)
+        for (i = 0; i < n; i++) {
             if (mons[i]->shared == s) s->area_mon[order[i]] = (int)(mons[i] - cfg.monitors);
+            if (!mons[i]->shape_set)
+                monitor_shape_from(mons[i], s->area[order[i]], p + 12 * order[i] + 8);
+        }
     } else {
         for (i = 0; i < n; i++) {
             const int *a = s->area[i];
@@ -1655,7 +1694,7 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
             Screen *s = c->screen;
             s->w = (int)RKM_GET16(p);
             s->h = (int)RKM_GET16(p + 2);
-            if (len >= 5 && p[4] && len >= 5 + 8u * p[4]) screen_monitors(s, p + 5, p[4]);
+            if (len >= 5 && p[4] && len >= 5 + 12u * p[4]) screen_monitors(s, p + 5, p[4]);
             if (s == active) {
                 if (px > s->w - 1) px = s->w - 1;
                 if (py > s->h - 1) py = s->h - 1;
