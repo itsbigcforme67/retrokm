@@ -74,6 +74,7 @@ track of where he is (`bridge/lilc_presence.py`); each device asks it every
   map moves where he looks. Set `"yaw_sign": -1` if his neck turns the wrong way.
 - Now and then, while you're using the mouse, he watches the pointer go from
   monitor to monitor, like an old xeyes, until it rests or he gets bored.
+  Wiggle the mouse to get his attention and he'll watch it straight away.
 - His eyes are the same shape everywhere: ovals 1.5 times as tall as wide, as
   big as fit in his window.
 

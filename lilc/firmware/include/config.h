@@ -49,4 +49,5 @@
 #define TASK_POLL_MS 20000
 #define PRESENCE_POLL_MS 700   // asking the bridge where lil' C is
 #define PTR_POLL_MS      150   // ... while he watches the mouse
+#define WIGGLE_TURNS     3.0f  // mouse turns back and forth (~per second) that get his attention
 #define VOLUME 160

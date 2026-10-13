@@ -26,7 +26,7 @@ class DeskLink:
         self.errors = []            # "error ..." lines from the hub, newest last
         self.on_buddy = None        # callback(screen, event) for buddy clicks
         self.on_sound = None        # callback(screen, id, status, channels, rate)
-        self.pointer = None         # (monitor, fx, fy, seconds since it moved, when heard)
+        self.pointer = None         # (monitor, fx, fy, s since it moved, when heard, wiggle)
         threading.Thread(target=self._run, daemon=True).start()
 
     # ------------------------------------------------------------ link
@@ -89,11 +89,12 @@ class DeskLink:
                 self.activity = {k: tuple(v) for k, v in json.loads(line[9:]).items()}
             except (ValueError, TypeError):
                 pass
-        elif line.startswith("pointer "):  # pointer <screen> <monitor> <fx> <fy> <idle s>
+        elif line.startswith("pointer "):  # pointer <screen> <monitor> <fx> <fy> <idle s> [wiggle]
             parts = line.split()
             try:
                 self.pointer = None if parts[2] == "-" else (
-                    parts[2], float(parts[3]), float(parts[4]), float(parts[5]), time.time())
+                    parts[2], float(parts[3]), float(parts[4]), float(parts[5]), time.time(),
+                    float(parts[6]) if len(parts) > 6 else 0.0)
             except (IndexError, ValueError):
                 pass
         elif line.startswith("sound "):  # sound <screen> <id> playing|done|failed <channels> <rate>
@@ -137,6 +138,12 @@ class DeskLink:
         if not p or time.time() - p[4] > 1.0 or p[3] < 0 or p[3] > max_idle:
             return None
         return p[:3]
+
+    def wiggle(self):
+        """How hard the mouse is being wiggled: about the turns back and
+        forth in the last second (0 = still or just moving)."""
+        p = self.pointer
+        return p[5] if p and time.time() - p[4] < 1.0 else 0.0
 
     def idle(self, name):
         """Seconds since the hub last sent input to that machine (None: never)."""

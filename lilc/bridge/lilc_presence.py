@@ -289,7 +289,8 @@ class Presence:
         if not spot:
             return {}
         a = self.geo.aim_at(dev, spot)
-        return {"ptr_yaw": a["yaw"], "ptr_pitch": a["pitch"], "ptr_dir_x": a["dir_x"], "ptr_dir_y": a["dir_y"]}
+        return {"ptr_yaw": a["yaw"], "ptr_pitch": a["pitch"], "ptr_dir_x": a["dir_x"], "ptr_dir_y": a["dir_y"],
+                "ptr_wiggle": round(self.desk.wiggle(), 1)}  # shaking it gets his attention
 
     # ------------------------------------------------------------ restlessness
 

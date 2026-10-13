@@ -36,6 +36,27 @@ static Screen *active;           /* screen receiving input, or NULL */
 static Monitor *active_mon;      /* monitor the pointer is on, or NULL */
 static double px, py;            /* pointer, in the active screen's pixels */
 static long long ptr_moved_ms;   /* when the mouse last moved */
+static double wiggle;            /* back-and-forth turns of the mouse, fading over ~1 s */
+static long long wiggle_ms;
+
+/* Wiggling the mouse (shaking it from side to side) gets lil' C's eye:
+ * count each sharp turn back the way it came. */
+static double wiggle_now(long long now)
+{
+    return wiggle * exp(-(now - wiggle_ms) / 700.0);
+}
+
+static void note_wiggle(int dx, int dy, long long now)
+{
+    static int sx, sy;           /* the way it was going */
+    int nx = dx > 2 ? 1 : dx < -2 ? -1 : 0, ny = dy > 2 ? 1 : dy < -2 ? -1 : 0;
+    if ((nx && sx && nx != sx) || (ny && sy && ny != sy)) {
+        wiggle = wiggle_now(now) + 1;
+        wiggle_ms = now;
+    }
+    if (nx) sx = nx;
+    if (ny) sy = ny;
+}
 static double rel_fx, rel_fy;    /* fractional remainder for relative agents */
 static unsigned char mods;       /* physical modifier state, HID bit order */
 static int buttons;              /* physical mouse buttons held (bit per button) */
@@ -580,6 +601,7 @@ void hub_motion(int dx, int dy)
 
     if (!s) return;
     ptr_moved_ms = now_ms();
+    note_wiggle(dx, dy, ptr_moved_ms);
     s->last_input_ms = now_ms();
     mag = sqrt((double)dx * dx + (double)dy * dy);
     gain = cfg.speed * s->speed * (1.0 + cfg.accel * (mag > 30 ? 30 : mag) / 10.0);
@@ -1297,23 +1319,24 @@ static Monitor *monitor_at(int col, int row)
 
 /* activity {"screen":[seconds since input, seconds since a key],...}; -1 = never.
  * lil' C's bridge asks for this to stay out of the way of machines in use. */
-/* pointer <screen> <monitor> <fx> <fy> <idle s>: where the pointer is, as a
- * fraction across and down the monitor it is on (lil' C watches it) */
+/* pointer <screen> <monitor> <fx> <fy> <idle s> <wiggle>: where the pointer
+ * is, as a fraction across and down the monitor it is on, and how hard it is
+ * being wiggled (about the turns in the last second) - lil' C watches it */
 static void cmd_pointer(Conn *r)
 {
     const Screen *s = active;
     double x0 = 0, y0 = 0, w, h;
     int ai;
-    if (!s || !active_mon) { ctl_printf(r, "pointer - - 0 0 -1\n"); return; }
+    if (!s || !active_mon) { ctl_printf(r, "pointer - - 0 0 -1 0\n"); return; }
     w = s->w > 1 ? s->w : 1;
     h = s->h > 1 ? s->h : 1;
     if (has_areas(s) && (ai = area_at(s, px, py)) >= 0) {
         x0 = s->area[ai][0]; y0 = s->area[ai][1];
         w = s->area[ai][2]; h = s->area[ai][3];
     }
-    ctl_printf(r, "pointer %s %s %.3f %.3f %.1f\n", s->name, active_mon->name,
+    ctl_printf(r, "pointer %s %s %.3f %.3f %.1f %.1f\n", s->name, active_mon->name,
                clampd((px - x0) / w, 0, 1), clampd((py - y0) / h, 0, 1),
-               ptr_moved_ms ? (now_ms() - ptr_moved_ms) / 1000.0 : -1.0);
+               ptr_moved_ms ? (now_ms() - ptr_moved_ms) / 1000.0 : -1.0, wiggle_now(now_ms()));
 }
 
 static void cmd_activity(Conn *r)

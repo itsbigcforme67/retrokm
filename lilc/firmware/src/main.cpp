@@ -122,6 +122,7 @@ static Aim tasksAim;                     // ... and where the Claude sessions ru
 // bridge, which asks the RetroKM hub where the pointer is)
 static Aim ptrAim;
 static volatile bool ptrMoving = false;
+static volatile float ptrWiggle = 0;       // the mouse being shaken: wants his attention
 static volatile bool watchingPtr = false;  // following it about, xeyes style
 static volatile int presSeq = -1;        // bumps each time he moves
 static volatile uint32_t presArriveAt = 0;  // on his way here: when he gets here
@@ -232,6 +233,7 @@ static void fetchPresence() {
   presFrom = (const char*)(doc["from"] | "");
   ptrMoving = !doc["ptr_yaw"].isNull();
   if (ptrMoving) ptrAim.read(doc.as<JsonVariantConst>(), "ptr_");
+  ptrWiggle = doc["ptr_wiggle"] | 0.0f;
   xSemaphoreGive(lock);
   if (here) presArriveAt = millis() + (uint32_t)(doc["eta_ms"] | 0);
   presSeq = seq;
@@ -1632,6 +1634,15 @@ void loop() {
         }
       } else if (t.wasClicked() && !touchOnFace) {
         barTap(t.x);
+      }
+      // Shaking the mouse gets his attention: he looks at once, and for longer
+      if (ptrMoving && ptrWiggle >= WIGGLE_TURNS && !stId) {
+        if (!watchingPtr) {
+          watchingPtr = true;
+          tracking = false;
+          neckHeldUntil = 0;
+        }
+        watchUntil = max(watchUntil, now + 15000 + (uint32_t)random(15000));
       }
       // Look around now and then
       if (watchingPtr) {  // the mouse, xeyes style: eyes on it, the head keeps up
