@@ -33,7 +33,7 @@ Unknown types must be ignored, so new messages can be added later.
 | 0x02 | WELCOME | H>A | version u8, status u8 (0 ok, 1 unknown name, 2 version) |
 | 0x03 | PING | H>A | none. Sent every 5 s |
 | 0x04 | PONG | A>H | none |
-| 0x05 | SCREEN | A>H | width u16, height u16. Resolution changed |
+| 0x05 | SCREEN | A>H | width u16, height u16, then optionally count u8 and that many monitors (x u16, y u16, w u16, h u16). Sent after HELLO and whenever the desktop changes; the monitors replace the config file's `area` lines |
 | 0x10 | ENTER | H>A | x u16, y u16, modifiers u8 |
 | 0x11 | LEAVE | H>A | none |
 | 0x12 | MOVE | H>A | x u16, y u16, absolute, in the agent's pixels |

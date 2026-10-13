@@ -22,7 +22,8 @@
 #define RKM_WELCOME    0x02  /* H->A ver,status                                   */
 #define RKM_PING       0x03  /* H->A                                              */
 #define RKM_PONG       0x04  /* A->H                                              */
-#define RKM_SCREEN     0x05  /* A->H w16,h16  (resolution changed)                */
+#define RKM_SCREEN     0x05  /* A->H w16,h16[,n,n*(x16,y16,w16,h16)] desktop and  */
+                                     /*      its monitors (sent on any change)          */
 /* input, hub -> agent */
 #define RKM_ENTER      0x10  /* x16,y16,mods                                      */
 #define RKM_LEAVE      0x11  /* (none)  agent releases everything it holds down   */

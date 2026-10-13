@@ -11,7 +11,7 @@ hub:
 
 build/rkm-x11: agents/x11/rkm_x11.c agents/x11/buddy_x11.h common/rkm_proto.c common/rkm_proto.h
 	@mkdir -p build
-	$(CC) $(CFLAGS) -o $@ agents/x11/rkm_x11.c common/rkm_proto.c -lXtst -lX11 -lm
+	$(CC) $(CFLAGS) -DRKM_XRANDR -o $@ agents/x11/rkm_x11.c common/rkm_proto.c -lXtst -lXrandr -lX11 -lm
 
 build/rkm-uinput: agents/linux/rkm_uinput.c hub/uinput.c hub/keymap.c common/rkm_proto.c
 	@mkdir -p build

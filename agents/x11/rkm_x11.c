@@ -5,7 +5,10 @@
  * selection mechanism.  Strict C89 so MIPSpro cc builds it as-is.
  *
  *   IRIX:   cc -o rkm-x11 rkm_x11.c ../../common/rkm_proto.c -lXtst -lXext -lX11 -lm
- *   Linux:  cc -o rkm-x11 rkm_x11.c ../../common/rkm_proto.c -lXtst -lX11 -lm
+ *   Linux:  cc -DRKM_XRANDR -o rkm-x11 rkm_x11.c ../../common/rkm_proto.c -lXtst -lXrandr -lX11 -lm
+ *
+ * With RKM_XRANDR it tells the hub where each monitor is (RKM_SCREEN), now
+ * and whenever monitors are rotated, moved, added or removed.
  *
  *   rkm-x11 [-n name] [-p port] [-s clipboard|primary|both] [-l|-u] [-c] [-B] hub-host
  *
@@ -33,6 +36,9 @@
 #include <X11/Xatom.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
+#ifdef RKM_XRANDR
+#include <X11/extensions/Xrandr.h>
+#endif
 #include "../../common/rkm_proto.h"
 
 #define MAX_CLIP_OUT (4UL * 1024 * 1024)
@@ -621,12 +627,53 @@ static int on_xerror(Display *d, XErrorEvent *e)
     return 0;
 }
 
+#ifdef RKM_XRANDR
+static int rr_event = -1;         /* XRandR's first event code, -1 = no XRandR */
+#endif
+static int screen_changed;
+
+/* RKM_SCREEN: the desktop's size, then each monitor's rectangle */
+static void send_screen(void)
+{
+    unsigned char p[5 + 8 * 16];
+    unsigned int len = 4;
+    RKM_PUT16(p, (unsigned int)DisplayWidth(dpy, DefaultScreen(dpy)));
+    RKM_PUT16(p + 2, (unsigned int)DisplayHeight(dpy, DefaultScreen(dpy)));
+#ifdef RKM_XRANDR
+    if (rr_event >= 0) {
+        int n = 0, i, k = 0;
+        XRRMonitorInfo *m = XRRGetMonitors(dpy, DefaultRootWindow(dpy), True, &n);
+        for (i = 0; m && i < n && k < 16; i++) {
+            unsigned char *q = p + 5 + 8 * k;
+            if (m[i].x < 0 || m[i].y < 0 || m[i].width < 1 || m[i].height < 1) continue;
+            RKM_PUT16(q, (unsigned int)m[i].x);
+            RKM_PUT16(q + 2, (unsigned int)m[i].y);
+            RKM_PUT16(q + 4, (unsigned int)m[i].width);
+            RKM_PUT16(q + 6, (unsigned int)m[i].height);
+            k++;
+        }
+        if (m) XRRFreeMonitors(m);
+        p[4] = (unsigned char)k;
+        len = 5 + 8 * (unsigned int)k;
+    }
+#endif
+    send_frame(RKM_SCREEN, p, len);
+}
+
 static void pump_x(void)
 {
     XEvent ev;
     unsigned char e = RKM_BUDDY_CLICK;
     while (XPending(dpy)) {
         XNextEvent(dpy, &ev);
+#ifdef RKM_XRANDR
+        if (rr_event >= 0 && ev.type == rr_event + RRScreenChangeNotify) {
+            XRRUpdateConfiguration(&ev);   /* so DisplayWidth/Height are current */
+            screen_changed = 1;
+            continue;
+        }
+        if (rr_event >= 0 && ev.type == rr_event + RRNotify) { screen_changed = 1; continue; }
+#endif
         switch (use_buddy ? buddy_event(&ev) : 0) {
         case 2: if (sock >= 0) send_frame(RKM_BUDDY_EVENT, &e, 1); break;
         case 1: break;
@@ -697,6 +744,13 @@ int main(int argc, char **argv)
     a_prop = XInternAtom(dpy, "RKM_SELECTION", False);
     build_keymap();
     check_selections(0);
+#ifdef RKM_XRANDR
+    if (XRRQueryExtension(dpy, &evb, &erb)) {
+        rr_event = evb;
+        XRRSelectInput(dpy, DefaultRootWindow(dpy),
+                       RRScreenChangeNotifyMask | RRCrtcChangeNotifyMask | RROutputChangeNotifyMask);
+    }
+#endif
     if (clip_only) use_buddy = 0;
     if (use_buddy) buddy_init(dpy);
 
@@ -726,6 +780,8 @@ int main(int argc, char **argv)
                        (unsigned int)DisplayWidth(dpy, DefaultScreen(dpy)),
                        (unsigned int)DisplayHeight(dpy, DefaultScreen(dpy)), maxkb, my_name);
         send_frame(RKM_HELLO, hello, hl);
+        send_screen();
+        screen_changed = 0;
         last_rx = time(NULL);
 
         while (!stop && sock >= 0) {
@@ -734,6 +790,7 @@ int main(int argc, char **argv)
             int xfd = ConnectionNumber(dpy), mx;
 
             pump_x();
+            if (screen_changed) { screen_changed = 0; send_screen(); }
             XFlush(dpy);
             FD_ZERO(&rf);
             FD_SET(sock, &rf);

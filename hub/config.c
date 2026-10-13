@@ -338,6 +338,9 @@ bad:
             }
             s->area_mon[k] = (int)(m - cfg.monitors);
         }
+        memcpy(s->cfg_area, s->area, sizeof s->area);
+        memcpy(s->cfg_area_mon, s->area_mon, sizeof s->area_mon);
+        s->cfg_narea = s->narea;
     }
     for (i = 0; i < cfg.nscreens; i++) {
         Screen *s = &cfg.screens[i];
