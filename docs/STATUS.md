@@ -32,7 +32,7 @@ file is the state of *this* desk and what was learned getting there.
 ## Pieces and their state
 
 - **Hub** (`hub/`). It does:
-  - edges by monitor grid, with `area =` for L-shaped desktops
+  - edges by monitor grid; agents report their monitors live (X11 agent, XRandR), so rotating or moving one just works (`area =` only for agents that cannot)
   - a shared monitor (`shared =`, `ddc =` with DDC/CI input switching via
     `model:DELL P2414H` on i2c-15)
   - capture-card monitors
@@ -64,7 +64,8 @@ file is the state of *this* desk and what was learned getting there.
   2000; 98 SE is untried, as is clipboard on Windows.
 - **X11 agent:** used by the laptop and armbox. The laptop build needs X
   headers fetched with `apt-get download libx11-dev libxtst-dev x11proto-dev`
-  into a scratch dir (no sudo); the armbox's are in `~/rkm-sdk`.
+  into a scratch dir (no sudo); the armbox's are in `~/rkm-sdk`.  Build with
+  `-DRKM_XRANDR -lXrandr` (as the Makefile does) so it reports its monitors.
 
 ## The Dell's drives and updating it
 

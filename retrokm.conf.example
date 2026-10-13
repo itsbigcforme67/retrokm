@@ -43,13 +43,15 @@ poll = 5               # seconds between re-reads, in case a change was missed
 #art = ideapad
 local = yes            # the hub's own desktop, driven through /dev/uinput
 size = 1920x1080
-# For a desktop made of monitors of different sizes, list the parts that are
-# really shown (WxH+X+Y, as xrandr prints them) so the pointer cannot get
-# lost in the gaps:
+# An agent that knows its monitors (the X11 agent with XRandR) reports where
+# each one is, live, so the pointer cannot get lost in the gaps of a desktop
+# made of monitors of different sizes, and rotating one just works.  Its
+# rectangles, left to right, are matched to the monitors that can show this
+# machine, left to right, which says which one is a shared monitor (below).
+# Only for an agent that cannot report them, list the parts that are really
+# shown (WxH+X+Y, as xrandr prints them); add a shared monitor's name to an
+# area that only counts while that monitor is set to this machine's input:
 #area = 1920x1080+0+0
-#area = 1080x1920+1920+0
-# An area can belong to a shared monitor (below): add its name, and the area
-# only counts while that monitor is set to this machine's input.
 #area = 1080x1920+1920+0 tall
 
 [screen octane]

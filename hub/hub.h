@@ -80,6 +80,9 @@ typedef struct Screen {
     int area[MAX_AREAS][4];      /* visible rectangles x,y,w,h; none = all of it */
     int area_mon[MAX_AREAS];     /* only real while this monitor is shared; -1 always */
     int narea;
+    int cfg_area[MAX_AREAS][4];  /* the config file's areas, before the agent reported its own */
+    int cfg_area_mon[MAX_AREAS];
+    int cfg_narea;
     int no_agent;                /* video only (a console): never takes input */
     long color;                  /* keyboard lighting 0xRRGGBB, -1 = from its picture */
     long config_color;           /* what the config file said (panel picks are saved apart) */

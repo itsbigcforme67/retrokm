@@ -1581,6 +1581,66 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     relayout();
 }
 
+/* The agent says where its monitors are (x16,y16,w16,h16 each): they become
+ * the screen's areas, replacing any in the config file.  A rectangle that is
+ * a shared monitor (one that only counts while that monitor is set to this
+ * machine) is found by desk order: the machine's rectangles left to right
+ * against the monitors that can show it, left to right.  When those counts
+ * differ, a config file area it overlaps says which monitor it is. */
+static void screen_monitors(Screen *s, const unsigned char *p, int n)
+{
+    int i, k, order[MAX_AREAS], nmon = 0;
+    Monitor *mons[MAX_AREAS + 1];
+
+    if (n > MAX_AREAS) n = MAX_AREAS;
+    for (i = 0; i < n; i++) {
+        int *a = s->area[i];
+        a[0] = (int)RKM_GET16(p + 8 * i);
+        a[1] = (int)RKM_GET16(p + 8 * i + 2);
+        a[2] = (int)RKM_GET16(p + 8 * i + 4);
+        a[3] = (int)RKM_GET16(p + 8 * i + 6);
+        s->area_mon[i] = -1;
+        order[i] = i;
+    }
+    s->narea = n;
+    /* rectangles and monitors, each left to right (then top to bottom) */
+    for (i = 1; i < n; i++)
+        for (k = i; k > 0; k--) {
+            const int *a = s->area[order[k - 1]], *b = s->area[order[k]];
+            int t;
+            if (a[0] < b[0] || (a[0] == b[0] && a[1] <= b[1])) break;
+            t = order[k]; order[k] = order[k - 1]; order[k - 1] = t;
+        }
+    for (i = 0; i < cfg.nmonitors && nmon <= MAX_AREAS; i++) {
+        Monitor *m = &cfg.monitors[i];
+        if (m->capture || (m->fixed != s && m->shared != s)) continue;
+        for (k = nmon++; k > 0 && (mons[k - 1]->col > m->col ||
+                                   (mons[k - 1]->col == m->col && mons[k - 1]->row > m->row)); k--)
+            mons[k] = mons[k - 1];
+        mons[k] = m;
+    }
+    if (nmon == n) {
+        for (i = 0; i < n; i++)
+            if (mons[i]->shared == s) s->area_mon[order[i]] = (int)(mons[i] - cfg.monitors);
+    } else {
+        for (i = 0; i < n; i++) {
+            const int *a = s->area[i];
+            long best = 0;
+            for (k = 0; k < s->cfg_narea; k++) {
+                const int *b = s->cfg_area[k];
+                long ow = (long)(a[0] + a[2] < b[0] + b[2] ? a[0] + a[2] : b[0] + b[2]) - (a[0] > b[0] ? a[0] : b[0]);
+                long oh = (long)(a[1] + a[3] < b[1] + b[3] ? a[1] + a[3] : b[1] + b[3]) - (a[1] > b[1] ? a[1] : b[1]);
+                if (ow > 0 && oh > 0 && ow * oh > best) { best = ow * oh; s->area_mon[i] = s->cfg_area_mon[k]; }
+            }
+        }
+    }
+    for (i = 0; i < n; i++) {
+        const int *a = s->area[i];
+        logmsg("%s: monitor %dx%d+%d+%d%s%s", s->name, a[2], a[3], a[0], a[1],
+               s->area_mon[i] >= 0 ? " is " : "", s->area_mon[i] >= 0 ? cfg.monitors[s->area_mon[i]].name : "");
+    }
+}
+
 static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned len)
 {
     Conn *c = ctx;
@@ -1595,9 +1655,11 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
             Screen *s = c->screen;
             s->w = (int)RKM_GET16(p);
             s->h = (int)RKM_GET16(p + 2);
+            if (len >= 5 && p[4] && len >= 5 + 8u * p[4]) screen_monitors(s, p + 5, p[4]);
             if (s == active) {
                 if (px > s->w - 1) px = s->w - 1;
                 if (py > s->h - 1) py = s->h - 1;
+                if (has_areas(s) && area_at(s, px, py) < 0) fit_area(s, &px, &py, px, py);
             }
             logmsg("%s: resolution is now %dx%d", s->name, s->w, s->h);
         }
