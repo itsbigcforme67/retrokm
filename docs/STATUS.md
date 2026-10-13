@@ -32,6 +32,8 @@ file is the state of *this* desk and what was learned getting there.
 ## Pieces and their state
 
 - **Hub** (`hub/`). It does:
+  - monitors drawn to shape and scale (from the agent's XRandR sizes, or
+    hold a monitor on the panel to set shape / size / turned)
   - edges by monitor grid; agents report their monitors live (X11 agent, XRandR), so rotating or moving one just works (`area =` only for agents that cannot)
   - a shared monitor (`shared =`, `ddc =` with DDC/CI input switching via
     `model:DELL P2414H` on i2c-15)

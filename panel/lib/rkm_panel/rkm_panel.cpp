@@ -100,6 +100,7 @@ struct Grid {
 static Grid grid;
 static bool gridFrozen = false;  // while a monitor is being dragged
 
+static void computeScale();
 static void computeGrid() {
   if (gridFrozen || lay.monitors.empty()) return;
   int c0 = 1 << 20, c1 = -(1 << 20), r0 = c0, r1 = c1;
@@ -115,6 +116,31 @@ static void computeGrid() {
   grid.cw = cw; grid.ch = ch;
   grid.ox = AX + (AW - grid.ncol * cw) / 2 - c0 * cw;
   grid.oy = AY + (AH - grid.nrow * ch) / 2 - r0 * ch;
+  computeScale();
+}
+
+// A monitor's screen in inches, as it stands (turned or not)
+static const float DEFAULT_INCHES = 22;
+static void monInches(const Monitor& m, float& w, float& h) {
+  float d = m.inches10 > 0 ? m.inches10 / 10.0f : DEFAULT_INCHES;
+  float aw = std::max(1, m.aw), ah = std::max(1, m.ah), k = d / sqrtf(aw * aw + ah * ah);
+  w = aw * k; h = ah * k;
+  if (m.portrait) std::swap(w, h);
+}
+
+// The room a screen may take in its cell, and one pixels-per-inch for the
+// whole desk, so monitors are drawn to scale against each other
+static const float SCREEN_W = 0.86f, SCREEN_H = 0.66f;
+static float inchPx = 8;
+static void computeScale() {
+  float k = 1e9f;
+  for (auto& m : lay.monitors) {
+    if (m.capture) continue;
+    float w, h;
+    monInches(m, w, h);
+    k = std::min({k, grid.cw * SCREEN_W / w, grid.ch * SCREEN_H / h});
+  }
+  inchPx = k < 1e8f ? k : 8;
 }
 
 // Parts of a monitor drawn in a cell
@@ -122,26 +148,29 @@ struct MonGeo {
   Rect screen, bezel, all;
   int neckX, neckY, baseY, plugX, plugY, labelY;
 };
-static MonGeo monGeo(const Rect& c, bool portrait = false, bool capture = false) {
+static MonGeo monGeo(const Rect& c, const Monitor& mon) {
   MonGeo m;
-  int mx = (int)(c.w * 0.07f);
-  int sw = c.w - 2 * mx, sh = (int)(c.h * 0.56f);
-  if (portrait) {  // a monitor turned on its side
-    sh = (int)(c.h * 0.66f);
-    sw = (int)(sh * 0.6f);
-    mx = (c.w - sw) / 2;
-  }
-  if (capture) {  // a small box with a preview window
+  int top = c.y + (int)(c.h * 0.05f) + 5, bottom = top + (int)(c.h * SCREEN_H);
+  int sw, sh;
+  if (mon.capture) {  // a small box with a preview window, the shape of its picture
+    float aw = std::max(1, mon.aw), ah = std::max(1, mon.ah);
     sw = (int)(c.w * 0.62f);
-    sh = (int)(sw * 0.56f);
-    mx = (c.w - sw) / 2;
+    sh = std::min((int)(sw * ah / aw), (int)(c.h * 0.42f));
+    sw = std::min(sw, (int)(sh * aw / ah));
+    top = c.y + (int)(c.h * 0.05f) + 5;
+  } else {  // to scale, standing on the desk: every screen's bottom on one line
+    float w, h;
+    monInches(mon, w, h);
+    sw = std::max(12, (int)(w * inchPx));
+    sh = std::max(12, (int)(h * inchPx));
+    top = bottom - sh;
   }
-  m.screen = {c.x + mx, c.y + (int)(c.h * 0.05f) + 5, sw, sh};
+  m.screen = {c.x + (c.w - sw) / 2, top, sw, sh};
   m.bezel = {m.screen.x - 6, m.screen.y - 6, sw + 12, sh + 12};
   m.neckX = c.x + c.w / 2;
   m.neckY = m.bezel.y + m.bezel.h;
-  m.baseY = m.neckY + (int)(c.h * 0.07f);
-  if (capture) {  // no stand; the box is the bezel plus a strip below the preview
+  m.baseY = bottom + 6 + (int)(c.h * 0.07f);
+  if (mon.capture) {  // no stand; the box is the bezel plus a strip below the preview
     m.bezel = {m.screen.x - 10, m.screen.y - 10, sw + 20, sh + 44};
     m.neckY = m.baseY = m.bezel.y + m.bezel.h;
   }
@@ -152,7 +181,7 @@ static MonGeo monGeo(const Rect& c, bool portrait = false, bool capture = false)
   return m;
 }
 
-static MonGeo geoOf(const Monitor& m, const Rect& cell) { return monGeo(cell, m.portrait, m.capture); }
+static MonGeo geoOf(const Monitor& m, const Rect& cell) { return monGeo(cell, m); }
 static MonGeo geoOf(const Monitor& m) { return geoOf(m, grid.cell(m.col, m.row)); }
 // Its cable is not a switcher cable: wired straight in, or the shared input
 static bool directLink(const Monitor& m) { return !m.fixed.empty() || m.sharedOn; }
@@ -331,6 +360,8 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
 
 // ------------------------------------------------------------ options sheet
 
+// Long-press a monitor: a sheet with its shape (16:9, 4:3 ...), whether it
+// is turned on its side, and its size, so the desk page draws it to scale.
 // Long-press a machine or an accessory: a sheet with its colour (a hue bar
 // and a saturation/brightness square), for a machine its "receive inputs
 // while out of focus" toggles (one per kind of accessory the hub lists) and
@@ -338,6 +369,7 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
 // machine, and how it is attached.
 static int menuIdx = -1;       // the machine (or accessory, menuAcc) the sheet is about
 static bool menuAcc = false;
+static bool menuMon = false;   // ... or the monitor menuIdx
 static float pickH, pickS, pickV;
 static uint32_t lastColorSend;
 static const Rect MENU{70, 74, 1140, 630};
@@ -345,7 +377,7 @@ static const Rect SV{MENU.x + 30, MENU.y + 158, 300, 186};
 static const Rect HUE{MENU.x + 30, MENU.y + 360, 300, 28};
 static const Rect PREVIEW{MENU.x + 30, MENU.y + 408, 300, 56};
 // Everything tappable on the sheet is listed as it is drawn
-enum HitKind { H_DEFAULT, H_USE, H_DONE, H_TOGGLE, H_PLAYER };
+enum HitKind { H_DEFAULT, H_USE, H_DONE, H_TOGGLE, H_PLAYER, H_ASPECT, H_TURN, H_SIZE };
 struct Hit { Rect r; HitKind kind; int a, b, c; };
 static std::vector<Hit> hits;
 
@@ -384,9 +416,24 @@ static void toHsv(uint32_t rgb, float& h, float& s, float& v) {
   if (h < 0) h += 360;
 }
 
+static void openMonMenu(int i) {
+  menuIdx = i;
+  menuAcc = false;
+  menuMon = true;
+  sceneDirty = true;
+}
+
+// Tell the hub a monitor's shape, and redraw the desk to the new scale
+static void sendShape(const Monitor& m) {
+  hub.send("shape " + m.name + " " + std::to_string(m.aw) + " " + std::to_string(m.ah) + " " +
+           std::to_string(m.inches10) + (m.portrait ? " 1" : " 0"));
+  computeGrid();
+}
+
 static void openMenu(int i, bool acc = false) {
   menuIdx = i;
   menuAcc = acc;
+  menuMon = false;
   toHsv(sheetColor(), pickH, pickS, pickV);
   sceneDirty = true;
 }
@@ -432,6 +479,25 @@ static void menuHit(const Hit& h) {
   case H_DONE:
     menuIdx = -1;
     break;
+  case H_ASPECT: {  // a:b
+    Monitor& m = lay.monitors[menuIdx];
+    m.aw = h.a; m.ah = h.b;
+    sendShape(m);
+    break;
+  }
+  case H_TURN: {  // a = turned
+    Monitor& m = lay.monitors[menuIdx];
+    m.portrait = h.a != 0;
+    sendShape(m);
+    break;
+  }
+  case H_SIZE: {  // a = change, tenths of an inch
+    Monitor& m = lay.monitors[menuIdx];
+    int in = m.inches10 > 0 ? m.inches10 : (int)(DEFAULT_INCHES * 10);
+    m.inches10 = std::min(1000, std::max(30, in + h.a));
+    sendShape(m);
+    break;
+  }
   case H_TOGGLE: {  // a = kind
     Machine& m = lay.machines[menuIdx];
     if ((int)m.always.size() <= h.a) m.always.resize(h.a + 1, 0);
@@ -560,7 +626,12 @@ static void touchInput(bool down, int x, int y) {
     if (embedded && backBtn.has(x, y)) drag = D_PRESS_BACK;
     else if (!hub.connected() || !lay.valid) drag = D_NONE;
     else if (menuIdx >= 0) {  // the options sheet takes every touch while it is open
-      if (SV.has(x, y)) { drag = D_PICK_SV; pickTo(x, y, false); }
+      if (menuMon) {
+        if (!MENU.has(x, y)) { menuIdx = -1; drag = D_NONE; }
+        else for (i = 0; i < (int)hits.size(); i++)
+          if (hits[i].r.has(x, y)) { drag = D_MENU_TAP; dragIdx = i; }
+      }
+      else if (SV.has(x, y)) { drag = D_PICK_SV; pickTo(x, y, false); }
       else if (Rect{HUE.x, HUE.y - 10, HUE.w, HUE.h + 20}.has(x, y)) { drag = D_PICK_HUE; pickTo(x, y, false); }
       else if (!MENU.has(x, y)) { menuIdx = -1; drag = D_NONE; }  // tap outside: close
       else {
@@ -1010,18 +1081,98 @@ static void button(const Rect& r, const char* label, uint32_t bg, uint32_t fg) {
   text(label, r.x + r.w / 2, r.y + r.h / 2, fg, &fonts::FreeSansBold12pt7b);
 }
 
-static void drawMenu() {
-  hits.clear();
-  int nItems = menuAcc ? (int)lay.accessories.size() : (int)lay.machines.size();
-  if (menuIdx < 0 || menuIdx >= nItems) { menuIdx = -1; return; }
-  uint32_t col = sheetColor();
-  const std::string& label = menuAcc ? lay.accessories[menuIdx].label : lay.machines[menuIdx].label;
-  // shade the page behind it: every other row and column
+// The options sheet's card, over the page shaded every other row and column
+static void sheetBackdrop(uint32_t edge) {
   for (int y = HEAD_H + 1; y < SH; y += 2) G->drawFastHLine(0, y, SW, C(0x07080A));
   for (int x = 0; x < SW; x += 2) G->drawFastVLine(x, HEAD_H + 1, SH - HEAD_H - 1, C(0x07080A));
   G->fillSmoothRoundRect(MENU.x + 8, MENU.y + 10, MENU.w, MENU.h, 20, C(0x050608));
   G->fillSmoothRoundRect(MENU.x, MENU.y, MENU.w, MENU.h, 20, C(PANEL_BG));
-  G->drawRoundRect(MENU.x, MENU.y, MENU.w, MENU.h, 20, C(col));
+  G->drawRoundRect(MENU.x, MENU.y, MENU.w, MENU.h, 20, C(edge));
+}
+
+static void drawMonMenu() {
+  if (menuIdx < 0 || menuIdx >= (int)lay.monitors.size()) { menuIdx = -1; return; }
+  const Monitor& m = lay.monitors[menuIdx];
+  sheetBackdrop(ACCENT);
+  const char* nm = m.label.empty() ? m.name.c_str() : m.label.c_str();
+  text(nm, MENU.x + 40, MENU.y + 46, TEXT, fit(nm, MENU.w - 80, {&fonts::FreeSansBold18pt7b, &fonts::FreeSansBold12pt7b}),
+       middle_left);
+  text(m.capture ? "capture card: the shape of its picture" : "screen shape and size, so the desk is drawn to scale",
+       MENU.x + 42, MENU.y + 86, MUTED, &fonts::FreeSans12pt7b, middle_left);
+
+  // column 1: how it will look
+  Rect box{MENU.x + 30, MENU.y + 130, 330, 330};
+  G->fillSmoothRoundRect(box.x, box.y, box.w, box.h, 14, C(0x0B0D10));
+  {
+    float w = m.portrait ? m.ah : m.aw, h = m.portrait ? m.aw : m.ah;
+    float k = std::min((box.w - 60) / w, (box.h - 60) / h);
+    int sw = (int)(w * k), sh = (int)(h * k);
+    int sx = box.x + (box.w - sw) / 2, sy = box.y + (box.h - sh) / 2;
+    G->fillSmoothRoundRect(sx - 8, sy - 8, sw + 16, sh + 16, 8, C(0x262B33));
+    G->fillRect(sx, sy, sw, sh, C(mix(ACCENT, 0x0B0D11, 0.8f)));
+    char b[24];
+    snprintf(b, sizeof b, "%d:%d", m.portrait ? m.ah : m.aw, m.portrait ? m.aw : m.ah);
+    text(b, sx + sw / 2, sy + sh / 2, TEXT, &fonts::FreeSansBold12pt7b);
+  }
+
+  // column 2: shape, and which way up
+  int x2 = MENU.x + 400, y = MENU.y + 136;
+  text("shape", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+  y += 26;
+  static const int shapes[][2] = {{4, 3}, {5, 4}, {3, 2}, {16, 10}, {16, 9}, {21, 9}};
+  for (int k = 0; k < 6; k++) {
+    Rect b{x2 + (k % 3) * 112, y + (k / 3) * 60, 102, 50};
+    bool on = m.aw == shapes[k][0] && m.ah == shapes[k][1];
+    char t[8];
+    snprintf(t, sizeof t, "%d:%d", shapes[k][0], shapes[k][1]);
+    button(b, t, on ? 0x1F4D3A : 0x2B323C, on ? TEXT : 0xC9D1DB);
+    hits.push_back({b, H_ASPECT, shapes[k][0], shapes[k][1], 0});
+  }
+  y += 140;
+  if (!m.capture) {
+    text("stands", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+    y += 26;
+    for (int k = 0; k < 2; k++) {
+      Rect b{x2 + k * 168, y, 158, 50};
+      bool on = m.portrait == (k == 1);
+      button(b, k ? "on its side" : "wide", on ? 0x1F4D3A : 0x2B323C, on ? TEXT : 0xC9D1DB);
+      hits.push_back({b, H_TURN, k, 0, 0});
+    }
+  }
+
+  // column 3: size
+  int x3 = MENU.x + 790, w3 = 320;
+  y = MENU.y + 136;
+  if (!m.capture) {
+    text("size (diagonal)", x3, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+    y += 26;
+    char b[24];
+    if (m.inches10 > 0) snprintf(b, sizeof b, "%d.%d\"", m.inches10 / 10, m.inches10 % 10);
+    else snprintf(b, sizeof b, "%d\"?", (int)DEFAULT_INCHES);
+    text(b, x3 + w3 / 2, y + 44, m.inches10 > 0 ? TEXT : MUTED, &fonts::FreeSansBold24pt7b);
+    y += 100;
+    static const int steps[] = {-10, -1, 1, 10};
+    static const char* names[] = {"-1\"", "-.1", "+.1", "+1\""};
+    for (int k = 0; k < 4; k++) {
+      Rect r{x3 + k * 80, y, 72, 50};
+      button(r, names[k], 0x2B323C, TEXT);
+      hits.push_back({r, H_SIZE, steps[k], 0, 0});
+    }
+  }
+  Rect bDone{x3, MENU.y + 548, w3, 54};
+  button(bDone, "done", 0x2B323C, TEXT);
+  hits.push_back({bDone, H_DONE, 0, 0, 0});
+}
+
+static void drawMonMenu();
+static void drawMenu() {
+  hits.clear();
+  if (menuMon) { drawMonMenu(); return; }
+  int nItems = menuAcc ? (int)lay.accessories.size() : (int)lay.machines.size();
+  if (menuIdx < 0 || menuIdx >= nItems) { menuIdx = -1; return; }
+  uint32_t col = sheetColor();
+  const std::string& label = menuAcc ? lay.accessories[menuIdx].label : lay.machines[menuIdx].label;
+  sheetBackdrop(col);
   // title
   std::string art = menuAcc ? (lay.accessories[menuIdx].kind == "kbm" ? "keyboard" : "gamepad") : lay.machines[menuIdx].art;
   drawArt(*G, art, MENU.x + 76, MENU.y + 62, 0.55f, 0, PANEL_BG);
@@ -1631,6 +1782,11 @@ bool rkmPanelLoop() {
   // a long press on a machine opens its options
   if ((drag == D_PRESS_CARD || drag == D_PRESS_ACC) && nowMs() - pressAt > 550) {
     openMenu(dragIdx, drag == D_PRESS_ACC);
+    drag = D_LONG;
+  }
+  // ... and on a monitor, its shape and size
+  if (drag == D_PRESS_MON && nowMs() - pressAt > 550) {
+    openMonMenu(dragIdx);
     drag = D_LONG;
   }
 

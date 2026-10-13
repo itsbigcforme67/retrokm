@@ -187,6 +187,8 @@ int config_load(const char *path)
                 sec = S_MONITOR;
                 mon = &cfg.monitors[cfg.nmonitors++];
                 copy(mon->name, sizeof mon->name, name);
+                mon->aspect_w = 16;              /* until the config or the panel says */
+                mon->aspect_h = 9;
             } else goto bad;
             continue;
         }
@@ -272,6 +274,17 @@ int config_load(const char *path)
                 mon->shared_on = 1;              /* until the panel says otherwise */
             }
             else if (!strcasecmp(k, "portrait")) mon->portrait = truthy(v);
+            else if (!strcasecmp(k, "aspect")) {
+                /* aspect = 16:9, 4:3, 16:10 ...: its shape before any turn */
+                if (sscanf(v, "%d:%d", &mon->aspect_w, &mon->aspect_h) != 2 ||
+                    mon->aspect_w < 1 || mon->aspect_h < 1 || mon->aspect_w > 64 || mon->aspect_h > 64) goto bad;
+            }
+            else if (!strcasecmp(k, "size")) {
+                /* size = 24: screen diagonal in inches */
+                double d = atof(v);
+                if (d < 1 || d > 200) goto bad;
+                mon->inches10 = (int)(d * 10 + 0.5);
+            }
             else if (!strcasecmp(k, "capture")) mon->capture = truthy(v);
             else if (!strcasecmp(k, "ddc")) copy(mon->ddc, sizeof mon->ddc, v);
             else if (!strcasecmp(k, "ddc_shared") || !strcasecmp(k, "ddc_switcher")) {
@@ -379,7 +392,7 @@ static void load_state(void)
 {
     FILE *f = fopen(cfg.state_path, "r");
     char line[256], name[32];
-    int col, row, on;
+    int col, row, on, k;
     unsigned char seen[MAX_ACC];        /* accessories whose links the file lists */
 
     memset(seen, 0, sizeof seen);
@@ -390,6 +403,13 @@ static void load_state(void)
         if (sscanf(line, "monitor %31s %d %d", name, &col, &row) == 3 && (m = monitor_by_name(name))) {
             m->col = col;
             m->row = row;
+        } else if (sscanf(line, "shape %31s %d %d %d %d", name, &col, &row, &on, &k) == 5 && (m = monitor_by_name(name)) &&
+                   col >= 1 && col <= 64 && row >= 1 && row <= 64 && on >= 0 && on <= 2000) {
+            m->aspect_w = col;
+            m->aspect_h = row;
+            m->inches10 = on;
+            m->portrait = k != 0;
+            m->shape_set = 1;
         } else if (sscanf(line, "shared %31s %d", name, &on) == 2 && (m = monitor_by_name(name)) && m->shared) {
             m->shared_on = on != 0;
         } else {
@@ -443,6 +463,11 @@ int config_save_state(void)
         fprintf(f, "monitor %s %d %d\n", cfg.monitors[i].name, cfg.monitors[i].col, cfg.monitors[i].row);
     for (i = 0; i < cfg.nmonitors; i++)
         if (cfg.monitors[i].shared) fprintf(f, "shared %s %d\n", cfg.monitors[i].name, cfg.monitors[i].shared_on);
+    for (i = 0; i < cfg.nmonitors; i++) {           /* shape aw ah inches*10 turned */
+        const Monitor *m = &cfg.monitors[i];
+        if (m->shape_set)
+            fprintf(f, "shape %s %d %d %d %d\n", m->name, m->aspect_w, m->aspect_h, m->inches10, m->portrait);
+    }
     for (i = 0; i < cfg.nscreens; i++)
         if (cfg.screens[i].color != cfg.screens[i].config_color && cfg.screens[i].color >= 0)
             fprintf(f, "color %s %06lx\n", cfg.screens[i].name, (unsigned long)cfg.screens[i].color);

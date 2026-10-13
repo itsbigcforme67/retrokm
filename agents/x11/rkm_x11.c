@@ -635,7 +635,7 @@ static int screen_changed;
 /* RKM_SCREEN: the desktop's size, then each monitor's rectangle */
 static void send_screen(void)
 {
-    unsigned char p[5 + 8 * 16];
+    unsigned char p[5 + 12 * 16];
     unsigned int len = 4;
     RKM_PUT16(p, (unsigned int)DisplayWidth(dpy, DefaultScreen(dpy)));
     RKM_PUT16(p + 2, (unsigned int)DisplayHeight(dpy, DefaultScreen(dpy)));
@@ -644,17 +644,19 @@ static void send_screen(void)
         int n = 0, i, k = 0;
         XRRMonitorInfo *m = XRRGetMonitors(dpy, DefaultRootWindow(dpy), True, &n);
         for (i = 0; m && i < n && k < 16; i++) {
-            unsigned char *q = p + 5 + 8 * k;
+            unsigned char *q = p + 5 + 12 * k;
             if (m[i].x < 0 || m[i].y < 0 || m[i].width < 1 || m[i].height < 1) continue;
             RKM_PUT16(q, (unsigned int)m[i].x);
             RKM_PUT16(q + 2, (unsigned int)m[i].y);
             RKM_PUT16(q + 4, (unsigned int)m[i].width);
             RKM_PUT16(q + 6, (unsigned int)m[i].height);
+            RKM_PUT16(q + 8, (unsigned int)(m[i].mwidth > 0 ? m[i].mwidth : 0));    /* mm, 0 = unknown */
+            RKM_PUT16(q + 10, (unsigned int)(m[i].mheight > 0 ? m[i].mheight : 0));
             k++;
         }
         if (m) XRRFreeMonitors(m);
         p[4] = (unsigned char)k;
-        len = 5 + 8 * (unsigned int)k;
+        len = 5 + 12 * (unsigned int)k;
     }
 #endif
     send_frame(RKM_SCREEN, p, len);
