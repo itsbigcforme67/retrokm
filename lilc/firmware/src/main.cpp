@@ -1636,7 +1636,7 @@ void loop() {
         barTap(t.x);
       }
       // Shaking the mouse gets his attention: he looks at once, and for longer
-      if (ptrMoving && ptrWiggle >= WIGGLE_TURNS && !stId) {
+      if (ptrMoving && ptrWiggle >= WIGGLE_AT && !stId) {
         if (!watchingPtr) {
           watchingPtr = true;
           tracking = false;

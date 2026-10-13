@@ -140,6 +140,7 @@ int config_load(const char *path)
     cfg.grab = 1;
     cfg.speed = 1.0;
     cfg.accel = 0.5;
+    cfg.wiggle = 400;
     cfg.follow_tie = 1;
     cfg.extron_baud = 9600;
     cfg.extron_poll = 5;
@@ -211,6 +212,7 @@ int config_load(const char *path)
             else if (!strcasecmp(k, "grab")) cfg.grab = truthy(v);
             else if (!strcasecmp(k, "speed")) cfg.speed = atof(v);
             else if (!strcasecmp(k, "accel")) cfg.accel = atof(v);
+            else if (!strcasecmp(k, "wiggle")) cfg.wiggle = atof(v);
             else if (!strcasecmp(k, "pad")) copy(cfg.pad, sizeof cfg.pad, v);
             else if (!strcasecmp(k, "on_tie")) cfg.follow_tie = !strcasecmp(v, "follow");
             else if (!strcasecmp(k, "device")) {

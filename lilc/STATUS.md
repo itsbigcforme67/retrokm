@@ -36,9 +36,11 @@ project with two firmware targets, plus a bridge on the PC:
   ptr_yaw/pitch/dir_x/dir_y in /api/presence, polled every 150 ms while he
   watches. The Stack-chan turns round (lookFar, up to HEAD_FAR_YAW; stays on
   its side past that); the Tab5 window stays put and only the eyes follow.
-- Wiggling the mouse (any loose shake or zig-zag; the hub adds up how far
-  each short stroke swings from the last, WIGGLE_TURNS = 3) grabs his
-  attention at once: he drops what he was looking at and watches it
+- Wiggling the mouse grabs his attention at once. Tuned on a recording of
+  the owner's trackball (hub `trace on`): over 0.4 s, distance travelled
+  minus distance got; normal use peaked at 267 counts, wiggles at 522-1425,
+  so the line is 400 (`wiggle =` in the hub config). Replaying the
+  recording with 0.7 s polling caught all 7 wiggles and no normal use: he drops what he was looking at and watches it
   for 15-30 s (more wiggling keeps him on it).
 
 ## New on 2026-10-10: one lil' C, wandering, desk control (flashed on both)

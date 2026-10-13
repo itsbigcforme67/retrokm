@@ -146,6 +146,7 @@ typedef struct Config {
     char pad[128];               /* game pad: "auto" (default), "none" or a path */
     int grab;
     double speed, accel;
+    double wiggle;               /* mouse back-and-forth (counts in 0.4 s) that is a wiggle */
     int follow_tie;              /* active screen follows the monitor on a tie */
     int lights;                  /* colour the keyboard after the active machine */
     int lights_brightness;       /* percent */
