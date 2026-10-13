@@ -187,7 +187,10 @@ from them. Agents without the capability never see BUDDY frames.
 
 The panel port also answers `activity` with
 `activity {"screen":[s since input, s since a key],...}` (-1: never), so
-lil' C can stay out of the way of a machine someone is using.
+lil' C can stay out of the way of a machine someone is using, and `pointer`
+with `pointer <screen> <monitor> <fx> <fy> <s since the mouse moved>` (fx,
+fy: 0..1 across and down that monitor; `pointer - - 0 0 -1` when nothing has
+it), so he can watch the mouse go from monitor to monitor.
 
 ## Test chirps
 
