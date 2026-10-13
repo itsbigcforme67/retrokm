@@ -254,7 +254,7 @@ class Locator:
     # if it is this sure: enough speakers, and they agree this well
     AUTO_MIN_SPEAKERS = 3
     AUTO_MAX_FIT_CM = 15
-    AUTO_GAP_S = 20  # at most one automatic re-check per device this often
+    AUTO_GAP_S = 5   # a pick-up this soon after the last re-check started is the same one
     DESK_X_CM = (-250, 250)  # where on the desk a device can be (three speakers always
     DESK_Z_CM = (-100, 150)  # fit exactly, so the answer must at least be on the desk)
 
@@ -288,7 +288,11 @@ class Locator:
 
     def moved(self, dev):
         """The device was picked up and put down: listen for where it is now."""
-        if time.time() - self.last_auto.get(dev, 0) < self.AUTO_GAP_S:
+        with self.lock:
+            busy = any(j["dev"] == dev and j.get("auto") and j["state"] == "waiting for the device"
+                       for j in self.jobs.values())
+        if busy or time.time() - self.last_auto.get(dev, 0) < self.AUTO_GAP_S:
+            print("locate: %s moved again, a re-check is already on its way" % dev)
             return None
         self.last_auto[dev] = time.time()
         n = self.start(dev, "speakers")
@@ -299,8 +303,16 @@ class Locator:
     def request_for(self, dev):
         """What /api/presence tells this device to record, if anything."""
         with self.lock:
+            # one at a time: two devices listening at once would fight over
+            # the one sound card playing the chirps
+            now = time.time()
+            other = any(j["state"] == "recording" and now - j.get("started", now) < j["ms"] / 1000 + 15
+                        for j in self.jobs.values())
             for j in self.jobs.values():
-                if j["dev"] == dev and j["state"] == "waiting for the device" and time.time() - j["t"] < 20:
+                if j["dev"] == dev and j["state"] == "waiting for the device" and now - j["t"] < 20:
+                    if other:
+                        j["t"] = now  # its turn comes when the other is done
+                        return None
                     return {"id": j["id"], "ms": j["ms"], "rate": j["rate"]}
         return None
 
@@ -309,6 +321,7 @@ class Locator:
         if not j:
             return
         j["state"] = "recording"
+        j["started"] = time.time()
         if j["kind"] == "speakers":
             p = j["p"]
             # the device needs a moment after saying it has started

@@ -49,5 +49,5 @@
 #define TASK_POLL_MS 20000
 #define PRESENCE_POLL_MS 700   // asking the bridge where lil' C is
 #define PTR_POLL_MS      150   // ... while he watches the mouse
-#define WIGGLE_AT        1.0f  // the hub's wiggle score that gets his attention (1 = its own line)
+#define WIGGLE_AT        1.2f  // the hub's wiggle score that gets his attention (1 = its own line)
 #define VOLUME 160

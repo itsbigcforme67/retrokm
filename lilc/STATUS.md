@@ -29,7 +29,7 @@ project with two firmware targets, plus a bridge on the PC:
 - Gaze: eyes decoupled from the neck (saccade, then the neck follows while the
   eyes counter-rotate); 63% of looks are glances; nearby targets with a centre
   pull; 8% of the time he tracks a floating object (the Tab5 shows an X cursor).
-- Watching the mouse (2026-10-13): while the mouse is moving, 40% of his looks
+- Watching the mouse (2026-10-13): while the mouse is moving, 12% of his looks
   become 8-25 s of following the pointer across monitors, xeyes style, until
   it stops for 2 s. The hub's `pointer` command gives monitor + spot; the
   bridge (lilc_place.point_on, using each monitor's size and shape) sends
@@ -40,7 +40,8 @@ project with two firmware targets, plus a bridge on the PC:
   the owner's trackball (hub `trace on`): over 0.4 s, distance travelled
   minus distance got; normal use peaked at 267 counts, wiggles at 522-1425,
   so the line is 400 (`wiggle =` in the hub config). Replaying the
-  recording with 0.7 s polling caught all 7 wiggles and no normal use: he drops what he was looking at and watches it
+  recording with 0.7 s polling caught all 7 wiggles and no normal use. The
+  firmware wants 1.2 of the hub's line (WIGGLE_AT), after "a little too easily": he drops what he was looking at and watches it
   for 15-30 s (more wiggling keeps him on it).
 
 ## New on 2026-10-10: one lil' C, wandering, desk control (flashed on both)
@@ -136,3 +137,15 @@ filter. Sound-side quirks are in ../docs/STATUS.md (Dell section).
 - Tab5 perf: only redraw the pupils when the window isn't moving.
 - Tunables: NECK_DELAY, neck speed, glance odds, ranges (config.h,
   SERVO_X_RANGE 50 / Y 15).
+
+## Re-check after a pick-up (2026-10-13 fixes)
+
+- Watching the mouse kept the neck moving, which masked a gentle lift (the
+  IMU ignored small bumps while the neck moved; its own jolts reach ~0.026 g).
+  Now a bump over 0.045 g stops the watching, and while the neck moves a
+  bump over 0.06 g still counts as handling.
+- The bridge dropped a second pick-up within 20 s; now 5 s, and a pick-up
+  while a re-check is pending is folded into it.
+- Two devices re-checking at once fought over the Dell's sound card (one got
+  "would not play the chirps"); they now take turns (request_for waits while
+  another device is recording).

@@ -1003,7 +1003,14 @@ static void watchMotion(uint32_t now) {
   if (rest < 0) rest = mag;
   float dev = fabsf(mag - rest);  // quick changes only: a lift, a bump, a set-down
   rest += (mag - rest) * 0.01f;
-  bool sign = !touched && ((dev > 0.025f && !neckMoving) || spin > neckRate * 1.5f + 40);
+  // Watching the mouse keeps the neck moving, which hides a gentle lift:
+  // a bump bigger than the servos make stops him, so the next ones count
+  if (watchingPtr && !touched && dev > 0.045f) {
+    watchingPtr = false;
+    head.targetX = head.x;
+    head.targetY = head.y;
+  }
+  bool sign = !touched && ((dev > (neckMoving ? 0.06f : 0.025f)) || spin > neckRate * 1.5f + 40);
   if (now < 10000) sign = false;  // starting up: the servos jolt it
   if (sign) shaken = min(shaken + 6, 100);
   else if (shaken > 0) shaken--;
@@ -1692,7 +1699,7 @@ void loop() {
       } else if (now > lookAt && !stId) {  // (not while the mics listen)
         float x, y;
         int roll = random(100);
-        if (ptrMoving && roll < 40) {  // the mouse is moving about: watch it a while
+        if (ptrMoving && roll < 12) {  // the mouse is moving about: now and then, watch it a while
           watchingPtr = true;
           watchUntil = now + 8000 + random(17000);
         } else if (roll < 8) {  // something floats by
