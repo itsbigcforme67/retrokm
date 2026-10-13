@@ -7,6 +7,7 @@
 device = auto
 speed = 1.0            # pointer speed
 accel = 0.5            # 0 = no acceleration
+#wiggle = 400          # back-and-forth (mouse counts in 0.4 s) that gets lil' C's attention
 # When the switcher puts another machine on the monitor under the pointer:
 # follow = start controlling that machine, stay = keep the current one.
 on_tie = follow

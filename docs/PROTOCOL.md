@@ -189,9 +189,10 @@ The panel port also answers `activity` with
 `activity {"screen":[s since input, s since a key],...}` (-1: never), so
 lil' C can stay out of the way of a machine someone is using, and `pointer`
 with `pointer <screen> <monitor> <fx> <fy> <s since the mouse moved> <wiggle>`
-(fx, fy: 0..1 across and down that monitor; wiggle: how much the mouse has
-swung about lately, in about-turns fading over 1.5 s - a shake scores ~8,
-ordinary pointing up to ~2; `pointer - - 0 0 -1 0`
+(fx, fy: 0..1 across and down that monitor; wiggle: the mouse's
+back-and-forth over the last 0.4 s - distance travelled minus distance got,
+over the hub's `wiggle =` (default 400 counts) - held for a second, so 1 or
+more means it is being wiggled; `pointer - - 0 0 -1 0`
 when nothing has it), so he can watch the mouse go from monitor to monitor,
 and notice it being shaken at him.
 
