@@ -25,7 +25,8 @@
 #if HAS_KVM
 #include "rkm_panel.h"
 #ifndef HUB_HOST
-#define HUB_HOST BRIDGE_HOST  // the RetroKM hub usually runs on the bridge's PC
+#define HUB_FOLLOWS_BRIDGE 1  // the RetroKM hub usually runs on the bridge's PC
+#define HUB_HOST BRIDGE_HOST
 #endif
 #ifndef HUB_PORT
 #define HUB_PORT 24852
@@ -148,8 +149,57 @@ static volatile int imuState = 0;  // 0 not tried, 1 no IMU, 2 reads fail, 3 wor
 
 // ------------------------------------------------------------ network
 
+// Where the bridge is. BRIDGE_HOST is only a first guess: when it doesn't
+// answer, the device asks the whole network (a UDP broadcast the bridge
+// answers) and remembers what it heard, so a PC that changes address, or a
+// new desk, needs no reflash.
+static char bridgeHost[40] = BRIDGE_HOST;
+static volatile bool hubMoved = false;  // the panel should follow the bridge
+#include <WiFiUdp.h>
+#include <Preferences.h>
+static void loadBridgeHost() {
+  Preferences nvs;
+  nvs.begin("lilc", true);
+  String h = nvs.getString("bridge", "");
+  nvs.end();
+  if (h.length() && h.length() < sizeof bridgeHost) strcpy(bridgeHost, h.c_str());
+}
+static bool findBridge() {
+  WiFiUDP udp;
+  if (!udp.begin(BRIDGE_PORT + 1)) return false;
+  for (int tries = 0; tries < 3; tries++) {
+    udp.beginPacket(IPAddress(255, 255, 255, 255), BRIDGE_PORT);
+    udp.print("lilc-where?");
+    udp.endPacket();
+    uint32_t t0 = millis();
+    while (millis() - t0 < 700) {
+      if (udp.parsePacket()) {
+        char buf[32] = {0};
+        udp.read(buf, sizeof buf - 1);
+        if (!strncmp(buf, "lilc-bridge", 11)) {
+          String ip = udp.remoteIP().toString();
+          udp.stop();
+          if (ip != bridgeHost) {
+            Serial.printf("[lilc] bridge found at %s (was %s)\n", ip.c_str(), bridgeHost);
+            strncpy(bridgeHost, ip.c_str(), sizeof bridgeHost - 1);
+            Preferences nvs;
+            nvs.begin("lilc", false);
+            nvs.putString("bridge", ip);
+            nvs.end();
+            hubMoved = true;
+          }
+          return true;
+        }
+      }
+      delay(20);
+    }
+  }
+  udp.stop();
+  return false;
+}
+
 static bool httpBegin(HTTPClient& http, const String& path) {
-  String url = String("http://") + BRIDGE_HOST + ":" + BRIDGE_PORT + path;
+  String url = String("http://") + bridgeHost + ":" + BRIDGE_PORT + path;
   if (!http.begin(url)) return false;
   http.addHeader("X-LilC-Key", BRIDGE_KEY);
   http.addHeader("X-LilC-Dev", BOARD_DEV);  // which of his homes is asking
@@ -170,6 +220,13 @@ static void fetchTasks() {
   JsonDocument doc;
   if (!getJson("/api/ping", doc)) {
     bridgeOk = false;
+    static uint32_t lastLook = 0;
+    if (!lastLook || millis() - lastLook > 5000) {  // not where it was: look for it
+      lastLook = millis();
+      Serial.printf("[lilc] no bridge at %s, asking the network\n", bridgeHost);
+      if (findBridge()) tasksWanted = true;
+      else Serial.printf("[lilc] nobody answered\n");
+    }
     return;
   }
   bridgeOk = true;
@@ -1549,6 +1606,7 @@ static void barTap(int x) {
 
 void setup() {
   Serial.begin(115200);  // status and frame timing on the USB serial port
+  loadBridgeHost();  // where the bridge was last found
   auto cfg = M5.config();
   M5.begin(cfg);
   // landscape: CoreS3 is 320x240, Tab5 1280x720
@@ -1573,7 +1631,11 @@ void setup() {
   head.begin();
   connectWifi();
 #if HAS_KVM
+#if HUB_FOLLOWS_BRIDGE
+  rkmPanelBegin(bridgeHost, HUB_PORT, true);
+#else
   rkmPanelBegin(HUB_HOST, HUB_PORT, true);
+#endif
 #endif
   // updates over WiFi:  pio run -e tab5-ota (or cores3-ota) -t upload
   ArduinoOTA.setHostname("lilc-" BOARD_DEV);
@@ -1609,6 +1671,9 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED && now % 10000 < 20) WiFi.reconnect();
   ArduinoOTA.handle();
 #if HAS_KVM
+#if HUB_FOLLOWS_BRIDGE
+  if (hubMoved) { hubMoved = false; rkmPanelSetHub(bridgeHost); }
+#endif
   rkmPanelPoll(WiFi.status() == WL_CONNECTED);  // keeps the hub link up
   if (mode == KVM) {  // the desk map has the screen until its back button
     if (!rkmPanelLoop()) {

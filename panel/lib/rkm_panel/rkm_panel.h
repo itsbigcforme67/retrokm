@@ -10,6 +10,8 @@
 void rkmPanelBegin(const char* hubHost, int hubPort, bool inside = false);
 // Every pass of the host's loop, on screen or not: keeps the hub link up.
 void rkmPanelPoll(bool netReady);
+// The hub moved (found again on the network): reconnect there
+void rkmPanelSetHub(const char* hubHost);
 // The panel is about to take over the screen: forget old touches, redraw all.
 void rkmPanelShow();
 // While it is on screen, after M5.update(): reads the touch screen and draws.

@@ -741,6 +741,20 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
 
+def answer_finders(port):
+    """Devices that can't reach the bridge where they last found it broadcast
+    "lilc-where?" to this UDP port; the answer tells them where it is now."""
+    import socket
+    u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    u.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    u.bind(("0.0.0.0", port))
+    while True:
+        data, addr = u.recvfrom(64)
+        if data.startswith(b"lilc-where?"):
+            u.sendto(b"lilc-bridge %d" % port, addr)
+            print("found by %s" % addr[0])
+
+
 def main():
     global CFG, CHAT, SPEECH, JOBS, MEDIA, DESK, PRESENCE, LOCATOR
     CFG = load_config()
@@ -755,6 +769,7 @@ def main():
     MEDIA.scan()
     print("Claude CLI:", CHAT.claude)
     print(f"lil' C bridge on port {CFG['port']}  key: {CFG['key']}")
+    threading.Thread(target=answer_finders, args=(CFG["port"],), daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", CFG["port"]), Handler).serve_forever()
 
 

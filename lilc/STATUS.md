@@ -149,3 +149,15 @@ filter. Sound-side quirks are in ../docs/STATUS.md (Dell section).
 - Two devices re-checking at once fought over the Dell's sound card (one got
   "would not play the chirps"); they now take turns (request_for waits while
   another device is recording).
+
+## Finding the bridge (2026-10-15)
+
+The laptop's DHCP address changed (.166 -> .105) and both devices, which had
+BRIDGE_HOST baked in, lost the bridge. Now BRIDGE_HOST is only a first
+guess: when /api/ping fails, the device broadcasts "lilc-where?" to UDP
+8790, the bridge answers "lilc-bridge <port>", and the device saves the
+address (NVS "lilc"/"bridge") and points the KVM panel's hub link there too
+(rkmPanelSetHub). Tested on the Tab5: found .105 within 10 s of boot. The
+Stack-chan still has the old firmware: it was off; flash it over USB
+(`pio run -e cores3 -t upload --upload-port /dev/ttyACM0` - pass the port:
+the Extron's FTDI is /dev/ttyUSB0 and pio picks it otherwise).
