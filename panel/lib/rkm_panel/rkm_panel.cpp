@@ -1691,6 +1691,12 @@ static bool scriptStep() {  // false when there is no script
 
 // ------------------------------------------------------------ the component
 
+void rkmPanelSetHub(const char* host) {
+  if (hub.host() == host) return;
+  hub.begin(host, hub.port());
+  hub.reconnect();
+}
+
 void rkmPanelBegin(const char* host, int port, bool inside) {
   embedded = inside;
   for (M5Canvas* c : {&frame, &scene}) {

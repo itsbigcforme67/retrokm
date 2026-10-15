@@ -31,6 +31,7 @@ class HubLink {
   }
 
   bool connected() const { return fd_ >= 0 && up_; }
+  void reconnect() { if (fd_ >= 0) drop(); tried_ = false; }
   const std::string& host() const { return host_; }
   int port() const { return port_; }
 
