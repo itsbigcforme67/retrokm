@@ -23,6 +23,12 @@ file is the state of *this* desk and what was learned getting there.
   state is `/etc/retrokm.conf.state` (monitor moves, shared-monitor input,
   picked colours). Change things with `./install-laptop.sh` (sudo: the user
   types the password, so start it in a terminal tab for them).
+- **Laptop agent and lil' C's bridge:** user services `retrokm-agent` and
+  `lilc-bridge` (since 2026-10-14; they used to be an autostart entry and a
+  terminal tab, and both died with the desktop session). They start at login
+  and restart within seconds if they stop. Restart after updating:
+  `systemctl --user restart retrokm-agent lilc-bridge`. Logs:
+  `journalctl --user -u lilc-bridge -f`.
 - **Input:** only the USB Fnatic Streak keyboard and Logitech trackball go
   through the hub; the laptop's own keyboard and touchpad never do.
   Ctrl+Alt+Shift+Esc stops the hub.

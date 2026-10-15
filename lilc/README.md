@@ -142,7 +142,8 @@ Measures that keep answers quick (2026-10-06):
 ```
 cd lilc/bridge
 sh setup.sh      # one time: venv + whisper + piper voice (~200 MB)
-sh run.sh
+sh run.sh        # or, to have it start at login and restart if it stops:
+sh install-service.sh   # a user service; logs: journalctl --user -u lilc-bridge -f
 ```
 
 The first run writes `bridge/config.json` with a random device key. The bridge
