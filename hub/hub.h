@@ -18,7 +18,11 @@
 #define MAX_PLAYERS   4           /* pad players (dongles) per screen */
 
 /* Kinds of accessory.  A new kind (a mic, a headset): add it here and to
- * acc_kinds[] in config.c; the panel builds its toggles from the layout. */
+ * acc_kinds[] in config.c; the panel builds its toggles from the layout.
+ * If its devices ignore input until told they have it (pad dongles want
+ * RKM_ENTER), a machine that takes it out of focus must be told so when its
+ * device joins and when "always" is turned on, not only on focus changes -
+ * see pads_take() in main.c. */
 enum { ACC_KBM, ACC_PAD, ACC_KINDS };
 typedef struct { const char *id, *label; } AccKind;
 extern const AccKind acc_kinds[ACC_KINDS];
