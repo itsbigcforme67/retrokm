@@ -19,9 +19,11 @@
 
 /* Kinds of accessory.  A new kind (a mic, a headset): add it here and to
  * acc_kinds[] in config.c; the panel builds its toggles from the layout.
+ * Each accessory is linked to machines; on a link it can be kept (that
+ * machine gets it out of focus too), or kept everywhere (keep_all).
  * If its devices ignore input until told they have it (pad dongles want
- * RKM_ENTER), a machine that takes it out of focus must be told so when its
- * device joins and when "always" is turned on, not only on focus changes -
+ * RKM_ENTER), a machine that gets it out of focus must be told so when its
+ * device joins and when "keep" is turned on, not only on focus changes -
  * see pads_take() in main.c. */
 enum { ACC_KBM, ACC_PAD, ACC_KINDS };
 typedef struct { const char *id, *label; } AccKind;
@@ -70,7 +72,6 @@ typedef struct Screen {
     Conn *buddy;                 /* connection with RKM_CAP_BUDDY */
     Conn *sound;                 /* connection with RKM_CAP_SOUND */
     Conn *pads[MAX_PLAYERS];     /* pad players (RKM_CAP_PAD): the Xbox dongle(s) */
-    int always[ACC_KINDS];       /* receive this kind of input while out of focus */
     char about[160];             /* how it is attached, for the panel (built by the hub) */
     long long last_input_ms;     /* the hub last sent it input (0 = never) */
     long long last_key_ms;       /* ... a key */
@@ -130,6 +131,8 @@ typedef struct Accessory {
     int present;
     long color;                  /* its lines on the panel; -1 = from its kind */
     unsigned char player[MAX_SCREENS];   /* 0 = not linked; pads: player 1..4 there */
+    unsigned char keep[MAX_SCREENS];     /* that machine gets it out of focus too */
+    int keep_all;                /* ... every machine it is linked to does */
     PadState st;                 /* pads: as last read */
     int scripted;                /* the control port's pad: not saved, not on the panel */
 } Accessory;

@@ -148,6 +148,23 @@ static int kbm_ok(const Screen *s)
     return s && cfg.nacc > 0 && cfg.acc[0].player[s - cfg.screens];
 }
 
+/* Does s get this accessory even while out of focus? (linked, and kept there
+ * or kept everywhere) */
+static int acc_keeps(const Accessory *a, const Screen *s)
+{
+    int i = (int)(s - cfg.screens);
+    return a->player[i] && (a->keep_all || a->keep[i]);
+}
+
+/* Does s get some pad out of focus? (then its dongles keep the pads) */
+static int pads_keep(const Screen *s)
+{
+    int i;
+    for (i = 0; i < cfg.nacc; i++)
+        if (cfg.acc[i].kind == ACC_PAD && acc_keeps(&cfg.acc[i], s)) return 1;
+    return 0;
+}
+
 static int is_rel(const Screen *s)
 {
     return !s->local && s->in && (s->in->caps & RKM_CAP_REL);
@@ -469,6 +486,7 @@ static unsigned char remap_mods(const Screen *s, unsigned char m)
 
 static void pads_leave(Screen *s);
 static void pads_enter(Screen *s);
+static void pads_update(Screen *s, int force);
 
 static void do_leave(Screen *s)
 {
@@ -481,7 +499,7 @@ static void do_leave(Screen *s)
     /* a separate clipboard helper uses LEAVE as its cue to report changes */
     if (s->clip && s->clip != s->in) send_frame(s->clip, RKM_LEAVE, NULL, 0);
     send_frame(s->kbd, RKM_LEAVE, NULL, 0);        /* lets go of any keys it holds */
-    if (!s->always[ACC_PAD]) pads_leave(s);
+    if (!pads_keep(s)) pads_leave(s);
 }
 
 static void do_enter(Screen *s)
@@ -519,9 +537,11 @@ static void do_enter(Screen *s)
 static void switch_to(Screen *t, Monitor *m, double x, double y)
 {
     if (active == t) { active_mon = m; return; }
+    Screen *was = active;
     if (active) do_leave(active);
     active = t;
     active_mon = m;
+    if (was) pads_update(was, 0);            /* pads it only had through focus let go there */
     if (!t) return;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
@@ -748,7 +768,7 @@ void hub_key(int evcode, int usage, int state)
     /* the machine in focus, and linked machines that take keys out of focus */
     for (i = 0; i < cfg.nscreens; i++) {
         s = &cfg.screens[i];
-        if (!kbm_ok(s) || !ready(s) || (s != active && !s->always[ACC_KBM])) continue;
+        if (!kbm_ok(s) || !ready(s) || (s != active && !acc_keeps(&cfg.acc[0], s))) continue;
         s->last_input_ms = s->last_key_ms = now_ms();
         if (s->local) { uinput_key(evcode, state); continue; }
         if (!usage || !(s->kbd || s->in)) continue;
@@ -780,7 +800,7 @@ static int pad_player(const Accessory *a, const Screen *s)
 /* Does this pad's input go to s right now? */
 static int pad_goes(const Accessory *a, const Screen *s)
 {
-    return a->kind == ACC_PAD && a->present && pad_player(a, s) && (s == active || s->always[ACC_PAD]);
+    return a->kind == ACC_PAD && a->present && pad_player(a, s) && (s == active || acc_keeps(a, s));
 }
 
 int hub_pad_on_desktop(const Accessory *a)
@@ -861,8 +881,8 @@ static void pads_take(Screen *s)
 
 static void pads_enter(Screen *s)
 {
-    if (s->always[ACC_PAD]) return;          /* it has had them all along */
-    pads_take(s);
+    if (pads_keep(s)) pads_update(s, 1);     /* it has had them all along; the rest join */
+    else pads_take(s);
 }
 
 /* Hand focus to the next / previous machine this pad may drive */
@@ -967,18 +987,23 @@ static int accessory_command(int argc, char **argv, Conn *r, int panel)
         if (!panel) ctl_printf(r, "ok\n");
         return 1;
     }
-    if (!strcasecmp(argv[0], "always")) {
-        /* always <screen> <kind> on|off: receive that kind of input while out of focus */
-        int k;
-        if (argc != 4 || !(s = screen_by_name(argv[1])) || (k = acc_kind(argv[2])) < 0) {
-            ctl_printf(r, "%salways <screen> <kind> on|off\n", err);
+    if (!strcasecmp(argv[0], "keep") || !strcasecmp(argv[0], "keepall")) {
+        /* keep <accessory> <screen> on|off: that machine gets it out of focus too
+         * keepall <accessory> on|off: every machine it is linked to does */
+        int all = !strcasecmp(argv[0], "keepall"), on, i;
+        if (argc != (all ? 3 : 4) || !(a = acc_by_name(argv[1])) || (!all && !(s = screen_by_name(argv[2])))) {
+            ctl_printf(r, "%skeep <accessory> <screen> on|off, keepall <accessory> on|off\n", err);
             return 1;
         }
-        s->always[k] = !strcasecmp(argv[3], "on");
-        logmsg("%s: %s input %s out of focus", s->name, acc_kinds[k].label, s->always[k] ? "kept" : "not kept");
-        if (k == ACC_PAD && s != active) {
-            if (s->always[k]) pads_take(s);
-            else pads_leave(s);
+        on = !strcasecmp(argv[all ? 2 : 3], "on");
+        if (all) a->keep_all = on;
+        else a->keep[s - cfg.screens] = (unsigned char)on;
+        logmsg("%s: kept out of focus %s%s", a->name, on ? "on " : "no longer on ", all ? "everywhere" : s->name);
+        for (i = 0; a->kind == ACC_PAD && i < cfg.nscreens; i++) {
+            Screen *t = &cfg.screens[i];
+            if (!pad_player(a, t) || t == active) continue;
+            if (pads_keep(t)) pads_take(t);
+            else pads_leave(t);
         }
         config_save_state();
         if (!panel) ctl_printf(r, "ok\n");
@@ -1025,8 +1050,6 @@ static void cmd_status(Conn *r)
             int k;
             for (k = 0; k < MAX_PLAYERS; k++)
                 if (s->pads[k]) ctl_printf(r, " pad=%s", s->pads[k]->peer);
-            for (k = 0; k < ACC_KINDS; k++)
-                if (s->always[k]) ctl_printf(r, " always-%s", acc_kinds[k].id);
         }
         if (s->via) ctl_printf(r, " via=%s", s->via->name);
         if (s->plugged) ctl_printf(r, " plugged=%s", s->plugged->name);
@@ -1147,7 +1170,7 @@ static void run_command(char *cmd, Conn *r)
                       "tie <in> <out>, lock [on|off], rel <dx> <dy>, btn <n> <0|1>, "
                       "key <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], plug <console>, "
                       "unplug <box>, link <acc> <screen> [player], unlink <acc> <screen>, "
-                      "always <screen> <kind> on|off, quit\n");
+                      "keep <acc> <screen> on|off, keepall <acc> on|off, quit\n");
     }
 }
 
@@ -1247,19 +1270,9 @@ static void layout_json(Sbuf *b)
         sb_str(b, s->via ? s->via->name : "");
         sb_printf(b, ",\"plugged\":");
         sb_str(b, s->plugged ? s->plugged->name : "");
-        sb_printf(b, ",\"always\":[");
-        for (k = 0; k < ACC_KINDS; k++) sb_printf(b, "%s%d", k ? "," : "", s->always[k]);
         screen_about(s, about, sizeof about);
-        sb_printf(b, "],\"about\":");
+        sb_printf(b, ",\"about\":");
         sb_str(b, about);
-        sb_printf(b, "}");
-    }
-    sb_printf(b, "],\"kinds\":[");
-    for (k = 0; k < ACC_KINDS; k++) {
-        sb_printf(b, "%s{\"id\":", k ? "," : "");
-        sb_str(b, acc_kinds[k].id);
-        sb_printf(b, ",\"label\":");
-        sb_str(b, acc_kinds[k].label);
         sb_printf(b, "}");
     }
     sb_printf(b, "],\"accessories\":[");
@@ -1273,14 +1286,15 @@ static void layout_json(Sbuf *b)
         sb_str(b, a->label);
         sb_printf(b, ",\"kind\":");
         sb_str(b, acc_kinds[a->kind].id);
-        sb_printf(b, ",\"present\":%d,\"color\":%ld,\"about\":", a->present || a->kind == ACC_KBM, a->color);
+        sb_printf(b, ",\"present\":%d,\"color\":%ld,\"keepAll\":%d,\"about\":", a->present || a->kind == ACC_KBM,
+                  a->color, a->keep_all);
         sb_str(b, a->about);
         sb_printf(b, ",\"links\":[");
         for (j = 0; j < cfg.nscreens; j++)
             if (a->player[j]) {
                 sb_printf(b, "%s{\"screen\":", nl++ ? "," : "");
                 sb_str(b, cfg.screens[j].name);
-                sb_printf(b, ",\"player\":%d}", a->player[j]);
+                sb_printf(b, ",\"player\":%d,\"keep\":%d}", a->player[j], a->keep[j]);
             }
         sb_printf(b, "]}");
     }
@@ -1668,8 +1682,8 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     if (s == active) {
         if (c->caps & (RKM_CAP_INPUT | RKM_CAP_KEYS | RKM_CAP_PAD)) do_enter(s);   /* agent restarted under the pointer */
         else clip_sync(s);
-    } else if ((c->caps & RKM_CAP_PAD) && s->always[ACC_PAD]) {
-        pads_take(s);                        /* a dongle (re)joined a machine that always has the pads */
+    } else if ((c->caps & RKM_CAP_PAD) && pads_keep(s)) {
+        pads_take(s);                        /* a dongle (re)joined a machine that keeps a pad */
     }
     relayout();
 }

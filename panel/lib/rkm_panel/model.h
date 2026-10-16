@@ -16,18 +16,13 @@ struct Machine {
   int pads = 0;           // controller dongles (pad players) connected
   std::string via;        // a console: the box its video goes through (the RetroTINK)
   std::string plugged;    // a box: what is wired into it now
-  std::vector<int> always;  // per kind (Layout::kinds): takes that input out of focus
   std::string about;      // how it is attached, lines separated by \n
-};
-
-// A kind of accessory ("kbm", "pad"; later mics...), as the hub lists them
-struct Kind {
-  std::string id, label;
 };
 
 struct Link {
   std::string screen;
   int player = 1;         // pads: P1..P4 on that machine
+  bool keep = false;      // that machine gets it out of focus too
 };
 
 // Something you hold: the keyboard + mouse, a game pad
@@ -35,6 +30,7 @@ struct Accessory {
   std::string name, label, kind, about;
   bool present = false;
   long color = -1;        // its lines; -1 = default
+  bool keepAll = false;   // every machine it is linked to gets it out of focus
   std::vector<Link> links;
   const Link* link(const std::string& screen) const {
     for (auto& l : links) if (l.screen == screen) return &l;
@@ -66,7 +62,6 @@ struct Layout {
   bool switcherPresent = false, switcherOnline = false;
   std::vector<Machine> machines;
   std::vector<Monitor> monitors;
-  std::vector<Kind> kinds;
   std::vector<Accessory> accessories;
 
   Accessory* accessory(const std::string& n) {
@@ -146,7 +141,6 @@ struct Layout {
       m.colorSet = s["colorSet"] | 0;
       m.pads = s["pads"] | 0;
       m.about = s["about"] | "";
-      for (int v : s["always"].as<JsonArray>()) m.always.push_back(v);
       m.via = s["via"] | "";
       m.plugged = s["plugged"] | "";
       l.machines.push_back(m);
@@ -171,7 +165,6 @@ struct Layout {
       m.label = o["label"] | "";
       l.monitors.push_back(m);
     }
-    for (JsonObject k : doc["kinds"].as<JsonArray>()) l.kinds.push_back({k["id"] | "", k["label"] | ""});
     for (JsonObject o : doc["accessories"].as<JsonArray>()) {
       Accessory a;
       a.name = o["name"] | "";
@@ -180,7 +173,9 @@ struct Layout {
       a.about = o["about"] | "";
       a.present = o["present"] | 0;
       a.color = o["color"] | -1L;
-      for (JsonObject k : o["links"].as<JsonArray>()) a.links.push_back({k["screen"] | "", k["player"] | 1});
+      a.keepAll = o["keepAll"] | 0;
+      for (JsonObject k : o["links"].as<JsonArray>())
+        a.links.push_back({k["screen"] | "", k["player"] | 1, (k["keep"] | 0) != 0});
       l.accessories.push_back(a);
     }
     *this = l;
