@@ -437,9 +437,23 @@ static void load_state(void)
                 if (a && (s = screen_by_name(what)) && on >= 1 && on <= MAX_PLAYERS)
                     a->player[s - cfg.screens] = (unsigned char)on;
             }
+            else if (sscanf(line, "keepall %31s", name) == 1) {   /* before "keep": it matches too */
+                Accessory *a = acc_by_name(name);
+                if (a) a->keep_all = 1;
+            }
+            else if (sscanf(line, "keep %31s %31s", name, what) == 2) {
+                Accessory *a = acc_by_name(name);
+                if (a && (s = screen_by_name(what))) a->keep[s - cfg.screens] = 1;
+            }
+            /* before 2026-10-16, "always <screen> <kind>": now each accessory of
+             * that kind linked there is kept there */
             else if (sscanf(line, "always %31s %31s", name, what) == 2 && (s = screen_by_name(name)) &&
                      acc_kind(what) >= 0)
-                s->always[acc_kind(what)] = 1;
+            {
+                int k = acc_kind(what), j;
+                for (j = 0; j < cfg.nacc; j++)
+                    if (cfg.acc[j].kind == k && cfg.acc[j].player[s - cfg.screens]) cfg.acc[j].keep[s - cfg.screens] = 1;
+            }
             else if (sscanf(line, "acolor %31s %x", name, &rgb) == 2) {
                 Accessory *a = acc_by_name(name);
                 if (a) a->color = (long)(rgb & 0xFFFFFF);
@@ -480,11 +494,9 @@ int config_save_state(void)
         for (k = 0; k < cfg.nscreens; k++)
             if (a->player[k]) fprintf(f, "link %s %s %d\n", a->name, cfg.screens[k].name, a->player[k]);
         if (a->color >= 0) fprintf(f, "acolor %s %06lx\n", a->name, (unsigned long)a->color);
-    }
-    for (i = 0; i < cfg.nscreens; i++) {
-        int k;
-        for (k = 0; k < ACC_KINDS; k++)
-            if (cfg.screens[i].always[k]) fprintf(f, "always %s %s\n", cfg.screens[i].name, acc_kinds[k].id);
+        for (k = 0; k < cfg.nscreens; k++)
+            if (a->keep[k] && a->player[k]) fprintf(f, "keep %s %s\n", a->name, cfg.screens[k].name);
+        if (a->keep_all) fprintf(f, "keepall %s\n", a->name);
     }
     for (i = 0; i < cfg.nscreens; i++)               /* which console is wired into each box */
         if (cfg.screens[i].plugged) fprintf(f, "plug %s %s\n", cfg.screens[i].name, cfg.screens[i].plugged->name);

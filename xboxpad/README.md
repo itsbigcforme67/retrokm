@@ -10,8 +10,9 @@ NanoC6. The game's rumble comes back and shakes the real pad.
 
 Which controllers drive the Xbox is set on the panel's accessories page
 (lines from controllers to machines). A controller drives the machine in
-focus if linked; with "receive inputs while out of focus" on (long-press
-the Xbox) it drives it all the time. **Guide + RB / Guide + LB** moves the
+focus if linked; with "keep while out of focus" on for that link (hold the
+Xbox or the controller on the panel), or the controller's "works out of
+focus everywhere" switch, it drives it all the time. **Guide + RB / Guide + LB** moves the
 focus to the next / previous machine the pad is linked to. While the laptop
 is a target the hub leaves the pad alone, so laptop games see it as usual.
 

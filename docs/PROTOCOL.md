@@ -107,12 +107,12 @@ pad plugged into or paired with the hub's machine. Each is linked to the
 machines it may drive (lines on the panel's accessories page), many to
 many; links are kept in the state file. An accessory's input goes to the
 machine in focus (the green box: where the pointer is, or tapped on the
-panel) if it is linked there, and also to every linked machine whose
-"receive inputs while out of focus" toggle for that kind of accessory is
-on. The keyboard + mouse can only be moved into machines it is linked to;
-out of focus a machine gets its keys, not the pointer. Kinds are a table in
-the hub (`acc_kinds`); the layout JSON lists them, so a new kind needs no
-panel change.
+panel) if it is linked there, and also to every linked machine where it is
+kept ("keep while out of focus", per link), or everywhere it is linked when
+its own "works out of focus everywhere" switch is on. So with two pads, one
+can stay on the Xbox while the other follows focus. The keyboard + mouse can
+only be moved into machines it is linked to; out of focus a machine gets its
+keys, not the pointer. Kinds are a table in the hub (`acc_kinds`).
 
 A pad linked to a machine is a player there (P1..P4); several pads on the
 same player are merged into one (buttons OR'ed, the larger stick
@@ -139,8 +139,9 @@ otherwise the hub grabs it. Guide + RB / Guide + LB moves the focus to the
 next / previous machine that pad is linked to.
 
 Panel and control commands: `link <accessory> <screen> [player]`,
-`unlink <accessory> <screen>`, `always <screen> <kind> on|off`,
-`color <accessory> <rrggbb>|default`. The control port's
+`unlink <accessory> <screen>`, `keep <accessory> <screen> on|off`,
+`keepall <accessory> on|off`, `color <accessory> <rrggbb>|default`. The
+layout JSON gives each accessory `keepAll` and each of its links `keep`. The control port's
 `pad <hex> [lt rt lx ly rx ry]` plays a scripts-only pad: player 1 on the
 machine in focus.
 

@@ -23,9 +23,10 @@ A 1280x720 touch screen with two pages (tabs in the header):
   where their line ends.
 
 **Hold** a machine or an accessory for its options: colour (a machine's
-cables, an accessory's lines), for a machine "receive inputs while out of
-focus" per kind of accessory and the player of each linked pad, for a pad
-its player on each machine, and an "about" that says how it is attached.
+cables, an accessory's lines), for a machine which of the things linked to
+it it keeps while out of focus and the player of each linked pad, for an
+accessory a "works out of focus everywhere" switch, its player on each
+machine and where it is kept, and an "about" that says how it is attached.
 
 Pages are `Page` subclasses in `lib/rkm_panel/rkm_panel.cpp` (the
 `pages[]` list); kinds of accessory come from the hub, so a new kind
@@ -57,8 +58,8 @@ has a full desk behind an Extron MVX 88.
 The panel port takes `layout`, `tie <screen> <monitor>`, `untie <monitor>`,
 `move <monitor> <col> <row>`, `share <monitor> [on|off]`, `goto <screen>`, `lock`,
 `plug <console>`, `unplug <box>`, `link <accessory> <screen> [player]`,
-`unlink <accessory> <screen>`, `always <screen> <kind> on|off`,
-`color <screen|accessory> <rrggbb|default>`,
+`unlink <accessory> <screen>`, `keep <accessory> <screen> on|off`,
+`keepall <accessory> on|off`, `color <screen|accessory> <rrggbb|default>`,
 `activity`, `buddy <screen> show|hide [label]` and `ping`, and pushes
 `layout {json}` whenever anything changes. It cannot type keys or move the
 pointer. Like the rest of RetroKM it has no password, so keep it on your

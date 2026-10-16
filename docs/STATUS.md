@@ -165,9 +165,13 @@ The owner asked for controller switching like the keyboard, then for the
 panel to be two pages: **displays** (all computers and consoles) and
 **accessories** (lines from keyboard + mouse and each pad to machines, many
 to many). Decisions (owner, 2026-10-11):
-- An accessory drives the machine in focus if linked; per machine and per
-  kind, "receive inputs while out of focus" (long-press) makes it get them
-  anyway (handy for debugging several machines, e.g. Monster Hunter).
+- An accessory drives the machine in focus if linked; "keep while out of
+  focus" makes a machine get it anyway (handy for debugging several
+  machines, e.g. Monster Hunter). Since 2026-10-16 (owner) that is per link
+  (this pad on this machine, so of two pads only one can stay on the Xbox),
+  plus a "works out of focus everywhere" master switch on the accessory;
+  it used to be per machine and per kind (state lines `always <screen>
+  <kind>` are turned into per-link keeps on load).
 - Pads are players on each machine: P1, P2... by default, long-press to
   put several on one player (merged).
 - The keyboard + mouse can only reach linked machines (default: all).

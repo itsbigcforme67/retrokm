@@ -363,10 +363,10 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
 // Long-press a monitor: a sheet with its shape (16:9, 4:3 ...), whether it
 // is turned on its side, and its size, so the desk page draws it to scale.
 // Long-press a machine or an accessory: a sheet with its colour (a hue bar
-// and a saturation/brightness square), for a machine its "receive inputs
-// while out of focus" toggles (one per kind of accessory the hub lists) and
-// the players of the pads linked to it, for a pad its player on each
-// machine, and how it is attached.
+// and a saturation/brightness square), for a machine which of the things
+// linked to it it keeps while out of focus and the players of the pads
+// linked to it, for an accessory a "works out of focus everywhere" switch,
+// its player on each machine and where it is kept, and how it is attached.
 static int menuIdx = -1;       // the machine (or accessory, menuAcc) the sheet is about
 static bool menuAcc = false;
 static bool menuMon = false;   // ... or the monitor menuIdx
@@ -377,7 +377,7 @@ static const Rect SV{MENU.x + 30, MENU.y + 158, 300, 186};
 static const Rect HUE{MENU.x + 30, MENU.y + 360, 300, 28};
 static const Rect PREVIEW{MENU.x + 30, MENU.y + 408, 300, 56};
 // Everything tappable on the sheet is listed as it is drawn
-enum HitKind { H_DEFAULT, H_USE, H_DONE, H_TOGGLE, H_PLAYER, H_ASPECT, H_TURN, H_SIZE };
+enum HitKind { H_DEFAULT, H_USE, H_DONE, H_KEEP, H_KEEPALL, H_PLAYER, H_ASPECT, H_TURN, H_SIZE };
 struct Hit { Rect r; HitKind kind; int a, b, c; };
 static std::vector<Hit> hits;
 
@@ -498,11 +498,20 @@ static void menuHit(const Hit& h) {
     sendShape(m);
     break;
   }
-  case H_TOGGLE: {  // a = kind
-    Machine& m = lay.machines[menuIdx];
-    if ((int)m.always.size() <= h.a) m.always.resize(h.a + 1, 0);
-    m.always[h.a] = !m.always[h.a];
-    hub.send("always " + m.name + " " + lay.kinds[h.a].id + (m.always[h.a] ? " on" : " off"));
+  case H_KEEP: {  // a = accessory, b = machine: that machine gets it out of focus too
+    Accessory& a = lay.accessories[h.a];
+    const std::string& sc = lay.machines[h.b].name;
+    for (auto& l : a.links)
+      if (l.screen == sc) {
+        l.keep = !l.keep;
+        hub.send("keep " + a.name + " " + sc + (l.keep ? " on" : " off"));
+      }
+    break;
+  }
+  case H_KEEPALL: {  // a = accessory: it works out of focus everywhere it is linked
+    Accessory& a = lay.accessories[h.a];
+    a.keepAll = !a.keepAll;
+    hub.send("keepall " + a.name + (a.keepAll ? " on" : " off"));
     break;
   }
   case H_PLAYER: {  // a = accessory, b = machine, c = player
@@ -1219,19 +1228,32 @@ static void drawMenu() {
     }
     y += 46;
   };
+  // A labelled switch; tappable unless it is set from elsewhere
+  auto toggleRow = [&](const std::string& name, bool on, bool live, Hit hit) {
+    Rect sw{x2 + w2 - 66, y, 62, 34};
+    const lgfx::IFont* f = fit(name.c_str(), w2 - 80, {&fonts::FreeSans12pt7b, &fonts::FreeSans9pt7b});
+    text(ellipsize(name, w2 - 80, f).c_str(), x2, y + 17, live ? TEXT : MUTED, f, middle_left);
+    uint32_t bg = on ? (live ? 0x1F7A55 : 0x2F5546) : 0x2B323C;
+    G->fillSmoothRoundRect(sw.x, sw.y, sw.w, sw.h, 17, C(bg));
+    G->fillSmoothCircle(on ? sw.x + sw.w - 17 : sw.x + 17, sw.y + 17, 13, C(on ? (live ? 0xE8ECF1 : 0x9AA3AE) : 0x8A93A0));
+    if (live) { hit.r = Rect{x2, y - 4, w2, 42}; hits.push_back(hit); }
+    y += 48;
+  };
   if (!menuAcc) {
     Machine& m = lay.machines[menuIdx];
-    text("receive inputs while out of focus", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+    text("keep while out of focus", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
     y += 26;
-    for (size_t k = 0; k < lay.kinds.size(); k++) {
-      bool on = k < m.always.size() && m.always[k];
-      Rect sw{x2 + w2 - 66, y, 62, 34};
-      text(lay.kinds[k].label.c_str(), x2, y + 17, TEXT, &fonts::FreeSans12pt7b, middle_left);
-      G->fillSmoothRoundRect(sw.x, sw.y, sw.w, sw.h, 17, C(on ? 0x1F7A55 : 0x2B323C));
-      G->fillSmoothCircle(on ? sw.x + sw.w - 17 : sw.x + 17, sw.y + 17, 13, C(on ? 0xE8ECF1 : 0x8A93A0));
-      hits.push_back({Rect{x2, y - 4, w2, 42}, H_TOGGLE, (int)k, 0, 0});
-      y += 48;
+    bool anyLinked = false;
+    for (size_t ai = 0; ai < lay.accessories.size(); ai++) {
+      const Accessory& a = lay.accessories[ai];
+      const Link* l = a.link(m.name);
+      if (!l) continue;
+      anyLinked = true;
+      if (a.keepAll) toggleRow(a.label + "  (everywhere)", true, false, {});
+      else toggleRow(a.label, l->keep, true, {Rect{}, H_KEEP, (int)ai, menuIdx, 0});
+      if (y > MENU.y + 340) break;
     }
+    if (!anyLinked) { text("nothing linked to it (accessories page)", x2, y + 10, 0x6B7482, &fonts::FreeSans9pt7b, middle_left); y += 30; }
     y += 14;
     bool any = false;
     for (size_t ai = 0; ai < lay.accessories.size(); ai++) {
@@ -1244,6 +1266,8 @@ static void drawMenu() {
     if (!any) text("no controllers linked (accessories page)", x2, y, 0x6B7482, &fonts::FreeSans9pt7b, middle_left);
   } else {
     const Accessory& a = lay.accessories[menuIdx];
+    toggleRow("works out of focus everywhere", a.keepAll, true, {Rect{}, H_KEEPALL, menuIdx, 0, 0});
+    y += 6;
     text(a.kind == "pad" ? "player on each machine" : "may reach", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
     y += 26;
     for (auto& l : a.links) {
@@ -1254,6 +1278,17 @@ static void drawMenu() {
       if (y > MENU.y + MENU.h - 60) break;
     }
     if (a.links.empty()) text("not linked to anything yet", x2, y, 0x6B7482, &fonts::FreeSans9pt7b, middle_left);
+    else if (!a.keepAll && y < MENU.y + MENU.h - 110) {  // or just on some of them
+      y += 8;
+      text("keep while out of focus on", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+      y += 26;
+      for (auto& l : a.links) {
+        int mi = lay.machineIndex(l.screen);
+        if (mi < 0) continue;
+        if (y > MENU.y + MENU.h - 60) break;
+        toggleRow(lay.machines[mi].label, l.keep, true, {Rect{}, H_KEEP, menuIdx, mi, 0});
+      }
+    }
   }
 
   // column 3: how it is attached
