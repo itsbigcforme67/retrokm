@@ -161,3 +161,13 @@ address (NVS "lilc"/"bridge") and points the KVM panel's hub link there too
 Stack-chan still has the old firmware: it was off; flash it over USB
 (`pio run -e cores3 -t upload --upload-port /dev/ttyACM0` - pass the port:
 the Extron's FTDI is /dev/ttyUSB0 and pio picks it otherwise).
+
+## WiFi recovery (2026-10-16)
+
+The Tab5 dropped off WiFi twice (19:52, 23:44 on 2026-10-15) and never came
+back: the old retry was WiFi.reconnect() only when the UI loop hit a 20 ms
+window every 10 s (mostly missed at ~18 fps), and reconnect() is weak on the
+Tab5's hosted WiFi. netTask now rejoins (disconnect + begin) after 8 s,
+restarts the radio every 30 s after a minute, and restarts the device after
+5 minutes. Flashed on the Tab5; the Stack-chan needs it too (USB, it was off).
+It joins HomePage_EXT (the extender), which may be why it drops.

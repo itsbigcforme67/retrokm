@@ -395,6 +395,34 @@ static bool videoActive();
 static void netTask(void*) {
   uint32_t lastPoll = 0;
   for (;;) {
+    static uint32_t wifiLostAt = 0, wifiKick = 0;
+    if (WiFi.status() == WL_CONNECTED) wifiLostAt = 0;
+    else {
+      // Get back on the WiFi: rejoin, then restart the radio, then (it has
+      // been five minutes) restart everything
+      uint32_t t = millis();
+      if (!wifiLostAt) wifiLostAt = wifiKick = t;
+      uint32_t off = t - wifiLostAt;
+      if (off > 300000) {
+        Serial.printf("[lilc] no WiFi for 5 minutes: restarting\n");
+        delay(200);
+        ESP.restart();
+      } else if (off > 60000 && t - wifiKick > 30000) {
+        wifiKick = t;
+        Serial.printf("[lilc] WiFi still down: restarting the radio\n");
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        delay(500);
+        WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
+        WiFi.begin(WIFI_SSID, WIFI_PASS);
+      } else if (off > 8000 && off <= 60000 && t - wifiKick > 15000) {
+        wifiKick = t;
+        Serial.printf("[lilc] WiFi lost: rejoining %s\n", WIFI_SSID);
+        WiFi.disconnect();
+        WiFi.begin(WIFI_SSID, WIFI_PASS);
+      }
+    }
     if (WiFi.status() != WL_CONNECTED) {
       bridgeOk = false;
       static uint32_t lastLog = 0;
@@ -1668,7 +1696,6 @@ void loop() {
     t = m5::touch_detail_t();
   }
 
-  if (WiFi.status() != WL_CONNECTED && now % 10000 < 20) WiFi.reconnect();
   ArduinoOTA.handle();
 #if HAS_KVM
 #if HUB_FOLLOWS_BRIDGE
