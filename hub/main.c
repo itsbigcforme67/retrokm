@@ -850,12 +850,19 @@ static void pads_leave(Screen *s)
         if (cfg.acc[i].kind == ACC_PAD && pad_player(&cfg.acc[i], s)) pad_rumble(&cfg.acc[i], 0, 0);
 }
 
-static void pads_enter(Screen *s)
+/* s takes the pads: its dongles hear ENTER (without it they ignore PAD
+ * frames), then what the pads are doing right now */
+static void pads_take(Screen *s)
 {
     int k;
-    if (s->always[ACC_PAD]) return;          /* it has had them all along */
     for (k = 0; k < MAX_PLAYERS; k++) send_frame(s->pads[k], RKM_ENTER, NULL, 0);
-    pads_update(s, 1);                       /* what the pads are doing right now */
+    pads_update(s, 1);
+}
+
+static void pads_enter(Screen *s)
+{
+    if (s->always[ACC_PAD]) return;          /* it has had them all along */
+    pads_take(s);
 }
 
 /* Hand focus to the next / previous machine this pad may drive */
@@ -970,7 +977,7 @@ static int accessory_command(int argc, char **argv, Conn *r, int panel)
         s->always[k] = !strcasecmp(argv[3], "on");
         logmsg("%s: %s input %s out of focus", s->name, acc_kinds[k].label, s->always[k] ? "kept" : "not kept");
         if (k == ACC_PAD && s != active) {
-            if (s->always[k]) pads_update(s, 1);
+            if (s->always[k]) pads_take(s);
             else pads_leave(s);
         }
         config_save_state();
@@ -1662,7 +1669,7 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
         if (c->caps & (RKM_CAP_INPUT | RKM_CAP_KEYS | RKM_CAP_PAD)) do_enter(s);   /* agent restarted under the pointer */
         else clip_sync(s);
     } else if ((c->caps & RKM_CAP_PAD) && s->always[ACC_PAD]) {
-        pads_update(s, 1);
+        pads_take(s);                        /* a dongle (re)joined a machine that always has the pads */
     }
     relayout();
 }
