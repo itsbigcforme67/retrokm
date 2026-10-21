@@ -31,9 +31,13 @@ file is the state of *this* desk and what was learned getting there.
   `journalctl --user -u lilc-bridge -f`.
 - **Input:** only the USB Fnatic Streak keyboard and Logitech trackball go
   through the hub; the laptop's own keyboard and touchpad never do.
-  Ctrl+Alt+Shift+Esc stops the hub.
+  Ctrl+Alt+Shift+Esc stops the hub. Ctrl+Alt+Shift+Backspace (or the
+  panel's `reset` chip, or `reset` on the control socket) resets it: it
+  restarts in place and every agent reconnects (added 2026-10-21 after the
+  pointer would not cross to the tall monitor; restarting the laptop agent
+  fixed that one).
 - **Control socket:** `printf 'status\n' | nc -q1 127.0.0.1 24851`. It
-  also takes goto, show, tie, lock, key, rel, btn, ddc and lights.
+  also takes goto, show, tie, lock, key, rel, btn, ddc, lights and reset.
 
 ## Pieces and their state
 

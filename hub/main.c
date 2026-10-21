@@ -31,6 +31,7 @@ int verbose;
 static Conn conns[MAX_CONNS];
 static int lfd = -1, cfd = -1, pfd_listen = -1;
 static volatile sig_atomic_t quit;
+static int restart;                        /* "reset": start over once stopped */
 
 static Screen *active;           /* screen receiving input, or NULL */
 static Monitor *active_mon;      /* monitor the pointer is on, or NULL */
@@ -749,6 +750,12 @@ void hub_key(int evcode, int usage, int state)
             quit = 1;
             return;
         }
+        /* reset, whatever the config says: ctrl+alt+shift+backspace */
+        if (usage == HID_BACKSPACE && held == (RKM_MOD_LCTRL | RKM_MOD_LSHIFT | RKM_MOD_LALT)) {
+            logmsg("reset key pressed");
+            quit = restart = 1;
+            return;
+        }
         for (i = 0; i < cfg.nhotkeys; i++) {
             Hotkey *h = &cfg.hotkeys[i];
             if (h->usage == usage && (h->mods & 0x0F) == held) {
@@ -1165,12 +1172,16 @@ static void run_command(char *cmd, Conn *r)
         ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "quit")) {
         quit = 1;
+    } else if (!strcasecmp(argv[0], "reset")) {
+        ctl_printf(r, "ok\n");
+        logmsg("reset asked for");
+        quit = restart = 1;
     } else {
         ctl_printf(r, "error: commands are status, goto <screen>, show <screen> [monitor], "
                       "tie <in> <out>, lock [on|off], rel <dx> <dy>, btn <n> <0|1>, "
                       "key <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], plug <console>, "
                       "unplug <box>, link <acc> <screen> [player], unlink <acc> <screen>, "
-                      "keep <acc> <screen> on|off, keepall <acc> on|off, quit\n");
+                      "keep <acc> <screen> on|off, keepall <acc> on|off, reset, quit\n");
     }
 }
 
@@ -1555,6 +1566,9 @@ static void run_panel_command(char *cmd, Conn *r)
             if (*c >= '0' && *c <= '5') { p[k++] = (unsigned char)(*c - '0'); n++; }
         p[17] = (unsigned char)n;
         send_frame(s->sound, RKM_SOUND, p, 18 + n);
+    } else if (!strcasecmp(argv[0], "reset")) {
+        logmsg("panel: reset");
+        quit = restart = 1;
     } else if (!strcasecmp(argv[0], "ping")) {
         ctl_printf(r, "pong\n");
     } else {
@@ -2095,6 +2109,18 @@ int main(int argc, char **argv)
     lights_set(0xFFFFFFFF);                     /* the keyboard's own lighting again */
     for (i = 0; i < MAX_CONNS; i++)
         if (conns[i].kind != CONN_FREE) { conn_flush(&conns[i]); close(conns[i].fd); }
+    if (restart) {
+        /* Start over as a fresh hub: the devices are let go of and taken
+         * again, agents reconnect and send their monitors again.  Saved
+         * state (monitor moves, colours, links) comes back from the file. */
+        long fd, maxfd = sysconf(_SC_OPEN_MAX);
+        for (fd = 3; fd < (maxfd > 0 && maxfd < 65536 ? maxfd : 1024); fd++)
+            fcntl((int)fd, F_SETFD, FD_CLOEXEC);
+        logmsg("hub resetting");
+        execv("/proc/self/exe", argv);
+        logmsg("reset failed: %s", strerror(errno));
+        return 1;                              /* systemd starts it again */
+    }
     logmsg("hub stopped");
     return 0;
 }

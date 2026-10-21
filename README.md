@@ -180,6 +180,12 @@ Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 - Copy on one machine, move the pointer away, paste on another.
 - **Ctrl+Alt+Shift+Escape** stops the hub and gives the keyboard back. The
   hub also lets go of the keyboard and mouse whenever no agent is connected.
+- **Reset** when something gets stuck (the pointer will not cross to a
+  monitor, a key seems held): **Ctrl+Alt+Shift+Backspace**, the `reset`
+  chip in the touch panel's header, or `reset` on the control socket. The
+  hub starts over in place: it lets go of the keyboard and mouse and takes
+  them back, and every agent reconnects and reports its monitors again.
+  Saved state (monitor moves, colours, links) is kept.
 - The control socket accepts the same commands as hotkeys, plus `status`:
 
   ```
