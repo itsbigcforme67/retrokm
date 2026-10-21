@@ -34,4 +34,8 @@ clean:
 	$(MAKE) -C hub clean
 	rm -rf build
 
-.PHONY: all hub test test-consoles clean
+.PHONY: all hub test test-consoles test-reset clean
+
+# The reset command (the hub restarts in place); needs only the hub.
+test-reset: hub
+	python3 tests/reset_test.py

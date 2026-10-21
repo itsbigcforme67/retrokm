@@ -233,6 +233,7 @@ static void plugPos(int i, int& x, int& y) {  // the knob of machine i's desk ca
 // ------------------------------------------------------------ touch
 
 enum DragKind { D_NONE, D_PRESS_CARD, D_CABLE, D_PRESS_MON, D_MON, D_PLUG, D_PRESS_LOCK, D_PRESS_BACK,
+                D_PRESS_RESET, // the "reset" chip: the hub starts over
                 D_PRESS_TAB,   // a page tab in the header (dragIdx = which)
                 D_PRESS_ACC,   // accessories page: a press on an accessory (dragIdx = which)
                 D_ACCWIRE,     // ... its line being drawn to a machine
@@ -246,6 +247,7 @@ static int dragIdx = -1;          // machine (cable) or monitor (mon, plug)
 static int dragIdx2 = -1;         // a second index where a drag needs one
 static int pressX, pressY, curX, curY;
 static Rect lockBtn{0, 0, 0, 0};
+static Rect resetBtn{0, 0, 0, 0};
 static Rect backBtn{0, 0, 0, 0};
 
 // ------------------------------------------------------------ pages
@@ -603,6 +605,9 @@ static void release() {
     hub.send("lock");
     lay.locked = !lay.locked;
     break;
+  case D_PRESS_RESET:  // let go on it: the hub restarts and everything reconnects
+    if (resetBtn.has(curX, curY)) { hub.send("reset"); say("resetting the hub"); }
+    break;
   case D_PRESS_BACK:
     if (backBtn.has(curX, curY)) wantBack = true;
     break;
@@ -649,6 +654,7 @@ static void touchInput(bool down, int x, int y) {
       }
     }
     else if (lockBtn.has(x, y)) drag = D_PRESS_LOCK;
+    else if (resetBtn.has(x, y)) drag = D_PRESS_RESET;
     else {
       for (i = 0; i < (int)tabRects.size(); i++)
         if (tabRects[i].has(x, y)) { drag = D_PRESS_TAB; dragIdx = i; }
@@ -968,8 +974,10 @@ static void drawHeader() {
     if (!lay.switcherPresent) x = chip(x, y, "no switcher", 0x59606B);
     else x = chip(x, y, lay.switcherOnline ? "switcher" : "switcher offline", lay.switcherOnline ? OK_C : BAD_C);
     x = chip(x, y, "hub", OK_C);
+    x = chip(x, y, "reset", 0, drag == D_PRESS_RESET ? TEXT : 0xC9D1DB, &resetBtn);
   } else {
     lockBtn = {0, 0, 0, 0};
+    resetBtn = {0, 0, 0, 0};
     x = chip(x, y, "no hub", BAD_C);
   }
   if (!toast.empty() && nowMs() < toastUntil) {
