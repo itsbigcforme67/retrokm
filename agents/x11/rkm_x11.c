@@ -515,6 +515,8 @@ static void press_mods(unsigned int m, int down)
         if (m & (1U << b)) fake_key(HID_LCTRL + b, down);
 }
 
+static void refresh_displays(void);
+
 static void on_frame(void *ctx, int type, const unsigned char *p, unsigned int len)
 {
     static const unsigned int xbtn[] = { 0, 1, 3, 2, 8, 9 };
@@ -542,6 +544,7 @@ static void on_frame(void *ctx, int type, const unsigned char *p, unsigned int l
     case RKM_RESET:
         if (!clip_only) release_all();
         if (type == RKM_LEAVE) check_selections(1);
+        if (type == RKM_RESET && len >= 1 && (p[0] & RKM_RESET_DISPLAYS)) refresh_displays();
         break;
     case RKM_MOVE:
         if (len < 4) break;
@@ -660,6 +663,32 @@ static void send_screen(void)
     }
 #endif
     send_frame(RKM_SCREEN, p, len);
+}
+
+/* The hub's reset: turn each lit output off and on again, one at a time,
+ * as it was.  It clears a stuck output, such as an NVIDIA HDMI port that
+ * stopped drawing the pointer. */
+static void refresh_displays(void)
+{
+#ifdef RKM_XRANDR
+    XRRScreenResources *res;
+    int i;
+    if (rr_event < 0 || !(res = XRRGetScreenResourcesCurrent(dpy, DefaultRootWindow(dpy)))) return;
+    for (i = 0; i < res->ncrtc; i++) {
+        XRRCrtcInfo *c = XRRGetCrtcInfo(dpy, res, res->crtcs[i]);
+        if (c && c->mode != None && c->noutput > 0) {
+            fprintf(stderr, "rkm-x11: refreshing output %d (%ux%u+%d+%d)\n", i, c->width, c->height, c->x, c->y);
+            XRRSetCrtcConfig(dpy, res, res->crtcs[i], CurrentTime, 0, 0, None, RR_Rotate_0, NULL, 0);
+            XSync(dpy, False);
+            usleep(500000);
+            XRRSetCrtcConfig(dpy, res, res->crtcs[i], CurrentTime, c->x, c->y, c->mode, c->rotation,
+                             c->outputs, c->noutput);
+            XSync(dpy, False);
+        }
+        if (c) XRRFreeCrtcInfo(c);
+    }
+    XRRFreeScreenResources(res);
+#endif
 }
 
 static void pump_x(void)

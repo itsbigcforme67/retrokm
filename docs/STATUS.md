@@ -139,8 +139,9 @@ file is the state of *this* desk and what was learned getting there.
   by the user.
 - **Pointer invisible on the tall monitor** (2026-10-21): X and the hub had
   it there, the monitor showed the laptop, but the NVIDIA HDMI output
-  (`HDMI-1-1`) stopped drawing the cursor. A hub reset does not fix this.
-  Fix: `xrandr --output HDMI-1-1 --off; sleep 2; xrandr --output HDMI-1-1
+  (`HDMI-1-1`) stopped drawing the cursor. A hub reset now fixes this: it
+  tells each agent to redo its displays (the X agent turns each output off
+  and on, as it was). By hand: `xrandr --output HDMI-1-1 --off; sleep 2; xrandr --output HDMI-1-1
   --mode 1920x1080 --right-of eDP-1 --primary`.
 - **Dell P2414H DDC:** it only answers reads while on DVI, but a set to DVI
   works from VGA.
