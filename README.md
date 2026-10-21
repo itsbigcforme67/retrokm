@@ -185,6 +185,8 @@ Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
   chip in the touch panel's header, or `reset` on the control socket. The
   hub starts over in place: it lets go of the keyboard and mouse and takes
   them back, and every agent reconnects and reports its monitors again.
+  The X11 agent also turns each of its displays off and on again, which
+  clears an output that stopped drawing the pointer.
   Saved state (monitor moves, colours, links) is kept.
 - The control socket accepts the same commands as hotkeys, plus `status`:
 

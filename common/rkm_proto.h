@@ -32,7 +32,8 @@
 #define RKM_BUTTON     0x14  /* button,down                                       */
 #define RKM_WHEEL      0x15  /* dy16,dx16 signed, 120 units = one notch           */
 #define RKM_KEY        0x16  /* usage,state,mods                                  */
-#define RKM_RESET      0x17  /* (none)  release everything                        */
+#define RKM_RESET      0x17  /* [flags]  release everything                       */
+#define RKM_RESET_DISPLAYS 0x01 /* flag: and turn its displays off and on (hub reset) */
 #define RKM_PAD        0x18  /* pad,buttons16,lt,rt,lx16,ly16,rx16,ry16  whole    */
                              /* game controller state (RKM_CAP_PAD agents)        */
 #define RKM_RUMBLE     0x19  /* A->H pad,strong16,weak16  0..65535 each           */

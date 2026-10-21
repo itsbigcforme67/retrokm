@@ -2106,6 +2106,11 @@ int main(int argc, char **argv)
     }
 
     if (active) do_leave(active);
+    if (restart) {                              /* agents redo their displays too */
+        unsigned char f = RKM_RESET_DISPLAYS;
+        for (i = 0; i < MAX_CONNS; i++)
+            if (conns[i].kind == CONN_AGENT && !conns[i].dead && conns[i].screen) send_frame(&conns[i], RKM_RESET, &f, 1);
+    }
     lights_set(0xFFFFFFFF);                     /* the keyboard's own lighting again */
     for (i = 0; i < MAX_CONNS; i++)
         if (conns[i].kind != CONN_FREE) { conn_flush(&conns[i]); close(conns[i].fd); }
