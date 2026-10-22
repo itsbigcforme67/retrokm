@@ -111,6 +111,23 @@ nav button { flex: 1; background: none; border-radius: 0; padding: 12px 0 10px; 
 nav button.cur { color: var(--text); }
 nav svg { width: 24px; height: 24px; }
 
+/* screen view */
+#screen.show { display: flex; flex-direction: column; height: 100%; padding: 10px 0 0; }
+.sbar { display: flex; gap: 6px; padding: 0 12px 8px; align-items: center; overflow-x: auto; }
+.sbar button { padding: 8px 12px; font-size: 14px; white-space: nowrap; }
+.sbar button.cur { background: var(--accent); }
+.sbar .gap { flex: 1; }
+#view { flex: 1; position: relative; overflow: hidden; background: #000; touch-action: none; }
+#view img:not([src]) { visibility: hidden; }
+#view img { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none;
+  -webkit-user-drag: none; image-rendering: auto; }
+#view .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 14px; text-align: center; padding: 20px; }
+#screen .typerow { padding: 0 12px 10px; margin-top: 8px; display: none; }
+#screen .typerow.show { display: flex; }
+#tapmark { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
+  border: 2px solid var(--accent); opacity: 0; pointer-events: none; transition: opacity .35s; }
+
 #toast { position: fixed; left: 50%; top: calc(var(--safe-t) + 64px); transform: translateX(-50%);
   background: #3b2f14; color: #fde68a; padding: 10px 16px; border-radius: 999px; font-size: 14px;
   z-index: 20; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; text-align: center; }
@@ -137,6 +154,19 @@ nav svg { width: 24px; height: 24px; }
     <div class="grid" id="machines"></div>
     <h2>Monitors</h2>
     <div class="grid" id="monitors"></div>
+  </section>
+
+  <section class="page" id="screen">
+    <div class="sbar" id="sbar">
+      <span class="gap"></span>
+      <button data-wheel="360">▲</button><button data-wheel="-360">▼</button>
+      <button id="kbtoggle">⌨</button>
+    </div>
+    <div id="view"><img id="shot" alt=""><div id="tapmark"></div><div class="msg" id="viewmsg">connecting…</div></div>
+    <div class="typerow" id="typerow2">
+      <input id="typer2" placeholder="type into the laptop…" autocomplete="off" autocorrect="off"
+             autocapitalize="off" spellcheck="false" enterkeyhint="send">
+    </div>
   </section>
 
   <section class="page" id="pad">
@@ -182,6 +212,7 @@ nav svg { width: 24px; height: 24px; }
 
 <nav>
   <button class="cur" data-page="desk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="9" height="7" rx="1"/><rect x="13" y="4" width="9" height="7" rx="1"/><rect x="5" y="15" width="14" height="5" rx="1"/></svg>Desk</button>
+  <button data-page="screen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Screen</button>
   <button data-page="pad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 15h18M12 15v6"/></svg>Trackpad</button>
   <button data-page="keyspage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>Keys</button>
 </nav>
@@ -328,6 +359,7 @@ $("#resetbtn").addEventListener("click", () => openSheet(
 document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
   document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("cur", x === b));
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("show", p.id === b.dataset.page));
+  screenShown(b.dataset.page === "screen");
 }));
 
 /* ---- trackpad ---- */
@@ -399,21 +431,23 @@ document.querySelectorAll(".btnrow button").forEach((b) => {
 });
 
 /* typing: every keystroke goes straight through; the field stays empty */
-const typer = $("#typer");
+function typingBox(typer, sendTo) {
 typer.addEventListener("beforeinput", (e) => {
   e.preventDefault();
   if (e.inputType === "insertText" || e.inputType === "insertReplacementText") {
-    if (e.data) send("text " + e.data);
+    if (e.data) sendTo("text " + e.data);
   } else if (e.inputType === "deleteContentBackward") {
-    send("key backspace 1\nkey backspace 0");
+    sendTo("key backspace 1\nkey backspace 0");
   } else if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") {
-    send("key enter 1\nkey enter 0");
+    sendTo("key enter 1\nkey enter 0");
   }
 });
 typer.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); send("key enter 1\nkey enter 0"); }
+  if (e.key === "Enter") { e.preventDefault(); sendTo("key enter 1\nkey enter 0"); }
 });
-typer.addEventListener("input", () => { if (typer.value) { send("text " + typer.value); typer.value = ""; } });
+typer.addEventListener("input", () => { if (typer.value) { sendTo("text " + typer.value); typer.value = ""; } });
+}
+typingBox($("#typer"), send);
 
 /* ---- keys ---- */
 const fk = $("#fkeys");
@@ -435,6 +469,160 @@ document.addEventListener("click", (e) => {
     mods.clear(); document.querySelectorAll("[data-mod]").forEach((b) => b.classList.remove("on"));
   } else if (c) send("combo " + c.dataset.combo);
 });
+
+/* ---- screen view: the laptop's monitors, one at a time ---- */
+const view = $("#view"), shot = $("#shot"), vmsg = $("#viewmsg");
+let sws = null, mons = [], monIdx = 0, sOn = false, waiting = false, shotUrl = null;
+let fit = {k: 1, w: 0, h: 0}, z = 1, tx = 0, ty = 0;
+try { monIdx = +localStorage.getItem("rkm-mon") || 0; } catch (e) {}
+
+function ssend(line) { if (sws && sws.readyState === 1) sws.send(line); }
+function screenShown(on) {
+  sOn = on;
+  if (on && (!sws || sws.readyState > 1)) screenConnect();
+  if (on) { layoutView(); askFrame(); }
+}
+function screenConnect() {
+  if (!key) return;
+  vmsg.textContent = "connecting…"; vmsg.style.display = "flex";
+  sws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host +
+                      "/screen?k=" + encodeURIComponent(key));
+  sws.binaryType = "blob";
+  waiting = false;
+  sws.onopen = () => askFrame();
+  sws.onmessage = (e) => {
+    if (typeof e.data !== "string") {             // a frame
+      const url = URL.createObjectURL(e.data);
+      shot.onload = () => {
+        if (shotUrl) URL.revokeObjectURL(shotUrl);
+        shotUrl = url; vmsg.style.display = "none";
+        waiting = false; setTimeout(askFrame, 20);
+      };
+      shot.src = url;
+      return;
+    }
+    const m = JSON.parse(e.data);
+    if (m.mons) { mons = m.mons; if (monIdx >= mons.length) monIdx = 0; drawMonButtons(); layoutView(); askFrame(); }
+    if (m.same) { waiting = false; setTimeout(askFrame, 120); }
+    if (m.error) { toast(m.error); waiting = false; setTimeout(askFrame, 1000); }
+  };
+  sws.onclose = () => { waiting = false; if (sOn) setTimeout(screenConnect, 1500); };
+}
+function askFrame() {
+  if (!sOn || waiting || document.hidden || !sws || sws.readyState !== 1 || !mons.length) return;
+  const m = mons[monIdx];
+  const want = Math.min(m.w, Math.round(fit.w * z * Math.min(devicePixelRatio || 1, 2)));
+  waiting = true;
+  ssend(`frame ${monIdx} ${Math.max(320, want)} ${z > 1.5 ? 70 : 55}`);
+}
+function drawMonButtons() {
+  const bar = $("#sbar");
+  bar.querySelectorAll("[data-mon-i]").forEach((b) => b.remove());
+  const gap = bar.querySelector(".gap");
+  mons.forEach((m, i) => {
+    const b = document.createElement("button");
+    b.dataset.monI = i;
+    b.textContent = i === 0 && mons.length > 1 ? "Left" : i === mons.length - 1 && mons.length > 1 ? "Right" : m.name;
+    if (mons.length > 2) b.textContent = m.name;
+    b.className = i === monIdx ? "cur" : "";
+    b.addEventListener("click", () => {
+      monIdx = i; try { localStorage.setItem("rkm-mon", i); } catch (e) {}
+      drawMonButtons(); z = 1; layoutView(); waiting = false; askFrame();
+    });
+    bar.insertBefore(b, gap);
+  });
+}
+function layoutView() {
+  if (!mons.length) return;
+  const m = mons[monIdx], vw = view.clientWidth, vh = view.clientHeight;
+  if (!vw || !vh) return;
+  const k = Math.min(vw / m.w, vh / m.h);
+  fit = {k, w: m.w * k, h: m.h * k};
+  shot.style.width = fit.w + "px"; shot.style.height = fit.h + "px";
+  clampPan(); place();
+}
+function clampPan() {
+  const vw = view.clientWidth, vh = view.clientHeight, w = fit.w * z, h = fit.h * z;
+  tx = w <= vw ? (vw - w) / 2 : Math.min(0, Math.max(vw - w, tx));
+  ty = h <= vh ? (vh - h) / 2 : Math.min(0, Math.max(vh - h, ty));
+}
+function place() { shot.style.transform = `translate(${tx}px, ${ty}px) scale(${z})`; }
+addEventListener("resize", layoutView);
+
+// a point on the view -> desktop pixels, or null off the picture
+function toDesk(px, py) {
+  const m = mons[monIdx]; if (!m) return null;
+  const bx = (px - tx) / z, by = (py - ty) / z;
+  if (bx < 0 || by < 0 || bx >= fit.w || by >= fit.h) return null;
+  return [Math.round(m.x + bx / fit.k), Math.round(m.y + by / fit.k)];
+}
+function mark(px, py) {
+  const t = $("#tapmark");
+  t.style.left = px + "px"; t.style.top = py + "px"; t.style.transition = "none"; t.style.opacity = 1;
+  requestAnimationFrame(() => { t.style.transition = ""; t.style.opacity = 0; });
+}
+function clickAt(px, py, btn) {
+  const d = toDesk(px, py); if (!d) return;
+  mark(px, py);
+  ssend(`warp ${d[0]} ${d[1]}\nbtn ${btn} 1\nbtn ${btn} 0`);
+  waiting = false; setTimeout(askFrame, 60);
+}
+
+// one finger: tap = click there, hold = right click, drag = pan (zoomed);
+// two fingers: pinch to zoom
+const vp = new Map();
+let vg = null;
+const rel = (e) => { const r = view.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+view.addEventListener("pointerdown", (e) => {
+  try { view.setPointerCapture(e.pointerId); } catch (err) {}
+  vp.set(e.pointerId, rel(e));
+  if (vp.size === 1) {
+    const [x, y] = rel(e);
+    vg = {x, y, t: performance.now(), moved: 0, two: false, done: false};
+    vg.hold = setTimeout(() => { if (vg && !vg.moved && !vg.two) { vg.done = true; clickAt(x, y, 2); } }, 550);
+  } else if (vp.size === 2 && vg) {
+    vg.two = true; clearTimeout(vg.hold);
+    const [a, b] = [...vp.values()];
+    vg.d0 = Math.hypot(a[0] - b[0], a[1] - b[1]); vg.z0 = z;
+    vg.mx = (a[0] + b[0]) / 2; vg.my = (a[1] + b[1]) / 2; vg.tx0 = tx; vg.ty0 = ty;
+  }
+});
+view.addEventListener("pointermove", (e) => {
+  if (!vp.has(e.pointerId) || !vg) return;
+  const [x, y] = rel(e), [ox, oy] = vp.get(e.pointerId);
+  vp.set(e.pointerId, [x, y]);
+  if (vp.size === 1 && !vg.two) {
+    vg.moved += Math.abs(x - ox) + Math.abs(y - oy);
+    if (vg.moved > 8) { clearTimeout(vg.hold); if (z > 1) { tx += x - ox; ty += y - oy; clampPan(); place(); } }
+  } else if (vp.size === 2) {
+    const [a, b] = [...vp.values()];
+    const d = Math.hypot(a[0] - b[0], a[1] - b[1]), mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+    const nz = Math.max(1, Math.min(5, vg.z0 * d / vg.d0));
+    // keep the spot under the first midpoint under the fingers
+    tx = mx - (vg.mx - vg.tx0) * nz / vg.z0; ty = my - (vg.my - vg.ty0) * nz / vg.z0;
+    z = nz; clampPan(); place();
+  }
+});
+function vup(e) {
+  if (!vp.has(e.pointerId)) return;
+  vp.delete(e.pointerId);
+  if (vp.size || !vg) return;
+  const g = vg; vg = null; clearTimeout(g.hold);
+  if (g.two) { waiting = false; askFrame(); return; }   // sharper picture for the new zoom
+  if (!g.done && g.moved <= 8 && performance.now() - g.t < 550) clickAt(g.x, g.y, 1);
+}
+view.addEventListener("pointerup", vup);
+view.addEventListener("pointercancel", vup);
+
+document.querySelectorAll("[data-wheel]").forEach((b) =>
+  b.addEventListener("click", () => ssend("wheel " + b.dataset.wheel)));
+$("#kbtoggle").addEventListener("click", () => {
+  const r = $("#typerow2"); r.classList.toggle("show");
+  if (r.classList.contains("show")) $("#typer2").focus();
+  setTimeout(layoutView, 50);
+});
+typingBox($("#typer2"), ssend);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && sOn) screenShown(true); });
 
 render();
 connect();

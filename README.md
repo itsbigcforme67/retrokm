@@ -191,7 +191,8 @@ Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 - **From a phone:** `phone/rkm_phone.py` (a user service, `retrokm-phone`,
   set up by `install-laptop.sh`) serves a phone page on port 24855: the desk
   (take control of a machine, put machines on monitors, flip a shared
-  monitor's input, lock edges, reset), a trackpad (drag, tap, two-finger tap
+  monitor's input, lock edges, reset), a screen view of the hub machine's
+  own monitors (tap to click there, hold to right-click, pinch to zoom), a trackpad (drag, tap, two-finger tap
   for right click, two-finger scroll, tap-and-hold to drag) and keys (typing,
   Esc/arrows/F-keys, Ctrl+Alt+Del). Open `http://<hub>:24855/?k=<key>`; the
   key is in `~/.config/retrokm/phone-key` and the service log prints the
