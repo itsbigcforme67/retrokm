@@ -30,8 +30,26 @@ RestartSec=3
 WantedBy=default.target
 UNIT
 pkill -u "$(id -u)" -x rkm-x11 || true
+
+# the phone page (phone/rkm_phone.py): a user service too
+cat > "$HOME/.config/systemd/user/retrokm-phone.service" <<UNIT
+[Unit]
+Description=RetroKM phone page (port 24855)
+After=retrokm-agent.service
+
+[Service]
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 "$PWD/phone/rkm_phone.py"
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+UNIT
 systemctl --user daemon-reload
 systemctl --user enable --now retrokm-agent
+systemctl --user enable retrokm-phone
+systemctl --user restart retrokm-phone
 
 # the hub, started at boot
 sudo install -m 755 hub/retrokm-hub /usr/local/bin/retrokm-hub

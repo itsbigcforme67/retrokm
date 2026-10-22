@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RetroKM">
+<meta name="theme-color" content="#0e1116">
+<link rel="apple-touch-icon" href="/icon.png">
+<link id="manifest" rel="manifest" href="/manifest.json">
+<title>RetroKM</title>
+<style>
+:root {
+  --bg: #0e1116; --card: #181d25; --card2: #212833; --line: #2b323c;
+  --text: #e8edf3; --muted: #8b95a3; --accent: #3b82f6; --ok: #22c55e;
+  --bad: #ef4444; --warn: #fbbf24;
+  --safe-t: env(safe-area-inset-top); --safe-b: env(safe-area-inset-bottom);
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 16px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-user-select: none; user-select: none; overscroll-behavior: none; }
+body { display: flex; flex-direction: column; }
+button { font: inherit; color: inherit; border: 0; background: var(--card2);
+  border-radius: 12px; padding: 10px 14px; cursor: pointer; }
+button:active { filter: brightness(1.35); }
+button:disabled { opacity: .4; }
+
+header { padding: calc(var(--safe-t) + 10px) 16px 10px; display: flex; align-items: center;
+  gap: 10px; border-bottom: 1px solid var(--line); background: #101419; }
+header h1 { font-size: 20px; margin: 0; flex: 1; display: flex; align-items: center; gap: 8px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; }
+.dot.on { background: var(--ok); }
+.chip { font-size: 14px; padding: 7px 12px; border-radius: 999px; }
+.chip.lock-on { background: #3b2f14; color: var(--warn); }
+
+main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.page { display: none; padding: 14px 16px 20px; }
+.page.show { display: block; }
+#pad.show { display: flex; flex-direction: column; height: 100%; padding-bottom: 12px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  margin: 18px 2px 8px; font-weight: 600; }
+h2:first-child { margin-top: 2px; }
+
+.focusbar { display: flex; align-items: center; gap: 10px; background: var(--card);
+  border-radius: 14px; padding: 12px 14px; }
+.focusbar .swatch { width: 14px; height: 14px; border-radius: 4px; }
+.focusbar b { font-size: 18px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
+.card { background: var(--card); border-radius: 14px; padding: 12px; border: 2px solid transparent;
+  display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.card.focus { border-color: var(--ok); }
+.card .top { display: flex; align-items: center; gap: 8px; }
+.card .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .sub { font-size: 13px; color: var(--muted); }
+.card.off .name { color: var(--muted); }
+.stat { display: inline-flex; align-items: center; gap: 5px; }
+.stat i { width: 7px; height: 7px; border-radius: 50%; background: #59606b; }
+.stat i.on { background: var(--ok); }
+
+.mon { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.screen { width: 100%; aspect-ratio: 16 / 9; border-radius: 6px; border: 3px solid #3a4250;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  font-size: 13px; padding: 4px; background: #0b0e12; overflow: hidden; }
+.screen.r43 { aspect-ratio: 4 / 3; }
+
+/* sheets */
+#veil { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; z-index: 10; }
+#veil.show { display: block; }
+#sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 11; background: #151a21;
+  border-radius: 18px 18px 0 0; padding: 8px 16px calc(var(--safe-b) + 16px);
+  transform: translateY(105%); transition: transform .2s ease; max-height: 80vh; overflow-y: auto; }
+#sheet.show { transform: none; }
+#sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: #3a4250; margin: 0 auto 10px; }
+#sheet h3 { margin: 4px 0 2px; font-size: 19px; }
+#sheet p { margin: 0 0 12px; color: var(--muted); font-size: 14px; white-space: pre-line; }
+.opts { display: flex; flex-direction: column; gap: 8px; }
+.opts button { text-align: left; padding: 13px 14px; display: flex; align-items: center; gap: 10px; }
+.opts button.cur { background: #1f4d3a; }
+.opts button.danger { color: #fca5a5; }
+
+/* trackpad */
+#surface { flex: 1; min-height: 200px; background: var(--card); border-radius: 18px;
+  border: 1px solid var(--line); position: relative; touch-action: none;
+  display: flex; align-items: center; justify-content: center; color: #4b5563; font-size: 14px;
+  text-align: center; padding: 20px; }
+#surface.drag { border-color: var(--accent); }
+.btnrow { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+.btnrow button { padding: 18px 0; touch-action: none; }
+.btnrow button.held { background: var(--accent); }
+.typerow { display: flex; gap: 8px; margin-top: 10px; }
+#typer { flex: 1; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px 14px; -webkit-user-select: text; user-select: text; }
+.speed { display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--muted); font-size: 14px; }
+.speed input { flex: 1; }
+
+/* keys */
+.keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.keys.k6 { grid-template-columns: repeat(6, 1fr); }
+.keys button { padding: 14px 0; font-size: 15px; }
+.keys button.mod.on { background: var(--accent); }
+.wide2 { grid-column: span 2; }
+
+nav { display: flex; border-top: 1px solid var(--line); background: #101419;
+  padding-bottom: var(--safe-b); }
+nav button { flex: 1; background: none; border-radius: 0; padding: 12px 0 10px; color: var(--muted);
+  font-size: 13px; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+nav button.cur { color: var(--text); }
+nav svg { width: 24px; height: 24px; }
+
+#toast { position: fixed; left: 50%; top: calc(var(--safe-t) + 64px); transform: translateX(-50%);
+  background: #3b2f14; color: #fde68a; padding: 10px 16px; border-radius: 999px; font-size: 14px;
+  z-index: 20; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; text-align: center; }
+#toast.show { opacity: 1; }
+#nokey { padding: 40px 24px; color: var(--muted); display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="hubdot"></span>RetroKM</h1>
+  <button class="chip" id="lockbtn">edges free</button>
+  <button class="chip" id="resetbtn">reset</button>
+</header>
+
+<main>
+  <div id="nokey">This page needs its key. Open the full link from the laptop
+    (it is printed by <code>phone/rkm_phone.py</code>, and kept in
+    <code>~/.config/retrokm/phone-key</code>).</div>
+
+  <section class="page show" id="desk">
+    <h2>In control</h2>
+    <div class="focusbar" id="focusbar"></div>
+    <h2>Machines</h2>
+    <div class="grid" id="machines"></div>
+    <h2>Monitors</h2>
+    <div class="grid" id="monitors"></div>
+  </section>
+
+  <section class="page" id="pad">
+    <div id="surface">drag to move · tap to click<br>two fingers: tap to right-click, drag to scroll</div>
+    <div class="btnrow">
+      <button data-btn="1">Left</button><button data-btn="3">Middle</button><button data-btn="2">Right</button>
+    </div>
+    <div class="typerow">
+      <input id="typer" placeholder="type here…" autocomplete="off" autocorrect="off"
+             autocapitalize="off" spellcheck="false" enterkeyhint="send">
+    </div>
+    <div class="speed">speed <input type="range" id="speed" min="0.5" max="4" step="0.1" value="1.8"></div>
+  </section>
+
+  <section class="page" id="keyspage">
+    <h2>Hold for the next key</h2>
+    <div class="keys">
+      <button class="mod" data-mod="leftctrl">Ctrl</button><button class="mod" data-mod="leftalt">Alt</button>
+      <button class="mod" data-mod="leftshift">Shift</button><button class="mod" data-mod="leftmeta">Win</button>
+    </div>
+    <h2>Keys</h2>
+    <div class="keys">
+      <button data-key="esc">Esc</button><button data-key="tab">Tab</button>
+      <button data-key="backspace">⌫</button><button data-key="enter">Enter</button>
+      <button data-key="insert">Ins</button><button data-key="home">Home</button>
+      <button data-key="pageup">PgUp</button><button data-key="delete">Del</button>
+      <button data-key="printscreen">PrtSc</button><button data-key="end">End</button>
+      <button data-key="pagedown">PgDn</button><button data-key="space">Space</button>
+      <span></span><button data-key="up">↑</button><span></span><span></span>
+      <button data-key="left">←</button><button data-key="down">↓</button><button data-key="right">→</button><span></span>
+    </div>
+    <h2>Function keys</h2>
+    <div class="keys k6" id="fkeys"></div>
+    <h2>Combos</h2>
+    <div class="keys">
+      <button class="wide2" data-combo="ctrl+alt+delete">Ctrl+Alt+Del</button>
+      <button class="wide2" data-combo="alt+tab">Alt+Tab</button>
+      <button data-combo="ctrl+c">Copy</button><button data-combo="ctrl+v">Paste</button>
+      <button data-combo="ctrl+z">Undo</button><button data-combo="alt+f4">Alt+F4</button>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <button class="cur" data-page="desk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="9" height="7" rx="1"/><rect x="13" y="4" width="9" height="7" rx="1"/><rect x="5" y="15" width="14" height="5" rx="1"/></svg>Desk</button>
+  <button data-page="pad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 15h18M12 15v6"/></svg>Trackpad</button>
+  <button data-page="keyspage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>Keys</button>
+</nav>
+
+<div id="veil"></div>
+<div id="sheet"><div class="grab"></div><div id="sheetbody"></div></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const key = new URLSearchParams(location.search).get("k") || "";
+$("#manifest").href = "/manifest.json?k=" + encodeURIComponent(key);
+
+let ws = null, lay = null, hubUp = false, toastT = 0;
+
+function toast(s) {
+  const t = $("#toast");
+  t.textContent = s; t.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2600);
+}
+function send(line) {
+  if (ws && ws.readyState === 1) { ws.send(line); return true; }
+  toast("not connected"); return false;
+}
+function connect() {
+  if (!key) { $("#nokey").style.display = "block"; $("#desk").classList.remove("show"); return; }
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host +
+                     "/ws?k=" + encodeURIComponent(key));
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.layout) { lay = m.layout; hubUp = true; render(); }
+    if ("hub" in m) { hubUp = m.hub; render(); }
+    if (m.error) toast(m.error);
+  };
+  ws.onclose = () => { hubUp = false; render(); setTimeout(connect, 1500); };
+}
+// a phone that slept: reconnect at once
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && (!ws || ws.readyState > 1)) connect();
+});
+
+const hex = (c) => "#" + ((c >>> 0) & 0xFFFFFF).toString(16).padStart(6, "0");
+const screenBy = (n) => lay && lay.screens.find((s) => s.name === n);
+const labelOf = (n) => { const s = screenBy(n); return s ? s.label : n; };
+const monLabel = (m) => m.label || m.name;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+function render() {
+  $("#hubdot").classList.toggle("on", hubUp && !!lay);
+  if (!lay) {
+    $("#focusbar").innerHTML = '<span class="sub">waiting for the hub…</span>';
+    return;
+  }
+  const lb = $("#lockbtn");
+  lb.textContent = lay.locked ? "edges locked" : "edges free";
+  lb.classList.toggle("lock-on", !!lay.locked);
+
+  const a = screenBy(lay.active);
+  $("#focusbar").innerHTML = a
+    ? `<span class="swatch" style="background:${hex(a.color)}"></span><b>${esc(a.label)}</b>`
+    : `<span class="sub">nobody has the keyboard</span>`;
+
+  $("#machines").innerHTML = lay.screens.map((s, i) => {
+    const where = lay.monitors.filter((m) => m.shows === s.name).map(monLabel);
+    const st = s.ready ? "online" : (s.agent ? "offline" : "no link");
+    return `<button class="card ${s.name === lay.active ? "focus" : ""} ${s.ready ? "" : "off"}" data-scr="${i}">
+      <div class="top"><span class="swatch" style="width:12px;height:12px;border-radius:4px;flex:none;background:${hex(s.color)}"></span>
+      <span class="name">${esc(s.label)}</span></div>
+      <div class="sub"><span class="stat"><i class="${s.ready ? "on" : ""}"></i>${st}</span></div>
+      <div class="sub">${where.length ? "on " + esc(where.join(", ")) : "&nbsp;"}</div></button>`;
+  }).join("");
+
+  const mons = [...lay.monitors].sort((x, y) => x.capture - y.capture || x.row - y.row || x.col - y.col);
+  $("#monitors").innerHTML = mons.map((m) => {
+    const s = screenBy(m.shows);
+    const col = s ? hex(s.color) : "#3a4250";
+    const what = m.sharedOn ? labelOf(m.shared) : (s ? s.label : "off");
+    const sub = m.fixed ? "built in" : m.capture ? "capture · out " + m.output : "out " + m.output + (m.shared ? " · shared" : "");
+    return `<button class="card mon" data-mon="${esc(m.name)}">
+      <div class="screen ${m.aw === 4 ? "r43" : ""}" style="border-color:${col};color:${s || m.sharedOn ? "var(--text)" : "var(--muted)"}">${esc(what)}</div>
+      <div class="name">${esc(monLabel(m))}</div><div class="sub">${esc(sub)}</div></button>`;
+  }).join("");
+}
+
+/* ---- sheets ---- */
+function openSheet(html, wire) {
+  $("#sheetbody").innerHTML = html;
+  $("#veil").classList.add("show"); $("#sheet").classList.add("show");
+  $("#sheetbody").querySelectorAll("[data-cmd]").forEach((b) =>
+    b.addEventListener("click", () => { send(b.dataset.cmd); closeSheet(); }));
+  if (wire) wire();
+}
+function closeSheet() { $("#veil").classList.remove("show"); $("#sheet").classList.remove("show"); }
+$("#veil").addEventListener("click", closeSheet);
+
+function machineSheet(s) {
+  const opts = [];
+  if (s.ready && s.name !== lay.active) opts.push(`<button data-cmd="goto ${s.name}">Take control of it</button>`);
+  else if (s.name === lay.active) opts.push(`<button class="cur" disabled>In control now</button>`);
+  if (s.input) for (const m of lay.monitors) {
+    if (m.fixed || m.capture) continue;
+    const on = m.shows === s.name && !m.sharedOn;
+    opts.push(`<button class="${on ? "cur" : ""}" data-cmd="tie ${s.name} ${m.name}">Show on ${esc(monLabel(m))}</button>`);
+  }
+  openSheet(`<h3>${esc(s.label)}</h3><p>${esc(s.about || "")}</p><div class="opts">${opts.join("") ||
+    '<p>Nothing to do with it from here.</p>'}</div>`);
+}
+
+function monitorSheet(m) {
+  const opts = [];
+  if (m.fixed) {
+    opts.push(`<button data-cmd="goto ${m.fixed}">Take control of ${esc(labelOf(m.fixed))}</button>`);
+  } else {
+    if (m.shared) {
+      opts.push(`<button class="${m.sharedOn ? "cur" : ""}" data-cmd="share ${m.name} on">Its own input: ${esc(labelOf(m.shared))}</button>`);
+      opts.push(`<button class="${m.sharedOn ? "" : "cur"}" data-cmd="share ${m.name} off">The switcher's input</button>`);
+    }
+    for (const s of lay.screens) {
+      if (!s.input) continue;
+      const on = m.shows === s.name && !m.sharedOn;
+      opts.push(`<button class="${on ? "cur" : ""}" data-cmd="tie ${s.name} ${m.name}">
+        <span class="swatch" style="width:12px;height:12px;border-radius:4px;background:${hex(s.color)}"></span>${esc(s.label)}</button>`);
+    }
+    opts.push(`<button class="danger" data-cmd="untie ${m.name}">Nothing (no signal)</button>`);
+  }
+  const shows = m.sharedOn ? labelOf(m.shared) : (m.shows ? labelOf(m.shows) : "nothing");
+  openSheet(`<h3>${esc(monLabel(m))}</h3><p>showing ${esc(shows)}</p><div class="opts">${opts.join("")}</div>`);
+}
+
+$("#machines").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-scr]"); if (c && lay) machineSheet(lay.screens[+c.dataset.scr]);
+});
+$("#monitors").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-mon]");
+  if (c && lay) monitorSheet(lay.monitors.find((m) => m.name === c.dataset.mon));
+});
+$("#lockbtn").addEventListener("click", () => send("lock"));
+$("#resetbtn").addEventListener("click", () => openSheet(
+  `<h3>Reset the KVM?</h3><p>The hub starts over: screens blink, the keyboard and mouse drop for a few seconds, and every machine reconnects.</p>
+   <div class="opts"><button class="danger" data-cmd="reset">Reset</button></div>`));
+
+/* ---- tabs ---- */
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("cur", x === b));
+  document.querySelectorAll(".page").forEach((p) => p.classList.toggle("show", p.id === b.dataset.page));
+}));
+
+/* ---- trackpad ---- */
+const surf = $("#surface");
+const pts = new Map();
+let gesture = null, accX = 0, accY = 0, wheelAcc = 0, flushT = 0, lastTap = 0, dragHold = false;
+let speed = 1.8;
+try { speed = +localStorage.getItem("rkm-speed") || 1.8; } catch (e) {}
+$("#speed").value = speed;
+$("#speed").addEventListener("input", (e) => {
+  speed = +e.target.value; try { localStorage.setItem("rkm-speed", speed); } catch (e2) {}
+});
+
+function flush() {
+  flushT = 0;
+  const out = [];
+  const dx = Math.trunc(accX), dy = Math.trunc(accY);
+  if (dx || dy) { out.push(`rel ${dx} ${dy}`); accX -= dx; accY -= dy; }
+  const w = Math.trunc(wheelAcc / 120) * 120;
+  if (w) { out.push(`wheel ${w}`); wheelAcc -= w; }
+  if (out.length) send(out.join("\n"));
+}
+const queue = () => { if (!flushT) flushT = setTimeout(flush, 16); };
+const click = (b) => send(`btn ${b} 1\nbtn ${b} 0`);
+
+surf.addEventListener("pointerdown", (e) => {
+  try { surf.setPointerCapture(e.pointerId); } catch (err) {}
+  pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  const now = performance.now();
+  if (pts.size === 1) {
+    // a tap then a quick press again: hold the left button and drag
+    dragHold = now - lastTap < 300;
+    if (dragHold) { send("btn 1 1"); surf.classList.add("drag"); }
+    gesture = {t: now, moved: 0, fingers: 1};
+  } else if (gesture) gesture.fingers = Math.max(gesture.fingers, pts.size);
+});
+surf.addEventListener("pointermove", (e) => {
+  const p = pts.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (gesture) gesture.moved += Math.abs(dx) + Math.abs(dy);
+  if (pts.size === 1) {
+    const mag = Math.hypot(dx, dy), g = speed * (1 + Math.min(mag, 25) / 12);
+    accX += dx * g; accY += dy * g;
+  } else if (pts.size === 2) {
+    wheelAcc += dy * 3;   // two fingers (each counts): ~20 px per notch, content follows the fingers
+  }
+  queue();
+});
+function up(e) {
+  if (!pts.has(e.pointerId)) return;
+  pts.delete(e.pointerId);
+  if (pts.size) return;
+  const g = gesture; gesture = null;
+  if (dragHold) { send("btn 1 0"); dragHold = false; surf.classList.remove("drag"); lastTap = 0; return; }
+  if (g && g.moved < 12 && performance.now() - g.t < 280) {
+    click(g.fingers >= 2 ? 2 : 1);
+    lastTap = g.fingers === 1 ? performance.now() : 0;
+  }
+}
+surf.addEventListener("pointerup", up);
+surf.addEventListener("pointercancel", up);
+
+document.querySelectorAll(".btnrow button").forEach((b) => {
+  const n = b.dataset.btn;
+  b.addEventListener("pointerdown", (e) => { try { b.setPointerCapture(e.pointerId); } catch (err) {} b.classList.add("held"); send(`btn ${n} 1`); });
+  const rel = () => { if (b.classList.contains("held")) { b.classList.remove("held"); send(`btn ${n} 0`); } };
+  b.addEventListener("pointerup", rel); b.addEventListener("pointercancel", rel);
+});
+
+/* typing: every keystroke goes straight through; the field stays empty */
+const typer = $("#typer");
+typer.addEventListener("beforeinput", (e) => {
+  e.preventDefault();
+  if (e.inputType === "insertText" || e.inputType === "insertReplacementText") {
+    if (e.data) send("text " + e.data);
+  } else if (e.inputType === "deleteContentBackward") {
+    send("key backspace 1\nkey backspace 0");
+  } else if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") {
+    send("key enter 1\nkey enter 0");
+  }
+});
+typer.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); send("key enter 1\nkey enter 0"); }
+});
+typer.addEventListener("input", () => { if (typer.value) { send("text " + typer.value); typer.value = ""; } });
+
+/* ---- keys ---- */
+const fk = $("#fkeys");
+for (let i = 1; i <= 12; i++) fk.insertAdjacentHTML("beforeend", `<button data-key="f${i}">F${i}</button>`);
+const mods = new Set();
+document.querySelectorAll("[data-mod]").forEach((b) => b.addEventListener("click", () => {
+  const m = b.dataset.mod;
+  if (mods.has(m)) mods.delete(m); else mods.add(m);
+  b.classList.toggle("on", mods.has(m));
+}));
+document.addEventListener("click", (e) => {
+  const k = e.target.closest("[data-key]"), c = e.target.closest("[data-combo]");
+  if (k) {
+    const ms = [...mods], lines = [];
+    ms.forEach((m) => lines.push(`key ${m} 1`));
+    lines.push(`key ${k.dataset.key} 1`, `key ${k.dataset.key} 0`);
+    ms.reverse().forEach((m) => lines.push(`key ${m} 0`));
+    send(lines.join("\n"));
+    mods.clear(); document.querySelectorAll("[data-mod]").forEach((b) => b.classList.remove("on"));
+  } else if (c) send("combo " + c.dataset.combo);
+});
+
+render();
+connect();
+</script>
+</body>
+</html>

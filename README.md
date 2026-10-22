@@ -188,6 +188,14 @@ Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
   The X11 agent also turns each of its displays off and on again, which
   clears an output that stopped drawing the pointer.
   Saved state (monitor moves, colours, links) is kept.
+- **From a phone:** `phone/rkm_phone.py` (a user service, `retrokm-phone`,
+  set up by `install-laptop.sh`) serves a phone page on port 24855: the desk
+  (take control of a machine, put machines on monitors, flip a shared
+  monitor's input, lock edges, reset), a trackpad (drag, tap, two-finger tap
+  for right click, two-finger scroll, tap-and-hold to drag) and keys (typing,
+  Esc/arrows/F-keys, Ctrl+Alt+Del). Open `http://<hub>:24855/?k=<key>`; the
+  key is in `~/.config/retrokm/phone-key` and the service log prints the
+  whole link. On an iPhone, Share > Add to Home Screen makes it an app.
 - The control socket accepts the same commands as hotkeys, plus `status`:
 
   ```
