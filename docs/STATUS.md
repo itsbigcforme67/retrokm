@@ -39,6 +39,13 @@ file is the state of *this* desk and what was learned getting there.
 - **Control socket:** `printf 'status\n' | nc -q1 127.0.0.1 24851`. It
   also takes goto, show, tie, lock, key, rel, btn, ddc, lights and reset.
 
+- **Phone page** (2026-10-22): user service `retrokm-phone`, port 24855,
+  `phone/rkm_phone.py` + `phone/index.html`. It is a panel client (port
+  24852) for the desk and uses the control port for trackpad/keys, over one
+  WebSocket. Link: `http://192.168.1.166:24855/?k=` + `~/.config/retrokm/phone-key`.
+  Not a claude.ai artifact: an HTTPS page cannot reach the LAN hub. A native
+  iPhone app could later talk to the same WebSocket.
+
 ## Pieces and their state
 
 - **Hub** (`hub/`). It does:
