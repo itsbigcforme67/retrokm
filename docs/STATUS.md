@@ -43,6 +43,11 @@ file is the state of *this* desk and what was learned getting there.
   `phone/rkm_phone.py` + `phone/index.html`. It is a panel client (port
   24852) for the desk and uses the control port for trackpad/keys, over one
   WebSocket. Link: `http://192.168.1.166:24855/?k=` + `~/.config/retrokm/phone-key`.
+  Screen tab (2026-10-22): the laptop's own monitors as JPEG frames (PIL
+  grab, pointer drawn in, unchanged frames not resent, the page asks for
+  each next frame) on a second WebSocket, `/screen`. Taps use the hub's new
+  `warp x y` control command (and move the X pointer directly too, for a
+  hub without it). Other machines through the capture cards: later.
   Not a claude.ai artifact: an HTTPS page cannot reach the LAN hub. A native
   iPhone app could later talk to the same WebSocket.
 

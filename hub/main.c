@@ -1118,6 +1118,16 @@ static void run_command(char *cmd, Conn *r)
     } else if (!strcasecmp(argv[0], "rel") && argc == 3) {          /* synthetic input */
         hub_motion(atoi(argv[1]), atoi(argv[2]));
         ctl_printf(r, "ok\n");
+    } else if (!strcasecmp(argv[0], "warp") && argc == 3) {
+        /* warp <x> <y>: put the pointer there on the machine in control
+         * (its own pixels; the phone page's screen view taps with it) */
+        if (!active || !kbm_ok(active) || is_rel(active)) ctl_printf(r, "error: cannot warp there\n");
+        else {
+            px = clampd(atof(argv[1]), 0, active->w - 1);
+            py = clampd(atof(argv[2]), 0, active->h - 1);
+            queue_move(active);
+            ctl_printf(r, "ok\n");
+        }
     } else if (!strcasecmp(argv[0], "btn") && argc == 3) {
         hub_button(atoi(argv[1]), atoi(argv[2]));
         ctl_printf(r, "ok\n");
@@ -1178,7 +1188,7 @@ static void run_command(char *cmd, Conn *r)
         quit = restart = 1;
     } else {
         ctl_printf(r, "error: commands are status, goto <screen>, show <screen> [monitor], "
-                      "tie <in> <out>, lock [on|off], rel <dx> <dy>, btn <n> <0|1>, "
+                      "tie <in> <out>, lock [on|off], rel <dx> <dy>, warp <x> <y>, btn <n> <0|1>, "
                       "key <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], plug <console>, "
                       "unplug <box>, link <acc> <screen> [player], unlink <acc> <screen>, "
                       "keep <acc> <screen> on|off, keepall <acc> on|off, reset, quit\n");

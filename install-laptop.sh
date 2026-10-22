@@ -39,6 +39,8 @@ After=retrokm-agent.service
 
 [Service]
 Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=${DISPLAY:-:0}
+Environment=XAUTHORITY=${XAUTHORITY:-$HOME/.Xauthority}
 ExecStart=/usr/bin/python3 "$PWD/phone/rkm_phone.py"
 Restart=always
 RestartSec=3

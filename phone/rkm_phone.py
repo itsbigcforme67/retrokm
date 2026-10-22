@@ -18,6 +18,7 @@ Standard library only.
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 import secrets
@@ -159,6 +160,12 @@ class Desk:
         for c in clients:
             c.send_text(text)
 
+    def layout_obj(self):
+        try:
+            return json.loads(self.layout) if self.layout else None
+        except ValueError:
+            return None
+
     def hub_up(self):
         return self.panel.sock is not None
 
@@ -227,6 +234,20 @@ class WebSocket:
             except OSError:
                 self.open = False
 
+    def send_bytes(self, data):
+        n = len(data)
+        head = bytes([0x82]) + (bytes([n]) if n < 126 else
+                                bytes([126]) + struct.pack(">H", n) if n < 65536 else
+                                bytes([127]) + struct.pack(">Q", n))
+        with self.wlock:
+            if not self.open:
+                return
+            try:
+                self.wfile.write(head + data)
+                self.wfile.flush()
+            except OSError:
+                self.open = False
+
     def recv(self):
         """The next text message, or None when closed."""
         msg = b""
@@ -258,7 +279,90 @@ class WebSocket:
                     return msg.decode("utf-8", "replace")
 
 
-def make_handler(desk, key):
+class LaptopScreen:
+    """The hub machine's own desktop, for the screen view: JPEG frames of
+    one monitor at a time, with the pointer drawn in (X grabs leave it out),
+    and pointer warps that keep the hub in step."""
+
+    def __init__(self, desk, display):
+        self.desk, self.display = desk, display
+        self.lock = threading.Lock()
+        self.mons, self.mons_at = [], 0
+        self.x11 = self.xtst = None
+        try:
+            import ctypes
+            x = ctypes.cdll.LoadLibrary("libX11.so.6")
+            x.XOpenDisplay.restype = ctypes.c_void_p
+            d = x.XOpenDisplay(display.encode())
+            if d:
+                self.x11 = (ctypes, x, d, x.XDefaultRootWindow(ctypes.c_void_p(d)))
+                self.xtst = ctypes.cdll.LoadLibrary("libXtst.so.6")
+        except OSError:
+            pass
+
+    def monitors(self):
+        """[{name, x, y, w, h}] from xrandr, left to right."""
+        if time.time() - self.mons_at > 3:
+            import subprocess
+            mons = []
+            try:
+                out = subprocess.run(["xrandr", "--listmonitors"], env=dict(os.environ, DISPLAY=self.display),
+                                     capture_output=True, text=True, timeout=3).stdout
+                for line in out.splitlines()[1:]:
+                    # " 0: +*HDMI-1-1 1920/527x1080/297+1920+0  HDMI-1-1"
+                    f = line.split()
+                    g = f[2].replace("/", " ").replace("x", " ").replace("+", " ").split()
+                    mons.append({"name": f[-1], "w": int(g[0]), "h": int(g[2]), "x": int(g[4]), "y": int(g[5])})
+            except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+                pass
+            self.mons = sorted(mons, key=lambda m: (m["x"], m["y"]))
+            self.mons_at = time.time()
+        return self.mons
+
+    def pointer(self):
+        if not self.x11:
+            return None
+        ct, x, d, root = self.x11
+        a = [ct.c_ulong(), ct.c_ulong(), ct.c_int(), ct.c_int(), ct.c_int(), ct.c_int(), ct.c_uint()]
+        with self.lock:
+            x.XQueryPointer(ct.c_void_p(d), ct.c_ulong(root), *[ct.byref(v) for v in a])
+        return a[2].value, a[3].value
+
+    def frame(self, i, maxw, quality):
+        from PIL import Image, ImageDraw, ImageGrab
+        mons = self.monitors()
+        if not mons:
+            return None
+        m = mons[max(0, min(i, len(mons) - 1))]
+        im = ImageGrab.grab(bbox=(m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"]), xdisplay=self.display)
+        k = min(1.0, maxw / m["w"])
+        if k < 1:
+            im = im.resize((int(m["w"] * k), int(m["h"] * k)), Image.BILINEAR)
+        p = self.pointer()
+        if p and m["x"] <= p[0] < m["x"] + m["w"] and m["y"] <= p[1] < m["y"] + m["h"]:
+            cx, cy, z = (p[0] - m["x"]) * k, (p[1] - m["y"]) * k, max(k, im.width / 900)   # big enough on a phone
+            arrow = [(0, 0), (0, 17), (4, 13), (7, 20), (10, 19), (7, 12), (12, 12)]
+            ImageDraw.Draw(im).polygon([(cx + ax * z * 1.4, cy + ay * z * 1.4) for ax, ay in arrow],
+                                       fill="white", outline="black")
+        out = io.BytesIO()
+        im.convert("RGB").save(out, "JPEG", quality=quality)
+        return out.getvalue()
+
+    def warp(self, x, y):
+        """Put the laptop's pointer at x,y (desktop pixels) and give it control."""
+        lay = self.desk.layout_obj()
+        own = next((m["fixed"] for m in (lay or {}).get("monitors", []) if m.get("fixed")), None)
+        if own and lay.get("active") != own:
+            self.desk.ctl.send("goto " + own)
+        self.desk.ctl.send("warp %d %d" % (x, y))
+        if self.xtst:                          # a hub without warp: move it here too
+            ct, x11, d, root = self.x11
+            with self.lock:
+                self.xtst.XTestFakeMotionEvent(ct.c_void_p(d), 0, int(x), int(y), ct.c_ulong(0))
+                x11.XFlush(ct.c_void_p(d))
+
+
+def make_handler(desk, key, screen):
     files = {"/": ("index.html", "text/html; charset=utf-8"),
              "/icon.png": ("icon.png", "image/png")}
 
@@ -300,7 +404,66 @@ def make_handler(desk, key):
                 if not self._keyed(q):
                     return self._send(403, "wrong key")
                 return self._websocket()
+            if u.path == "/screen":
+                if not self._keyed(q):
+                    return self._send(403, "wrong key")
+                return self._screen()
             self._send(404, "not here")
+
+        def _upgrade(self):
+            wkey = self.headers.get("Sec-WebSocket-Key", "")
+            accept = base64.b64encode(hashlib.sha1(
+                (wkey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+            self.send_response(101)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", accept)
+            self.end_headers()
+            self.wfile.flush()
+            self.close_connection = True
+            return WebSocket(self.rfile, self.wfile)
+
+        def _screen(self):
+            """The screen view: the page asks for each frame when it has
+            drawn the last, so a slow phone or Wi-Fi just gets fewer."""
+            ws = self._upgrade()
+            last = None
+            ws.send_text(json.dumps({"mons": screen.monitors()}))
+            try:
+                while True:
+                    m = ws.recv()
+                    if m is None:
+                        break
+                    for line in m.split("\n"):
+                        w = line.split()
+                        if not w:
+                            continue
+                        if w[0] == "frame" and len(w) == 4:      # frame <monitor> <max width> <quality>
+                            try:
+                                f = screen.frame(int(w[1]), max(320, min(int(w[2]), 3840)),
+                                                 max(20, min(int(w[3]), 90)))
+                            except Exception as e:                 # X went away, a bad grab
+                                log("screen grab failed:", e)
+                                f = None
+                            if f is None:
+                                ws.send_text(json.dumps({"error": "cannot see the screen"}))
+                            elif f == last:
+                                ws.send_text('{"same":1}')
+                            else:
+                                ws.send_bytes(f)
+                                last = f
+                        elif w[0] == "mons":
+                            ws.send_text(json.dumps({"mons": screen.monitors()}))
+                        elif w[0] == "warp" and len(w) == 3 and w[1].isdigit() and w[2].isdigit():
+                            screen.warp(int(w[1]), int(w[2]))
+                        else:
+                            err = desk.command(line)
+                            if err:
+                                ws.send_text(json.dumps({"error": err}))
+            except OSError:
+                pass
+            finally:
+                ws.open = False
 
         def _websocket(self):
             wkey = self.headers.get("Sec-WebSocket-Key", "")
@@ -372,10 +535,12 @@ def main():
     ap.add_argument("--port", type=int, default=24855)
     ap.add_argument("--panel-port", type=int, default=24852)
     ap.add_argument("--control-port", type=int, default=24851)
+    ap.add_argument("--display", default=os.environ.get("DISPLAY", ":0"), help="this machine's X display")
     a = ap.parse_args()
     key = phone_key()
     desk = Desk(a.panel_port, a.control_port)
-    srv = ThreadingHTTPServer(("0.0.0.0", a.port), make_handler(desk, key))
+    screen = LaptopScreen(desk, a.display)
+    srv = ThreadingHTTPServer(("0.0.0.0", a.port), make_handler(desk, key, screen))
     srv.daemon_threads = True
     log("phone page: http://%s:%d/?k=%s" % (lan_address(), a.port, key))
     try:
