@@ -222,6 +222,17 @@ To do:
   `-v` log; real Xbox with an Xbox-to-USB adapter.
 - Out of focus, a machine gets keys but not the pointer or mouse buttons.
 
+## 2026-10-24: Xbox pad on the real Xbox (through a hub)
+The dongle works on the real console behind a USB hub on the controller-port adapter: the Xbox takes it and polls
+at 125 Hz (`echo show | nc -u -w1 xboxpad.local 24854`: usb=taken, reports climbing). Presses didn't arrive because
+the Elite came back under a new accessory ID (pad-045e0b00-311941; the Xbox link was on pad-045e0b00-d9fcba).
+Re-linked by hand: `link pad-045e0b00-311941 xbox 1` and `keep pad-045e0b00-311941 xbox on` on the control port.
+
+**To fix later (owner: "make a note"):** pads without a USB serial (the Elite over USB) get their ID from the port
+path (hub/pad.c try_open: fnv(uniq or phys)), so another USB port = another ID and its links are lost. Idea: a
+newly seen pad inherits the links, players and keep flags of an absent pad of the same VID:PID (or IDs by VID:PID
+when only one such pad is known). Needs `./install-laptop.sh` (sudo) to install the hub.
+
 ## Open ideas / next steps
 
 - **Set-3 keys:** verify key by key on the Octane (the table was written
