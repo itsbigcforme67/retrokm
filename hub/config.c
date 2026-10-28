@@ -89,6 +89,44 @@ static char mon_fixed[MAX_MONITORS][32];   /* resolved after the whole file is r
 static char mon_shared[MAX_MONITORS][32];
 static char area_mon[MAX_SCREENS][MAX_AREAS][32];
 static char scr_via[MAX_SCREENS][32];
+static char scr_video[MAX_SCREENS][48], mon_video[MAX_MONITORS][48];
+static int scr_old_in[MAX_SCREENS], mon_old_out[MAX_MONITORS];   /* the old "input =" / "output =" */
+
+/* A video device with the defaults of an Extron SIS switcher */
+static VDevice *vdev_new(const char *name)
+{
+    VDevice *d;
+    if (cfg.nvdevs >= MAX_VDEVS) return NULL;
+    d = &cfg.vdevs[cfg.nvdevs++];
+    copy(d->name, sizeof d->name, name);
+    d->driver = VDRV_EXTRON_SIS;
+    d->baud = 9600;
+    d->poll = 5;
+    d->tie_cmd = '!';
+    d->read_cmd = '%';
+    d->inputs = d->outputs = 8;
+    d->fd = -1;
+    return d;
+}
+
+/* "mvx.in3" / "mvx.out2": which device, which port, and whether it is an
+ * output; -1 if it is not one */
+static int parse_port(const char *v, int *dev, int *port, int *out)
+{
+    const char *dot = strrchr(v, '.');
+    char name[32];
+    VDevice *d;
+    if (!dot || dot == v || (size_t)(dot - v) >= sizeof name) return -1;
+    memcpy(name, v, (size_t)(dot - v));
+    name[dot - v] = 0;
+    if (!(d = vdev_by_name(name))) return -1;
+    if (!strncasecmp(dot + 1, "out", 3)) { *out = 1; *port = atoi(dot + 4); }
+    else if (!strncasecmp(dot + 1, "in", 2)) { *out = 0; *port = atoi(dot + 3); }
+    else return -1;
+    *dev = (int)(d - cfg.vdevs);
+    if (*port < 1 || *port > (*out ? d->outputs : d->inputs) || *port > VDEV_MAX_IO) return -1;
+    return 0;
+}
 
 static char *trim(char *s)
 {
@@ -146,7 +184,10 @@ int config_load(const char *path)
 {
     FILE *f = fopen(path, "r");
     char line[512];
-    enum { S_NONE, S_HUB, S_EXTRON, S_SCREEN, S_MONITOR, S_HOTKEYS, S_SEAT } sec = S_NONE;
+    enum { S_NONE, S_HUB, S_DEVICE, S_WIRE, S_SCREEN, S_MONITOR, S_HOTKEYS, S_SEAT } sec = S_NONE;
+    VDevice *dev = NULL;
+    char wire_from[MAX_WIRES][48], wire_to[MAX_WIRES][48];
+    int nwire = 0;
     Seat *seat = NULL;
     Screen *scr = NULL;
     Monitor *mon = NULL;
@@ -155,6 +196,10 @@ int config_load(const char *path)
     if (!f) { perror(path); return -1; }
 
     memset(&cfg, 0, sizeof cfg);
+    memset(scr_video, 0, sizeof scr_video);
+    memset(mon_video, 0, sizeof mon_video);
+    memset(scr_old_in, 0, sizeof scr_old_in);
+    memset(mon_old_out, 0, sizeof mon_old_out);
     copy(cfg.listen, sizeof cfg.listen, "0.0.0.0");
     copy(cfg.pad, sizeof cfg.pad, "auto");
     cfg.port = RKM_PORT;
@@ -164,14 +209,8 @@ int config_load(const char *path)
     cfg.accel = 0.5;
     cfg.wiggle = 400;
     cfg.follow_tie = 1;
-    cfg.extron_baud = 9600;
-    cfg.extron_poll = 5;
-    cfg.extron_tie_cmd = '!';
-    cfg.extron_read_cmd = '%';
     cfg.lights = 1;
     cfg.lights_brightness = 80;
-    cfg.extron_inputs = 8;
-    cfg.extron_outputs = 8;
     snprintf(cfg.state_path, sizeof cfg.state_path, "%s.state", path);
 
     while (fgets(line, sizeof line, f)) {
@@ -193,7 +232,14 @@ int config_load(const char *path)
             if (*name) { *name++ = 0; name = trim(name); }
 
             if (!strcasecmp(kind, "hub")) sec = S_HUB;
-            else if (!strcasecmp(kind, "extron")) sec = S_EXTRON;
+            else if (!strcasecmp(kind, "extron") || !strcasecmp(kind, "device")) {
+                /* [device mvx]: a switcher; [extron] is the old way to
+                 * write the one switcher, a device named "extron" */
+                const char *dn = !strcasecmp(kind, "extron") ? "extron" : name;
+                if (!*dn || vdev_by_name(dn) || !(dev = vdev_new(dn))) goto bad;
+                sec = S_DEVICE;
+            }
+            else if (!strcasecmp(kind, "wire")) sec = S_WIRE;
             else if (!strcasecmp(kind, "hotkeys")) sec = S_HOTKEYS;
             else if (!strcasecmp(kind, "seat")) {
                 /* [seat james]: someone at the desk; the first one is the
@@ -252,15 +298,29 @@ int config_load(const char *path)
                 else goto bad;
             } else goto bad;
             break;
-        case S_EXTRON:
-            if (!strcasecmp(k, "device")) copy(cfg.extron_dev, sizeof cfg.extron_dev, v);
-            else if (!strcasecmp(k, "baud")) cfg.extron_baud = atoi(v);
-            else if (!strcasecmp(k, "poll")) cfg.extron_poll = atoi(v);
-            else if (!strcasecmp(k, "tie_command") && *v) cfg.extron_tie_cmd = *v;
-            else if (!strcasecmp(k, "read_command") && *v) cfg.extron_read_cmd = *v;
-            else if (!strcasecmp(k, "inputs")) cfg.extron_inputs = atoi(v);
-            else if (!strcasecmp(k, "outputs")) cfg.extron_outputs = atoi(v);
+        case S_DEVICE:
+            if (!strcasecmp(k, "driver")) {
+                if (!strcasecmp(v, "extron-sis")) dev->driver = VDRV_EXTRON_SIS;
+                else goto bad;
+            }
+            else if (!strcasecmp(k, "port") || !strcasecmp(k, "device"))
+                copy(dev->path, sizeof dev->path, strncasecmp(v, "serial:", 7) ? v : v + 7);
+            else if (!strcasecmp(k, "baud")) dev->baud = atoi(v);
+            else if (!strcasecmp(k, "poll")) dev->poll = atoi(v);
+            else if (!strcasecmp(k, "tie_command") && *v) dev->tie_cmd = *v;
+            else if (!strcasecmp(k, "read_command") && *v) dev->read_cmd = *v;
+            else if (!strcasecmp(k, "inputs")) dev->inputs = atoi(v);
+            else if (!strcasecmp(k, "outputs")) dev->outputs = atoi(v);
             else goto bad;
+            if (dev->inputs < 1 || dev->inputs > VDEV_MAX_IO || dev->outputs < 1 || dev->outputs > VDEV_MAX_IO)
+                goto bad;
+            break;
+        case S_WIRE:
+            /* mvx.out4 = tink.in1: a cable from an output to an input */
+            if (nwire >= MAX_WIRES) goto bad;
+            copy(wire_from[nwire], sizeof wire_from[0], k);
+            copy(wire_to[nwire], sizeof wire_to[0], v);
+            nwire++;
             break;
         case S_SCREEN:
             if (!strcasecmp(k, "local")) scr->local = truthy(v);
@@ -271,7 +331,8 @@ int config_load(const char *path)
             else if (!strcasecmp(k, "size")) {
                 if (sscanf(v, "%dx%d", &scr->w, &scr->h) != 2) goto bad;
             }
-            else if (!strcasecmp(k, "input")) scr->extron_input = atoi(v);
+            else if (!strcasecmp(k, "video")) copy(scr_video[scr - cfg.screens], sizeof scr_video[0], v);
+            else if (!strcasecmp(k, "input")) scr_old_in[scr - cfg.screens] = atoi(v);
             else if (!strcasecmp(k, "via")) copy(scr_via[scr - cfg.screens], sizeof scr_via[0], v);
             else if (!strcasecmp(k, "speed")) scr->speed = atof(v);
             else if (!strcasecmp(k, "rate")) {
@@ -297,7 +358,8 @@ int config_load(const char *path)
             if (!strcasecmp(k, "pos")) {
                 if (sscanf(v, "%d , %d", &mon->col, &mon->row) != 2) goto bad;
             }
-            else if (!strcasecmp(k, "output")) mon->extron_output = atoi(v);
+            else if (!strcasecmp(k, "video")) copy(mon_video[mon - cfg.monitors], sizeof mon_video[0], v);
+            else if (!strcasecmp(k, "output")) mon_old_out[mon - cfg.monitors] = atoi(v);
             else if (!strcasecmp(k, "screen"))
                 copy(mon_fixed[mon - cfg.monitors], sizeof mon_fixed[0], v);
             else if (!strcasecmp(k, "shared")) {
@@ -352,6 +414,61 @@ bad:
     }
     fclose(f);
 
+    {   /* the old form: "input = N" / "output = N" are ports on the one
+         * switcher, which is the device named "extron" */
+        int old = 0;
+        VDevice *x;
+        for (i = 0; i < cfg.nscreens; i++) old |= scr_old_in[i] > 0;
+        for (i = 0; i < cfg.nmonitors; i++) old |= mon_old_out[i] > 0;
+        if (old) {
+            if (!(x = vdev_by_name("extron")) && !(x = vdev_new("extron"))) {
+                fprintf(stderr, "%s: too many devices\n", path);
+                return -1;
+            }
+            logmsg("config: 'input =' / 'output =' are ports on the device \"extron\" (old form; "
+                   "see docs/SWITCHING.md for 'video =')");
+            for (i = 0; i < cfg.nscreens; i++)
+                if (scr_old_in[i] > 0 && !scr_video[i][0])
+                    snprintf(scr_video[i], sizeof scr_video[i], "%s.in%d", x->name, scr_old_in[i]);
+            for (i = 0; i < cfg.nmonitors; i++)
+                if (mon_old_out[i] > 0 && !mon_video[i][0])
+                    snprintf(mon_video[i], sizeof mon_video[i], "%s.out%d", x->name, mon_old_out[i]);
+            for (i = 0; i < cfg.nscreens; i++)       /* its size was only for the panel then */
+                if (scr_old_in[i] > x->inputs && scr_old_in[i] <= VDEV_MAX_IO) x->inputs = scr_old_in[i];
+            for (i = 0; i < cfg.nmonitors; i++)
+                if (mon_old_out[i] > x->outputs && mon_old_out[i] <= VDEV_MAX_IO) x->outputs = mon_old_out[i];
+        }
+    }
+    for (i = 0; i < nwire; i++) {
+        Wire *w = &cfg.wires[cfg.nwires];
+        int fo, ti;
+        if (parse_port(wire_from[i], &w->from_dev, &w->from_out, &fo) < 0 || !fo ||
+            parse_port(wire_to[i], &w->to_dev, &w->to_in, &ti) < 0 || ti) {
+            fprintf(stderr, "%s: wire %s = %s: needs device.outN = device.inN, on [device]s\n",
+                    path, wire_from[i], wire_to[i]);
+            return -1;
+        }
+        cfg.nwires++;
+    }
+    for (i = 0; i < cfg.nscreens; i++) {
+        Screen *s = &cfg.screens[i];
+        int out;
+        if (!scr_video[i][0]) continue;
+        if (parse_port(scr_video[i], &s->vdev, &s->vin, &out) < 0 || out) {
+            fprintf(stderr, "%s: screen %s: video = %s is not an input of a [device]\n", path, s->name, scr_video[i]);
+            return -1;
+        }
+    }
+    for (i = 0; i < cfg.nmonitors; i++) {
+        Monitor *m = &cfg.monitors[i];
+        int out;
+        if (!mon_video[i][0]) continue;
+        if (parse_port(mon_video[i], &m->vdev, &m->vout, &out) < 0 || !out) {
+            fprintf(stderr, "%s: monitor %s: video = %s is not an output of a [device]\n", path, m->name, mon_video[i]);
+            return -1;
+        }
+    }
+
     for (i = 0; i < cfg.nmonitors; i++) {
         Monitor *m = &cfg.monitors[i];
         if (mon_fixed[i][0]) {
@@ -360,8 +477,8 @@ bad:
                 fprintf(stderr, "%s: monitor %s names unknown screen %s\n", path, m->name, mon_fixed[i]);
                 return -1;
             }
-        } else if (m->extron_output < 1 || m->extron_output > EXTRON_MAX_IO) {
-            fprintf(stderr, "%s: monitor %s needs 'screen =' or 'output ='\n", path, m->name);
+        } else if (!m->vout) {
+            fprintf(stderr, "%s: monitor %s needs 'screen =' or 'video ='\n", path, m->name);
             return -1;
         }
     }

@@ -207,8 +207,8 @@ Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
   $ nc 127.0.0.1 24851
   status
   active: octane at 512,300 on monitor left
-  screen octane       1280x1024 ready   input=192.168.1.21:1027 clipboard=192.168.1.21:1027 extron-in=1
-  monitor left        pos=0,0 extron-out=1 (input 1) shows=octane
+  screen octane       1280x1024 ready   input=192.168.1.21:1027 clipboard=192.168.1.21:1027 video=switcher.in1
+  monitor left        pos=0,0 video=switcher.out1 (input 1) shows=octane
   ...
   ```
 

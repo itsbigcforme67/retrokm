@@ -1,6 +1,23 @@
 # Video switching: devices, wires and routes (design, 2026-10-28)
 
-Status: design, not built yet. This replaces the single `[extron]` section
+Status: step 1 built (2026-10-28): devices, wires and routes in the hub,
+Extron SIS as the first driver (`hub/video.c`, `hub/extron.c`,
+`tests/switching_test.py`). Signal kinds, the `text` / `ir` / `manual`
+drivers, converters and the panel's device view are still to come.
+
+As built, the config is a subset of the sketch below: `[device NAME]`
+(`driver = extron-sis`, `port`, `baud`, `poll`, `inputs`, `outputs`,
+`tie_command`, `read_command`), `[wire]` lines `a.outN = b.inN`, and
+`video = dev.inN` / `video = dev.outN` on screens and monitors with no
+signal kind after it yet. A shared monitor is still `shared =`, and boxes
+the hub cannot drive (the RetroTINK) are still `via =`. Control commands:
+`show <screen> [monitor]` routes, `tie [device] <in> <out>` sets one tie,
+`devices` lists devices, their ties and the wires.
+
+The old `[extron]` section with `input =` / `output =` still loads: it
+becomes a device named `extron`.
+
+This replaces the single `[extron]` section
 with a description of the whole video chain, so RetroKM works with whatever
 switchers, scalers and monitors a desk has, and so the planner website (at
 the end) can use the same descriptions.

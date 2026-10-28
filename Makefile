@@ -34,7 +34,11 @@ clean:
 	$(MAKE) -C hub clean
 	rm -rf build
 
-.PHONY: all hub test test-consoles test-reset test-seats clean
+.PHONY: all hub test test-consoles test-reset test-seats test-switching clean
+
+# Video devices, wires and routes through simulated switchers; needs only the hub.
+test-switching: hub
+	python3 tests/switching_test.py
 
 # The reset command (the hub restarts in place); needs only the hub.
 test-reset: hub

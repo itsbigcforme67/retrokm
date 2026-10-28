@@ -37,17 +37,32 @@ on_tie = follow
 color = 22c55e         # its ring on the panel (no "#": that starts a comment)
 #label = Me
 
-[extron]
-device = /dev/ttyUSB0
+# ---- video switchers (docs/SWITCHING.md) --------------------------------------
+# Each switcher the hub drives is a [device].  Its ports are named
+# <device>.in1, <device>.out1 ...; machines and monitors say which one they
+# are cabled to, and [wire] lists cables from one switcher into another.
+# "show <machine> <monitor>" then works out the ties through all of them.
+
+[device switcher]
+driver = extron-sis    # Extron, over RS-232 (the only driver so far)
+port = /dev/ttyUSB0    # /dev/serial/by-id/... keeps its name across plugging
 baud = 9600
-#inputs = 8            # matrix size, for the touch panel
-#outputs = 8
+inputs = 8
+outputs = 8
 poll = 5               # seconds between re-reads, in case a change was missed
 #tie_command = !       # ! = video+audio, & = RGBHV only, % = video only
 #read_command = %      # CrossPoint 300 and other RGBHV models may want &
 
+# A second switcher in front of the first, its output 1 cabled into input 6:
+#[device small]
+#port = /dev/ttyUSB1
+#inputs = 4
+#outputs = 1
+#[wire]
+#small.out1 = switcher.in6
+
 # ---- machines ---------------------------------------------------------------
-# "input" is the switcher input the machine's video is wired to.
+# "video" is the switcher input the machine's video is wired to.
 
 [screen laptop]
 #label = IdeaPad Gaming 3   # name and picture on the touch panel
@@ -66,30 +81,30 @@ size = 1920x1080
 #area = 1080x1920+1920+0 tall
 
 [screen octane]
-input = 1
+video = switcher.in1
 
 [screen pc]            # Windows 98 SE and 2000 on the same box: use one name in both
-input = 2
+video = switcher.in2
 
 [screen quadra]
-input = 3
+video = switcher.in3
 rate = 60              # pointer updates per second; lower it for slow machines
 speed = 0.6            # small screen, slow the pointer down
 # A PC keyboard's Alt sits where a Mac's Command is.  Swap them here:
 remap = leftalt:leftmeta, leftmeta:leftalt
 
 [screen g4]
-input = 4
+video = switcher.in4
 
 # A console played through the Xbox dongle (xboxpad/): it connects with
 # this name and gets the game pad while this screen has the keyboard
 #[screen xbox]
-#input = 6
+#video = switcher.in6
 #label = Xbox
 
 # A console: video only, never gets the keyboard
 #[screen dreamcast]
-#input = 5
+#video = switcher.in5
 #agent = no
 remap = leftalt:leftmeta, leftmeta:leftalt
 
@@ -99,7 +114,7 @@ remap = leftalt:leftmeta, leftmeta:leftalt
 
 [monitor left]
 pos = 0,0
-output = 1
+video = switcher.out1
 
 [monitor laptop]
 pos = 1,0
@@ -107,14 +122,14 @@ screen = laptop
 
 [monitor right]
 pos = 2,0
-output = 2
+video = switcher.out2
 
 # A monitor with two inputs: VGA from switcher output 3, HDMI from the
 # laptop.  The hub cannot see which input is selected, so the touch panel
 # says so (tap the monitor); it starts out on the shared machine.
 #[monitor tall]
 #pos = 3,0
-#output = 3
+#video = switcher.out3
 #shared = laptop
 # How the panel draws a monitor: its shape, its size (diagonal, inches) and
 # whether it is turned on its side.  A monitor of a machine whose agent
@@ -135,7 +150,7 @@ output = 2
 #[monitor capture]
 #label = Capture A
 #pos = 4,0
-#output = 7
+#video = switcher.out7
 #capture = yes
 
 # ---- hotkeys ------------------------------------------------------------------

@@ -370,16 +370,16 @@ static void resolve_monitors(void)
     int i, k;
     for (i = 0; i < cfg.nmonitors; i++) {
         Monitor *m = &cfg.monitors[i];
-        int in;
+        int sd, si;
         if (m->fixed) { m->cur = m->fixed; continue; }
         if (m->shared && m->shared_on) { m->cur = m->shared; continue; }
         m->cur = NULL;
-        in = extron_input_for(m->extron_output);
-        if (in <= 0) continue;
+        /* back through the ties and wires to the input the picture enters by */
+        if (!video_source(m->vdev, m->vout, &sd, &si)) continue;
         /* several screens may share an input (dual boot): prefer the live one */
         for (k = 0; k < cfg.nscreens; k++) {
             Screen *s = &cfg.screens[k];
-            if (s->extron_input != in) continue;
+            if (!s->vin || s->vdev != sd || s->vin != si) continue;
             if (!m->cur || (!ready(m->cur) && ready(s))) m->cur = s;
         }
     }
@@ -757,7 +757,7 @@ static void relayout(void)
     if (!home()->lost_ms && (!home()->active || !home()->touched)) fallback();
 }
 
-void hub_extron_changed(void)
+void hub_video_changed(void)
 {
     relayout();
 }
@@ -1269,6 +1269,7 @@ static void cmd_status(Conn *r)
 {
     Seat *z = home();
     int i;
+    char pn[48];
 
     ctl_printf(r, "active: %s", z->active ? z->active->name : "(none)");
     if (z->active) ctl_printf(r, " at %d,%d", (int)z->px, (int)z->py);
@@ -1289,14 +1290,15 @@ static void cmd_status(Conn *r)
         }
         if (s->via) ctl_printf(r, " via=%s", s->via->name);
         if (s->plugged) ctl_printf(r, " plugged=%s", s->plugged->name);
-        if (s->extron_input) ctl_printf(r, " extron-in=%d", s->extron_input);
+        if (s->vin) ctl_printf(r, " video=%s", video_port_name(s->vdev, s->vin, 0, pn, sizeof pn));
         ctl_printf(r, "\n");
     }
     for (i = 0; i < cfg.nmonitors; i++) {
         Monitor *m = &cfg.monitors[i];
         ctl_printf(r, "monitor %-11s pos=%d,%d ", m->name, m->col, m->row);
         if (m->fixed) ctl_printf(r, "fixed");
-        else ctl_printf(r, "extron-out=%d (input %d)", m->extron_output, extron_input_for(m->extron_output));
+        else ctl_printf(r, "video=%s (input %d)", video_port_name(m->vdev, m->vout, 1, pn, sizeof pn),
+                        video_input_for(m->vdev, m->vout));
         ctl_printf(r, " shows=%s\n", m->cur ? m->cur->name : "-");
     }
     for (i = 0; i < cfg.nacc; i++) {
@@ -1415,11 +1417,37 @@ static void run_seat_command(Seat *z, int argc, char **argv, Conn *r)
         /* route a machine's video to a monitor (default: the one under the pointer) */
         Screen *s = screen_by_name(argv[1]);
         Monitor *m = argc >= 3 ? monitor_by_name(argv[2]) : z->mon;
-        if (!s || !s->extron_input) ctl_printf(r, "error: %s has no switcher input\n", argv[1]);
+        char err[128];
+        if (!s || !s->vin) ctl_printf(r, "error: %s has no switcher input\n", argv[1]);
         else if (!m || m->fixed) ctl_printf(r, "error: no switched monitor to show it on\n");
-        else { extron_tie(s->extron_input, m->extron_output); ctl_printf(r, "ok\n"); }
-    } else if (!strcasecmp(argv[0], "tie") && argc == 3) {
-        extron_tie(atoi(argv[1]), atoi(argv[2]));
+        else if (video_route(s, m, err, sizeof err) < 0) ctl_printf(r, "error: %s\n", err);
+        else ctl_printf(r, "ok\n");
+    } else if (!strcasecmp(argv[0], "tie") && (argc == 3 || argc == 4)) {
+        /* tie [device] <in> <out>: one tie, by hand (no device: the first) */
+        VDevice *d = argc == 4 ? vdev_by_name(argv[1]) : cfg.nvdevs ? &cfg.vdevs[0] : NULL;
+        if (!d) ctl_printf(r, "error: no such device\n");
+        else {
+            video_tie((int)(d - cfg.vdevs), atoi(argv[argc - 2]), atoi(argv[argc - 1]));
+            ctl_printf(r, "ok\n");
+        }
+    } else if (!strcasecmp(argv[0], "devices")) {
+        /* each device, then each wire */
+        int i;
+        for (i = 0; i < cfg.nvdevs; i++) {
+            const VDevice *d = &cfg.vdevs[i];
+            int o;
+            ctl_printf(r, "device %-10s %s %dx%d %s", d->name, "extron-sis", d->inputs, d->outputs,
+                       d->fd >= 0 ? "online" : d->path[0] ? "offline" : "not-connected");
+            for (o = 1; o <= d->outputs; o++)
+                if (d->tie[o]) ctl_printf(r, " %d*%d", d->tie[o], o);
+            ctl_printf(r, "\n");
+        }
+        for (i = 0; i < cfg.nwires; i++) {
+            char a[48], b2[48];
+            const Wire *w = &cfg.wires[i];
+            ctl_printf(r, "wire %s = %s\n", video_port_name(w->from_dev, w->from_out, 1, a, sizeof a),
+                       video_port_name(w->to_dev, w->to_in, 0, b2, sizeof b2));
+        }
         ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "lock")) {
         z->locked = argc >= 2 ? !strcasecmp(argv[1], "on") : !z->locked;
@@ -1603,17 +1631,17 @@ static void screen_about(const Screen *s, char *out, size_t n)
         const Screen *b = s->via;
         ADD("into the %s%s", b->label[0] ? b->label : b->name, b->plugged == s ? "" : " (not plugged in now)");
         while (b->via) { b = b->via; ADD(", then the %s", b->label[0] ? b->label : b->name); }
-        if (b->extron_input) ADD(", switcher input %d", b->extron_input);
+        if (b->vin) ADD(", %s input %d", cfg.vdevs[b->vdev].name, b->vin);
         ADD("\n");
     }
-    if (s->extron_input) ADD("switcher input %d\n", s->extron_input);
+    if (s->vin) ADD("%s input %d\n", cfg.vdevs[s->vdev].name, s->vin);
     for (i = 0; i < cfg.nmonitors; i++) {
         const Monitor *m = &cfg.monitors[i];
         const char *mn = m->label[0] ? m->label : m->name;
         if (m->cur != s) continue;
         if (m->fixed == s) ADD("its own screen: %s\n", mn);
         else if (m->shared == s && m->shared_on) ADD("on %s (its other input)\n", mn);
-        else ADD("on %s (switcher output %d)\n", mn, m->extron_output);
+        else ADD("on %s (%s output %d)\n", mn, cfg.vdevs[m->vdev].name, m->vout);
     }
     if (!len) ADD("%s\n", s->no_agent ? "video only" : "nothing connected");
 #undef ADD
@@ -1643,7 +1671,8 @@ static void layout_json(Sbuf *b)
     }
     sb_printf(b, "]");
     sb_printf(b, ",\"locked\":%d,\"switcher\":{\"present\":%d,\"online\":%d,\"inputs\":%d,\"outputs\":%d}",
-              home()->locked, cfg.extron_dev[0] != 0, extron_online(), cfg.extron_inputs, cfg.extron_outputs);
+              home()->locked, video_any(), video_all_online(), cfg.nvdevs ? cfg.vdevs[0].inputs : 0,
+              cfg.nvdevs ? cfg.vdevs[0].outputs : 0);
     sb_printf(b, ",\"screens\":[");
     for (i = 0; i < cfg.nscreens; i++) {
         Screen *s = &cfg.screens[i];
@@ -1655,7 +1684,7 @@ static void layout_json(Sbuf *b)
         sb_str(b, s->art);
         sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d,"
                   "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d,\"pads\":%d,\"focus\":%d,\"via\":",
-                  s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h,
+                  s->vin, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h,
                   lights_color(s), s->color >= 0, s->buddy != NULL, has_pads(s), s == home()->active);
         sb_str(b, s->via ? s->via->name : "");
         sb_printf(b, ",\"plugged\":");
@@ -1697,8 +1726,11 @@ static void layout_json(Sbuf *b)
         sb_str(b, m->name);
         sb_printf(b, ",\"col\":%d,\"row\":%d,\"fixed\":", m->col, m->row);
         sb_str(b, m->fixed ? m->fixed->name : "");
-        sb_printf(b, ",\"output\":%d,\"input\":%d,\"shows\":", m->extron_output,
-                  m->fixed ? 0 : extron_input_for(m->extron_output));
+        {   /* the input the picture enters the switchers by, as screens' "input" */
+            int sd = 0, si = 0;
+            if (!m->fixed && !video_source(m->vdev, m->vout, &sd, &si)) si = 0;
+            sb_printf(b, ",\"output\":%d,\"input\":%d,\"shows\":", m->vout, si);
+        }
         sb_str(b, m->cur ? m->cur->name : "");
         sb_printf(b, ",\"shared\":");
         sb_str(b, m->shared ? m->shared->name : "");
@@ -1836,11 +1868,11 @@ static void run_panel_command(char *cmd, Conn *r)
         /* tie <screen> <monitor>: put that machine's video on that monitor */
         Screen *s = screen_by_name(argv[1]);
         Monitor *m = monitor_by_name(argv[2]);
-        if (!s || !s->extron_input) ctl_printf(r, "error %s is not wired to the switcher\n", argv[1]);
+        char err[128];
+        if (!s || !s->vin) ctl_printf(r, "error %s is not wired to the switcher\n", argv[1]);
         else if (!m || m->fixed) ctl_printf(r, "error %s is not a switched monitor\n", argv[2]);
-        else if (!extron_online()) ctl_printf(r, "error the switcher is not connected\n");
+        else if (video_route(s, m, err, sizeof err) < 0) ctl_printf(r, "error %s\n", err);
         else {
-            extron_tie(s->extron_input, m->extron_output);
             if (m->shared_on) {                    /* it must be on its switcher input now */
                 m->shared_on = 0;
                 ddc_set_input(m, m->ddc_switcher);
@@ -1850,9 +1882,9 @@ static void run_panel_command(char *cmd, Conn *r)
         }
     } else if (!strcasecmp(argv[0], "untie") && argc == 2) {
         Monitor *m = monitor_by_name(argv[1]);
-        if (!m || m->fixed) ctl_printf(r, "error %s is not a switched monitor\n", argv[1]);
-        else if (!extron_online()) ctl_printf(r, "error the switcher is not connected\n");
-        else extron_tie(0, m->extron_output);
+        char err[128];
+        if (!m) ctl_printf(r, "error %s is not a switched monitor\n", argv[1]);
+        else if (video_unroute(m, err, sizeof err) < 0) ctl_printf(r, "error %s\n", err);
     } else if (!strcasecmp(argv[0], "move") && argc == 4) {
         /* move <monitor> <col> <row>; whatever stood there takes its old place */
         Monitor *m = monitor_by_name(argv[1]), *o;
@@ -2443,14 +2475,12 @@ int main(int argc, char **argv)
                         "Run as root or grant access to /dev/uinput.\n");
         return 1;
     }
-    for (i = 0; i < cfg.nmonitors; i++)
-        if (!cfg.monitors[i].fixed) extron_watch(cfg.monitors[i].extron_output);
 
     lfd = listen_on(cfg.listen, cfg.port);
     if (lfd < 0) return 1;
     if (cfg.ctl_port > 0 && (cfd = listen_on("127.0.0.1", cfg.ctl_port)) < 0) return 1;
     if (cfg.panel_port > 0 && (pfd_listen = listen_on(cfg.listen, cfg.panel_port)) < 0) return 1;
-    extron_init();
+    video_init();
     ddc_init();
     input_init();
     logmsg("hub ready: agents on %s:%d, control on 127.0.0.1:%d", cfg.listen, cfg.port, cfg.ctl_port);
@@ -2458,18 +2488,19 @@ int main(int argc, char **argv)
     relayout();
 
     while (!quit) {
-        struct pollfd pfd[MAX_CONNS + MAX_DEVICES + MAX_PADS + 5];
+        struct pollfd pfd[MAX_CONNS + MAX_DEVICES + MAX_PADS + MAX_VDEVS + 4];
         Conn *pc[MAX_CONNS + MAX_DEVICES + MAX_PADS + 5];
         int padfds[MAX_PADS], npad, gi;
-        int infds[MAX_DEVICES], nin, n = 0, timeout = 100, base_in, xfd, xi = -1, ci = -1, pi = -1, di = -1;
+        int infds[MAX_DEVICES], vidfds[MAX_VDEVS], viddev[MAX_VDEVS], nvid, nin, n = 0, timeout = 100, base_in, xi, ci = -1, pi = -1, di = -1;
 
 
         pfd[n].fd = lfd; pfd[n].events = POLLIN; pc[n++] = NULL;
         if (cfd >= 0) { ci = n; pfd[n].fd = cfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
         if (pfd_listen >= 0) { pi = n; pfd[n].fd = pfd_listen; pfd[n].events = POLLIN; pc[n++] = NULL; }
         if (ddc_fd() >= 0) { di = n; pfd[n].fd = ddc_fd(); pfd[n].events = POLLIN; pc[n++] = NULL; }
-        xfd = extron_fd();
-        if (xfd >= 0) { xi = n; pfd[n].fd = xfd; pfd[n].events = POLLIN; pc[n++] = NULL; }
+        xi = n;
+        nvid = video_fds(vidfds, viddev, MAX_VDEVS);
+        for (i = 0; i < nvid; i++) { pfd[n].fd = vidfds[i]; pfd[n].events = POLLIN; pc[n++] = NULL; }
         gi = n;
         npad = pad_fds(padfds, MAX_PADS);
         for (i = 0; i < npad; i++) { pfd[n].fd = padfds[i]; pfd[n].events = POLLIN; pc[n++] = NULL; }
@@ -2498,7 +2529,8 @@ int main(int argc, char **argv)
         if (di >= 0 && (pfd[di].revents & POLLIN)) ddc_readable(ddc_changed);
         for (i = 0; i < npad; i++)
             if (pfd[gi + i].revents) pad_readable(padfds[i]);
-        if (xi >= 0 && pfd[xi].revents) extron_readable();
+        for (i = 0; i < nvid; i++)
+            if (pfd[xi + i].revents) video_readable(viddev[i]);
         for (i = 0; i < nin; i++)
             if (pfd[base_in + i].revents) input_readable(infds[i]);
         for (i = base_in + nin; i < n; i++) {
@@ -2518,7 +2550,7 @@ int main(int argc, char **argv)
         input_tick();
         pad_tick();
         lights_tick();
-        extron_tick();
+        video_tick();
         housekeeping();
         reap();
         panel_push(0);

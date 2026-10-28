@@ -11,7 +11,9 @@
 #define MAX_HOTKEYS   48
 #define MAX_REMAP     16
 #define MAX_DEVICES   16
-#define EXTRON_MAX_IO 64
+#define VDEV_MAX_IO   64          /* inputs or outputs on one video device */
+#define MAX_VDEVS     8           /* switchers, matrices ... */
+#define MAX_WIRES     32          /* cables between them */
 #define MAX_AREAS     8
 #define MAX_ACC       12          /* accessories: the keyboard + mouse, Claude's, game pads */
 #define MAX_SEATS     8           /* people (or scripts) at the desk, each with a focus */
@@ -65,7 +67,7 @@ typedef struct Screen {
     char art[16];                /* which picture the panel draws */
     int w, h;                    /* pixels; from HELLO, or config for local */
     int local;                   /* injected by the hub itself through uinput */
-    int extron_input;            /* 0 = not routed through the switcher */
+    int vdev, vin;               /* its video goes into this device's input; vin 0 = none */
     double speed;                /* per-screen pointer speed multiplier */
     int min_move_ms;             /* motion rate limit */
     Conn *in;                    /* connection with RKM_CAP_INPUT */
@@ -103,7 +105,7 @@ typedef struct Monitor {
     char name[32];
     int col, row;                /* position in the physical grid */
     Screen *fixed;               /* always shows this screen, or ... */
-    int extron_output;           /* ... whatever is tied to this output */
+    int vdev, vout;              /* ... whatever reaches this device's output */
     Screen *cur;                 /* resolved: what it shows right now */
     Screen *shared;              /* the monitor's other input shows this machine */
     int shared_on;               /* ... and is the one selected on the monitor */
@@ -170,6 +172,31 @@ typedef struct Seat {
     struct Screen *clip_src;
 } Seat;
 
+/* A video device (docs/SWITCHING.md): a switcher with numbered inputs and
+ * outputs that the hub can drive.  The driver's state lives here too, so
+ * there can be several of each kind. */
+enum { VDRV_EXTRON_SIS = 1 };
+
+typedef struct VDevice {
+    char name[32];
+    int driver;                  /* VDRV_* */
+    char path[128];              /* serial device; empty = not connected */
+    int baud, poll;              /* poll: seconds between re-reads, 0 = never */
+    int inputs, outputs;
+    char tie_cmd, read_cmd;      /* Extron SIS: '!' video+audio ...; '%' read */
+    /* driver state */
+    int fd;
+    int tie[VDEV_MAX_IO + 1];    /* tie[output] = input, 0 unknown */
+    unsigned char watched[VDEV_MAX_IO + 1], need[VDEV_MAX_IO + 1];
+    int pending_out;
+    long long pending_since, last_poll, last_open_try;
+    char lbuf[128];
+    int llen;
+} VDevice;
+
+/* A cable from one device's output to another's input */
+typedef struct Wire { int from_dev, from_out, to_dev, to_in; } Wire;
+
 typedef struct Hotkey {
     unsigned char mods;          /* RKM_MOD_CTRL etc, side-insensitive */
     unsigned char usage;
@@ -190,14 +217,14 @@ typedef struct Config {
     int follow_tie;              /* active screen follows the monitor on a tie */
     int lights;                  /* colour the keyboard after the active machine */
     int lights_brightness;       /* percent */
-    char extron_dev[128];
-    int extron_baud, extron_poll;
-    int extron_inputs, extron_outputs;   /* size of the matrix */
-    char extron_tie_cmd, extron_read_cmd;
     Screen screens[MAX_SCREENS];
     int nscreens;
     Monitor monitors[MAX_MONITORS];
     int nmonitors;
+    VDevice vdevs[MAX_VDEVS];    /* video devices: switchers ... */
+    int nvdevs;
+    Wire wires[MAX_WIRES];
+    int nwires;
     Hotkey hotkeys[MAX_HOTKEYS];
     int nhotkeys;
     Accessory acc[MAX_ACC];      /* [0] is the keyboard + mouse */
@@ -217,7 +244,7 @@ void hub_button(int btn, int down);
 void hub_wheel(int dy, int dx);
 void hub_key(int evcode, int usage, int state);
 void hub_pad(Accessory *a);             /* a pad's state changed (a->st) */
-void hub_extron_changed(void);
+void hub_video_changed(void);       /* a device's ties changed */
 int hub_routing(void);                  /* some screen is taking input */
 Screen *screen_by_name(const char *name);
 int screen_is_desktop(const Screen *s); /* the hub's own desktop (uinput, or an agent on this machine) */
@@ -259,15 +286,32 @@ void uinput_key(int evcode, int value);
 void uinput_wheel(int dy, int dx);
 void uinput_release_all(void);
 
-/* extron.c */
-int extron_init(void);
-int extron_fd(void);
-void extron_readable(void);
-void extron_tick(void);
-int extron_input_for(int output);       /* 0 = unknown */
-void extron_tie(int input, int output);  /* input 0 = disconnect */
-int extron_online(void);
-void extron_watch(int output);
+/* extron.c: the Extron SIS driver, one VDevice each */
+void extron_init(VDevice *d);
+void extron_readable(VDevice *d);
+void extron_tick(VDevice *d);
+void extron_tie(VDevice *d, int input, int output);   /* input 0 = disconnect */
+void extron_watch(VDevice *d, int output);
+
+/* video.c: devices, wires and routes (docs/SWITCHING.md) */
+VDevice *vdev_by_name(const char *name);
+int video_init(void);
+int video_fds(int *fds, int *devs, int max);   /* to poll, and whose they are */
+void video_readable(int dev);
+void video_tick(void);
+int video_online(int dev);
+int video_input_for(int dev, int out);         /* 0 = nothing or unknown */
+void video_tie(int dev, int in, int out);
+int video_any(void);                           /* any device configured */
+int video_all_online(void);
+/* What reaches dev's output: follows ties and wires back to an input no
+ * wire feeds.  Returns 1 and that input, or 0. */
+int video_source(int dev, int out, int *sdev, int *sin);
+/* Put s's video on m: finds a path through the devices and ties it.
+ * 0 = done; -1 with why in err. */
+int video_route(const Screen *s, const Monitor *m, char *err, size_t n);
+int video_unroute(const Monitor *m, char *err, size_t n);
+const char *video_port_name(int dev, int port, int out, char *buf, size_t n);   /* "mvx.in3" */
 
 /* ddc.c */
 int ddc_init(void);
