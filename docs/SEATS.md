@@ -1,7 +1,8 @@
 # Seats: several people (or scripts) driving the desk at once
 
-Status: design, 2026-10-28. Replaces the one-off "Claude's keyboard"
-(`key-to`, an accessory that typed on one machine out of focus).
+Status: built 2026-10-28 (hub, panel, tests/seats_test.py). Replaces the
+one-off "Claude's keyboard" (`key-to`, an accessory that typed on one
+machine out of focus).
 
 ## The idea
 
@@ -26,9 +27,10 @@ orange) are the first two; there can be any number.
   mouse: `seat claude rel 400 0` crosses screen edges, `seat claude goto`
   jumps.
 - A seat with no devices still has a ring when it is somewhere.
-- A seat can **go offline**: its ring goes, its keys are let go of, and its
-  input is dropped until it is brought back (`goto`, or for a seat with
-  real devices, simply using them again: it comes back where it was).
+- A seat can **go offline**: its ring goes and its keys are let go of. Any
+  input to it brings it back where it was: its devices (a key press, the
+  mouse, a pad button) or a command (`seat claude key ...`). That keeps the
+  owner from locking themselves out with the panel out of reach.
 - "Keep while out of focus" stays, as an optional per-wire pin (a hardware
   keyboard pinned to one machine, a pad left on the Xbox). Claude no longer
   needs it: it has its own focus.
@@ -77,11 +79,17 @@ key-to <screen> <key> <0|1>  shortcut: seat claude goes there (if not already) a
 
 `status` keeps its first line (`active: ...` = the first seat) and adds a
 `seat <name> on <screen> at x,y ...` line per seat. Panel port: the same
-`seat <name> ...` prefix for goto, lock and offline; `own`; `seat add/remove/color`.
+`seat <name> ...` prefix for goto, lock, offline and pointer; `own`;
+`seat add/remove/color`.
 
 Layout JSON: a `seats` array (`name`, `label`, `color`, `active`, `monitor`,
 `locked`, `offline`) and each accessory's `seat`. The old `active`,
 `locked` and per-screen `focus` stay, meaning the first seat, for old panels.
+
+Limits: a machine's clipboard is reported by its agent on LEAVE, which is
+sent only when the last seat leaves; a seat leaving a machine another seat
+stays on does not hand over what it copied there. The phone page and lil'
+C's `pointer` are the first seat's.
 
 ## Panel (Tab5 and the desktop build)
 
@@ -98,7 +106,8 @@ Layout JSON: a `seats` array (`name`, `label`, `color`, `active`, `monitor`,
 ## Migration
 
 - No `[seat]` in the config: the first seat is called `main` (the owner's
-  config says `[seat james]`). `claude` (orange) is always made if missing.
+  config says `[seat james]`, `color = 22c55e`: no `#`, which starts a
+  comment in the config). `claude` (orange) is always made if missing.
 - The `claude` accessory (kind `keys`, 2026-10-28) becomes a scripted
   keyboard + mouse owned by seat `claude`; its "kept everywhere" is dropped
   (it would type into every machine at once now), its wires stay. A state

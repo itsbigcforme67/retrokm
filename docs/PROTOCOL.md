@@ -145,19 +145,14 @@ layout JSON gives each accessory `keepAll` and each of its links `keep`. The con
 `pad <hex> [lt rt lx ly rx ry]` plays a scripts-only pad: player 1 on the
 machine in focus.
 
-**Claude's keyboard** (accessory `claude`, kind `keys`) is a keyboard for
-scripts, so a script (Claude) and the user can type on different machines
-at once. The control port's `key-to <screen> <key> <0|1|2>` presses a key
-on that machine only, by its hardware keyboard (the PS/2 NanoC6) if it has
-one, else its agent. It never moves the focus, the pointer or the user's
-keyboard, and its modifiers are its own (per machine): Claude's Shift does
-not shift the user's keys, nor theirs Claude's. It obeys its accessory
-lines like the others: the machine must be linked, and kept (or in focus).
-Otherwise, or if the machine is offline or has no keyboard, the reply is
-`error: <screen>: <why>` and the key goes nowhere, never to another
-machine. By default it is linked to every machine but the hub's own
-desktop and works out of focus everywhere. `key` (no screen) is unchanged:
-it acts as the user's keyboard and follows focus.
+**Seats** (`docs/SEATS.md`): every accessory belongs to a seat (someone at
+the desk, or a script) and follows that seat's focus; its wires are where
+the seat may go. `own <accessory> <seat>` gives it to another seat. The
+layout JSON lists `seats` (name, label, color, active, monitor, locked,
+offline, devices) and each accessory's `seat`; `active`, `locked` and each
+screen's `focus` are the first seat's. The `claude` accessory (kind `kbm`,
+played by scripts) is Claude's seat's; a state file from before seats
+names it kind `keys`, which loads as `kbm`.
 
 ## Consoles behind boxes (panel and control commands)
 

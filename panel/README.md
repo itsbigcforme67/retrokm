@@ -22,6 +22,11 @@ A 1280x720 touch screen with two pages (tabs in the header):
   drop it on another machine. Many to many. Pads show their player (P1..P4)
   where their line ends.
 
+**Seats** (`../docs/SEATS.md`): the chip in the header's corner ("James:
+Laptop v") picks whose focus and wires the panel shows; each seat has a
+ring in its colour on the machine it drives, and other seats' wires are
+dim on the accessories page. The picker can also take a seat offline.
+
 **Hold** a machine or an accessory for its options: colour (a machine's
 cables, an accessory's lines), for a machine which of the things linked to
 it it keeps while out of focus and the player of each linked pad, for an
@@ -60,6 +65,8 @@ The panel port takes `layout`, `tie <screen> <monitor>`, `untie <monitor>`,
 `plug <console>`, `unplug <box>`, `link <accessory> <screen> [player]`,
 `unlink <accessory> <screen>`, `keep <accessory> <screen> on|off`,
 `keepall <accessory> on|off`, `color <screen|accessory> <rrggbb|default>`,
+`own <accessory> <seat>`, `seat <name> goto|lock|offline|pointer ...`,
+`seat add|remove|color ...`,
 `activity`, `buddy <screen> show|hide [label]` and `ping`, and pushes
 `layout {json}` whenever anything changes. It cannot type keys or move the
 pointer. Like the rest of RetroKM it has no password, so keep it on your

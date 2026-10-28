@@ -27,6 +27,16 @@ on_tie = follow
 #lights_brightness = 80
 #state = retrokm.conf.state   # where monitor moves from the panel are saved
 
+# ---- seats ------------------------------------------------------------------
+# Someone at the desk, with a focus of their own (docs/SEATS.md).  The first
+# seat has the keyboard + mouse above and gets commands that name no seat;
+# without a [seat] it is called "main".  The hub always adds "claude" (orange)
+# for scripts: "seat claude goto octane", "seat claude key a 1".  More seats
+# can be added from the control port ("seat add <name> <rrggbb>").
+[seat me]
+color = 22c55e         # its ring on the panel (no "#": that starts a comment)
+#label = Me
+
 [extron]
 device = /dev/ttyUSB0
 baud = 9600

@@ -37,20 +37,28 @@ file is the state of *this* desk and what was learned getting there.
   pointer would not cross to the tall monitor; restarting the laptop agent
   fixed that one).
 - **Control socket:** `printf 'status\n' | nc -q1 127.0.0.1 24851`. It
-  also takes goto, show, tie, lock, key, key-to, rel, btn, ddc, lights and reset.
-- **Claude's keyboard** (2026-10-28, built and tested, **not installed**:
-  the owner runs `./install-laptop.sh`, it needs sudo; the panel shows it
-  with a gamepad picture until its firmware is rebuilt). A separate
-  accessory, `claude`, on the accessories page: scripts type with
-  `key-to <screen> <key> <0|1>` straight onto that machine, while the user's
-  keyboard and pointer stay where they are. Like the other accessories it is
-  linked to machines and kept there out of focus (default: every machine but
-  the laptop, kept everywhere); not linked/kept, offline or no keyboard ->
-  `error`, never another machine. Why: 2026-10-28 an Octane reboot command
-  from `type-octane.py` (which used `goto octane` + `key`) was typed into the
-  owner's Claude window on the laptop when they moved the pointer.
-  `sgi bringup/type-octane.py` now uses it (same CLI; `--back` does nothing).
-  Test: `make test-keyto` (no X needed).
+  also takes goto, show, tie, lock, key, key-to, rel, btn, ddc, lights,
+  reset, and `seat <name> <command>` for any of them.
+- **Seats** (2026-10-28, built and tested, **not installed**: the owner runs
+  `./install-laptop.sh`, it needs sudo; the Tab5 shows seats once lil' C's
+  firmware is rebuilt with the new `panel/lib/rkm_panel`). Design and
+  commands: `docs/SEATS.md`. Each seat has its own focus, pointer, held
+  keys and clipboard; the owner's is `james` (green, the first, set in
+  retrokm.conf), Claude's is `claude` (orange). Scripts drive Claude's seat
+  (`seat claude goto octane`, `seat claude key a 1`, `seat claude rel`,
+  `warp`, `btn`) while the owner keeps their keyboard and pointer;
+  `key-to` still works (Claude's seat goes there and types). Wires on the
+  accessories page are where a seat may go. Panel: seat picker in the
+  header ("James: Laptop v"), a ring per seat, other seats' wires dim, "go
+  offline". Earlier the same day "Claude's keyboard" (an accessory typing
+  out of focus, `key-to`) was installed and verified; seats replace it,
+  and an old state file drops its "kept everywhere" once. Why: 2026-10-28
+  an Octane reboot command from `type-octane.py` (then `goto octane` +
+  `key`) was typed into the owner's Claude window on the laptop.
+  `sgi bringup/type-octane.py` and `click-octane.py` use Claude's seat
+  (clicking needs a pointer on the Octane: IRIX agent or a PS/2 mouse
+  board; until then it says so). Test: `make test-seats` (no X needed).
+  Not run here: `make test` (needs Xvfb).
 
 - **Phone page** (2026-10-22): user service `retrokm-phone`, port 24855,
   `phone/rkm_phone.py` + `phone/index.html`. It is a panel client (port
