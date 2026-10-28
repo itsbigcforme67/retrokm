@@ -1426,18 +1426,17 @@ static void run_seat_command(Seat *z, int argc, char **argv, Conn *r)
         /* tie [device] <in> <out>: one tie, by hand (no device: the first) */
         VDevice *d = argc == 4 ? vdev_by_name(argv[1]) : cfg.nvdevs ? &cfg.vdevs[0] : NULL;
         if (!d) ctl_printf(r, "error: no such device\n");
-        else {
-            video_tie((int)(d - cfg.vdevs), atoi(argv[argc - 2]), atoi(argv[argc - 1]));
-            ctl_printf(r, "ok\n");
-        }
+        else if (video_tie((int)(d - cfg.vdevs), atoi(argv[argc - 2]), atoi(argv[argc - 1])) < 0)
+            ctl_printf(r, "error: %s cannot do that tie\n", d->name);
+        else ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "devices")) {
         /* each device, then each wire */
         int i;
         for (i = 0; i < cfg.nvdevs; i++) {
             const VDevice *d = &cfg.vdevs[i];
             int o;
-            ctl_printf(r, "device %-10s %s %dx%d %s", d->name, "extron-sis", d->inputs, d->outputs,
-                       d->fd >= 0 ? "online" : d->path[0] ? "offline" : "not-connected");
+            ctl_printf(r, "device %-10s %s %dx%d %s", d->name, video_driver_name(d->driver), d->inputs, d->outputs,
+                       video_online(i) ? "online" : d->path[0] ? "offline" : "not-connected");
             for (o = 1; o <= d->outputs; o++)
                 if (d->tie[o]) ctl_printf(r, " %d*%d", d->tie[o], o);
             ctl_printf(r, "\n");

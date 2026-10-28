@@ -175,17 +175,22 @@ typedef struct Seat {
 /* A video device (docs/SWITCHING.md): a switcher with numbered inputs and
  * outputs that the hub can drive.  The driver's state lives here too, so
  * there can be several of each kind. */
-enum { VDRV_EXTRON_SIS = 1 };
+enum { VDRV_EXTRON_SIS = 1, VDRV_TEXT };
 
 typedef struct VDevice {
     char name[32];
     int driver;                  /* VDRV_* */
-    char path[128];              /* serial device; empty = not connected */
+    char path[128];              /* serial device, or tcp:HOST:PORT; empty = not connected */
+    char model[48];              /* the devices/<model>.conf it was read from */
     int baud, poll;              /* poll: seconds between re-reads, 0 = never */
     int inputs, outputs;
     char tie_cmd, read_cmd;      /* Extron SIS: '!' video+audio ...; '%' read */
+    /* the text driver: commands with {in} and {out}, escapes as in C */
+    char tie_fmt[96], untie_fmt[96], read_fmt[96];
+    char reply_fmt[96];          /* a line that says a tie: "input {in} -> output {out}" */
     /* driver state */
     int fd;
+    int connecting;              /* TCP: connect() not finished yet */
     int tie[VDEV_MAX_IO + 1];    /* tie[output] = input, 0 unknown */
     unsigned char watched[VDEV_MAX_IO + 1], need[VDEV_MAX_IO + 1];
     int pending_out;
@@ -291,9 +296,21 @@ void extron_init(VDevice *d);
 void extron_readable(VDevice *d);
 void extron_tick(VDevice *d);
 void extron_tie(VDevice *d, int input, int output);   /* input 0 = disconnect */
-void extron_watch(VDevice *d, int output);
+
+/* cmdtext.c: the "text" driver, any box that takes text commands over
+ * serial or TCP (devices/) */
+void cmdtext_init(VDevice *d);
+void cmdtext_readable(VDevice *d);
+void cmdtext_tick(VDevice *d);
+int cmdtext_tie(VDevice *d, int input, int output);   /* -1: it cannot (untie, or no tie command) */
+int cmdtext_match(const char *fmt, const char *line, int *in, int *out);
 
 /* video.c: devices, wires and routes (docs/SWITCHING.md) */
+int vdev_open(VDevice *d);                     /* serial path or tcp:HOST:PORT; -1 failed */
+void vdev_close(VDevice *d);
+void vdev_write(VDevice *d, const char *s);    /* closes it on a write error */
+void vdev_read(VDevice *d, void (*line)(VDevice *d, char *s));   /* calls line() per line */
+void vdev_keep_open(VDevice *d, void (*opened)(VDevice *d));     /* reopen; finish a connect */
 VDevice *vdev_by_name(const char *name);
 int video_init(void);
 int video_fds(int *fds, int *devs, int max);   /* to poll, and whose they are */
@@ -301,7 +318,7 @@ void video_readable(int dev);
 void video_tick(void);
 int video_online(int dev);
 int video_input_for(int dev, int out);         /* 0 = nothing or unknown */
-void video_tie(int dev, int in, int out);
+int video_tie(int dev, int in, int out);        /* -1: the device cannot */
 int video_any(void);                           /* any device configured */
 int video_all_online(void);
 /* What reaches dev's output: follows ties and wires back to an input no
@@ -311,6 +328,7 @@ int video_source(int dev, int out, int *sdev, int *sin);
  * 0 = done; -1 with why in err. */
 int video_route(const Screen *s, const Monitor *m, char *err, size_t n);
 int video_unroute(const Monitor *m, char *err, size_t n);
+const char *video_driver_name(int driver);
 const char *video_port_name(int dev, int port, int out, char *buf, size_t n);   /* "mvx.in3" */
 
 /* ddc.c */

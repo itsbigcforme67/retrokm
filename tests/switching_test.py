@@ -196,6 +196,95 @@ output = 2
     check("old form: ... and the monitor shows it", shows(ctl("status", 0.3), "left"), "octane")
     check("old form: plain 'tie in out' is the switcher", (ctl("tie 1 2").strip(), shows(ctl("status", 0.3), "left")),
           ("ok", "pc"))
+
+    # ---- the text driver: a network matrix from devices/template-text.conf,
+    # and a box that never answers, its commands written in place -----------
+    for p in procs[-1:]: p.terminate()
+    time.sleep(0.3)
+    MPORT, QPORT = 24975, 24976
+    mfifo = TMP + "/mtx-text.fifo"
+    procs.append(subprocess.Popen([sys.executable, ROOT + "/tests/fake_text_matrix.py", str(MPORT), mfifo],
+                                  stdout=open(TMP + "/mtx-text.log", "w"), stderr=subprocess.STDOUT))
+    procs.append(subprocess.Popen([sys.executable, ROOT + "/tests/fake_text_matrix.py", str(QPORT), "--quiet"],
+                                  stdout=open(TMP + "/quiet.log", "w"), stderr=subprocess.STDOUT))
+    time.sleep(0.4)
+    open(mfifo, "w").write("3 2\n")              # already showing something before the hub starts
+    time.sleep(0.2)
+    textconf = TMP + "/text.conf"
+    open(textconf, "w").write("""[hub]
+port = %d
+control_port = %d
+device = none
+keyboard_lights = no
+[device mvx]
+model = extron-mvx88
+port = %s
+poll = 0
+[device mtx]
+model = template-text
+port = tcp:127.0.0.1:%d
+poll = 0
+[device quiet]
+driver = text
+port = tcp:127.0.0.1:%d
+inputs = 8
+outputs = 8
+tie = s in {in} av out {out}!\\r\\n
+[wire]
+mvx.out4 = mtx.in4
+[screen ps2]
+agent = no
+video = mvx.in2
+[screen hdmi3]
+agent = no
+video = mtx.in3
+[screen dc]
+agent = no
+video = quiet.in1
+[monitor cap]
+pos = 0,0
+video = mtx.out1
+[monitor tv]
+pos = 1,0
+video = mtx.out2
+[monitor qtv]
+pos = 2,0
+video = quiet.out1
+""" % (PORT, CTL, links["mvx"][0], MPORT, QPORT))
+    start_hub(textconf)
+    time.sleep(0.6)
+    ctl = Ctl(CTL)
+    dv = ctl("devices", 0.3)
+    check("text driver: connected over TCP", [l.split()[2:5] for l in dv.splitlines() if l.startswith("device mtx")],
+          [["text", "8x8", "online"]])
+    check("text driver: read back at start (behind a prompt)", shows(ctl("status", 0.3), "tv"), "hdmi3")
+    check("text driver: routed through an Extron into it", ctl("show ps2 cap").strip(), "ok")
+    st = ctl("status", 0.3)
+    check("... the capture shows it", shows(st, "cap"), "ps2")
+    check("... the matrix got its command", "'s in 4 av out 1!'" in open(TMP + "/mtx-text.log").read(), True)
+    open(mfifo, "w").write("4 2\n")
+    time.sleep(0.5)
+    check("text driver: a front-panel press is heard", shows(ctl("status", 0.3), "tv"), "ps2")
+    ctl("tie mtx 0 1")
+    check("text driver: untie", shows(ctl("status", 0.3), "cap"), "-")
+    check("a box that never answers: taken at its word", (ctl("show dc qtv").strip(), shows(ctl("status", 0.3), "qtv")),
+          ("ok", "dc"))
+    check("... and with no untie command, cannot untie", ctl("tie quiet 0 1").startswith("error"), True)
+
+    # config mistakes are reported, not guessed at
+    for p in procs[-1:]: p.terminate()
+    def load_error(text):
+        bad = TMP + "/bad.conf"
+        open(bad, "w").write("[hub]\nport = %d\ncontrol_port = %d\ndevice = none\n" % (PORT, CTL) + text +
+                             "[screen a]\nagent = no\n")
+        r = subprocess.run([ROOT + "/hub/retrokm-hub", "-c", bad], capture_output=True, timeout=5)
+        return r.returncode != 0, r.stderr.decode()
+    bad, err = load_error("[device x]\nmodel = no-such-box\n")
+    check("an unknown model is an error", (bad, "no device file no-such-box.conf" in err), (True, True))
+    bad, err = load_error("[device x]\ndriver = text\n")
+    check("the text driver without a tie command is an error", (bad, "needs 'tie ='" in err), (True, True))
+    bad, err = load_error("[device x]\n[wire]\nx.in1 = x.out2\n")
+    check("a wire the wrong way round is an error", (bad, "wire x.in1 = x.out2" in err), (True, True))
 except Exception:
     import traceback
     traceback.print_exc()

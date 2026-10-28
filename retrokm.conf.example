@@ -61,6 +61,13 @@ poll = 5               # seconds between re-reads, in case a change was missed
 #[wire]
 #small.out1 = switcher.in6
 
+# A box that takes text commands (an HDMI matrix on the network): its
+# commands come from a file in devices/ (devices/README.md says how to
+# write one), or can be written here: tie = ..., read = ..., reply = ...
+#[device matrix]
+#model = template-text
+#port = tcp:192.168.1.50:23
+
 # ---- machines ---------------------------------------------------------------
 # "video" is the switcher input the machine's video is wired to.
 

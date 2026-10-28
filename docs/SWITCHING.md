@@ -1,13 +1,19 @@
 # Video switching: devices, wires and routes (design, 2026-10-28)
 
-Status: step 1 built (2026-10-28): devices, wires and routes in the hub,
-Extron SIS as the first driver (`hub/video.c`, `hub/extron.c`,
-`tests/switching_test.py`). Signal kinds, the `text` / `ir` / `manual`
-drivers, converters and the panel's device view are still to come.
+Status (2026-10-28): steps 1 and 2 built. Devices, wires and routes in the
+hub (`hub/video.c`); drivers `extron-sis` (`hub/extron.c`) and `text`
+(`hub/cmdtext.c`), each on a serial port or `tcp:HOST:PORT`; device files
+in `devices/` (`devices/README.md` has the keys), picked with `model =`
+and looked for next to the config, then in the source tree's `devices/`,
+then `/usr/local/share/retrokm/devices`. Tests: `tests/switching_test.py`
+(simulated Extrons and network matrices). Still to come: signal kinds,
+converters with modes (the 5X), the `ir` / `manual` drivers, the panel's
+device view.
 
 As built, the config is a subset of the sketch below: `[device NAME]`
-(`driver = extron-sis`, `port`, `baud`, `poll`, `inputs`, `outputs`,
-`tie_command`, `read_command`), `[wire]` lines `a.outN = b.inN`, and
+(`driver`, `model`, `port`, `baud`, `poll`, `inputs`, `outputs`, and
+for the drivers `tie_command` / `read_command` or `tie` / `untie` /
+`read` / `reply`), `[wire]` lines `a.outN = b.inN`, and
 `video = dev.inN` / `video = dev.outN` on screens and monitors with no
 signal kind after it yet. A shared monitor is still `shared =`, and boxes
 the hub cannot drive (the RetroTINK) are still `via =`. Control commands:
@@ -153,8 +159,8 @@ ir.select.component = nec:0x..          # same, for the IR route (codes TBD)
 ```
 
 ```
-# devices/generic-hdmi-8x8.conf
-name = Generic 8x8 HDMI matrix (RS-232/Telnet)
+# devices/template-text.conf (as built: the commands are examples)
+name = Example text-command matrix
 kind = switch
 inputs = 8
 outputs = 8

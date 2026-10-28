@@ -4,11 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 #include "hub.h"
 
 Config cfg;
 
 static void copy(char *dst, size_t n, const char *src);
+static char *trim(char *s);
 
 /* Kinds of accessory: id (config, state file, panel) and what the panel calls it */
 const AccKind acc_kinds[ACC_KINDS] = {
@@ -107,6 +109,82 @@ static VDevice *vdev_new(const char *name)
     d->inputs = d->outputs = 8;
     d->fd = -1;
     return d;
+}
+
+/* One "key = value" for a [device], from the config or from its device
+ * file.  Device files also describe the box for people (name, kind, price
+ * ...): those keys mean nothing to the hub and are skipped there. */
+static int device_key(VDevice *d, const char *k, char *v, const char *conf_path, int from_file);
+
+/* devices/<model>.conf: next to the config, then next to the hub's source
+ * tree (hub/../devices), then /usr/local/share/retrokm/devices */
+static int load_model(VDevice *d, const char *model, const char *conf_path)
+{
+    char dirs[3][540], path[600], line[512], exe[512];  /* dirs are under 540, so path fits */
+    const char *slash = strrchr(conf_path, '/');
+    ssize_t n;
+    FILE *f = NULL;
+    int i, lineno = 0;
+
+    if (!*model || strchr(model, '/') || model[0] == '.') return -1;
+    snprintf(dirs[0], sizeof dirs[0], "%.*sdevices", slash ? (int)(slash - conf_path + 1) : 0, conf_path);
+    n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    exe[n > 0 ? n : 0] = 0;
+    if (n > 0 && strrchr(exe, '/')) *strrchr(exe, '/') = 0;
+    snprintf(dirs[1], sizeof dirs[1], "%.511s/../devices", exe);
+    snprintf(dirs[2], sizeof dirs[2], "/usr/local/share/retrokm/devices");
+    for (i = 0; i < 3 && !f; i++) {
+        snprintf(path, sizeof path, "%.539s/%.47s.conf", dirs[i], model);
+        f = fopen(path, "r");
+    }
+    if (!f) {
+        fprintf(stderr, "device %s: no device file %s.conf (looked in %s and %s)\n", d->name, model, dirs[0], dirs[2]);
+        return -1;
+    }
+    copy(d->model, sizeof d->model, model);
+    while (fgets(line, sizeof line, f)) {
+        char *t = trim(line), *eq, *c;
+        lineno++;
+        if (!*t || *t == '#' || *t == ';') continue;
+        for (c = t + 1; *c; c++)
+            if ((*c == '#' || *c == ';') && isspace((unsigned char)c[-1])) { *c = 0; break; }
+        if (!(eq = strchr(t, '='))) continue;
+        *eq = 0;
+        if (device_key(d, trim(t), trim(eq + 1), conf_path, 1) < 0) {
+            fprintf(stderr, "%s:%d: cannot parse this line\n", path, lineno);
+            fclose(f);
+            return -1;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+static int device_key(VDevice *d, const char *k, char *v, const char *conf_path, int from_file)
+{
+    if (!strcasecmp(k, "driver")) {
+        if (!strcasecmp(v, "extron-sis")) d->driver = VDRV_EXTRON_SIS;
+        else if (!strcasecmp(v, "text")) d->driver = VDRV_TEXT;
+        else return -1;
+    }
+    else if (!strcasecmp(k, "model")) {
+        if (from_file || load_model(d, v, conf_path) < 0) return -1;
+    }
+    else if (!strcasecmp(k, "port") || !strcasecmp(k, "device"))
+        copy(d->path, sizeof d->path, strncasecmp(v, "serial:", 7) ? v : v + 7);
+    else if (!strcasecmp(k, "baud")) d->baud = atoi(v);
+    else if (!strcasecmp(k, "poll")) d->poll = atoi(v);
+    else if (!strcasecmp(k, "tie_command") && *v) d->tie_cmd = *v;
+    else if (!strcasecmp(k, "read_command") && *v) d->read_cmd = *v;
+    else if (!strcasecmp(k, "inputs")) d->inputs = atoi(v);
+    else if (!strcasecmp(k, "outputs")) d->outputs = atoi(v);
+    else if (!strcasecmp(k, "tie")) copy(d->tie_fmt, sizeof d->tie_fmt, v);
+    else if (!strcasecmp(k, "untie")) copy(d->untie_fmt, sizeof d->untie_fmt, v);
+    else if (!strcasecmp(k, "read")) copy(d->read_fmt, sizeof d->read_fmt, v);
+    else if (!strcasecmp(k, "reply")) copy(d->reply_fmt, sizeof d->reply_fmt, v);
+    else if (!from_file) return -1;
+    if (d->inputs < 1 || d->inputs > VDEV_MAX_IO || d->outputs < 1 || d->outputs > VDEV_MAX_IO) return -1;
+    return 0;
 }
 
 /* "mvx.in3" / "mvx.out2": which device, which port, and whether it is an
@@ -299,21 +377,7 @@ int config_load(const char *path)
             } else goto bad;
             break;
         case S_DEVICE:
-            if (!strcasecmp(k, "driver")) {
-                if (!strcasecmp(v, "extron-sis")) dev->driver = VDRV_EXTRON_SIS;
-                else goto bad;
-            }
-            else if (!strcasecmp(k, "port") || !strcasecmp(k, "device"))
-                copy(dev->path, sizeof dev->path, strncasecmp(v, "serial:", 7) ? v : v + 7);
-            else if (!strcasecmp(k, "baud")) dev->baud = atoi(v);
-            else if (!strcasecmp(k, "poll")) dev->poll = atoi(v);
-            else if (!strcasecmp(k, "tie_command") && *v) dev->tie_cmd = *v;
-            else if (!strcasecmp(k, "read_command") && *v) dev->read_cmd = *v;
-            else if (!strcasecmp(k, "inputs")) dev->inputs = atoi(v);
-            else if (!strcasecmp(k, "outputs")) dev->outputs = atoi(v);
-            else goto bad;
-            if (dev->inputs < 1 || dev->inputs > VDEV_MAX_IO || dev->outputs < 1 || dev->outputs > VDEV_MAX_IO)
-                goto bad;
+            if (device_key(dev, k, v, path, 0) < 0) goto bad;
             break;
         case S_WIRE:
             /* mvx.out4 = tink.in1: a cable from an output to an input */
@@ -439,6 +503,12 @@ bad:
                 if (mon_old_out[i] > x->outputs && mon_old_out[i] <= VDEV_MAX_IO) x->outputs = mon_old_out[i];
         }
     }
+    for (i = 0; i < cfg.nvdevs; i++)
+        if (cfg.vdevs[i].driver == VDRV_TEXT && !cfg.vdevs[i].tie_fmt[0]) {
+            fprintf(stderr, "%s: device %s: the text driver needs 'tie =' (or a 'model =' that has one)\n",
+                    path, cfg.vdevs[i].name);
+            return -1;
+        }
     for (i = 0; i < nwire; i++) {
         Wire *w = &cfg.wires[cfg.nwires];
         int fo, ti;
