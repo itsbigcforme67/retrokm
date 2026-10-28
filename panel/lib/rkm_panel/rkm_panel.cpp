@@ -233,6 +233,7 @@ static void plugPos(int i, int& x, int& y) {  // the knob of machine i's desk ca
 // ------------------------------------------------------------ touch
 
 enum DragKind { D_NONE, D_PRESS_CARD, D_CABLE, D_PRESS_MON, D_MON, D_PLUG, D_PRESS_LOCK, D_PRESS_BACK,
+                D_PRESS_SEAT,  // the seat picker chip in the header
                 D_PRESS_RESET, // the "reset" chip: the hub starts over
                 D_PRESS_TAB,   // a page tab in the header (dragIdx = which)
                 D_PRESS_ACC,   // accessories page: a press on an accessory (dragIdx = which)
@@ -247,6 +248,7 @@ static int dragIdx = -1;          // machine (cable) or monitor (mon, plug)
 static int dragIdx2 = -1;         // a second index where a drag needs one
 static int pressX, pressY, curX, curY;
 static Rect lockBtn{0, 0, 0, 0};
+static Rect seatBtn{0, 0, 0, 0};
 static Rect resetBtn{0, 0, 0, 0};
 static Rect backBtn{0, 0, 0, 0};
 
@@ -360,6 +362,43 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
   mon.shows = mc.name;  // the hub confirms in a moment
 }
 
+// ------------------------------------------------------------ seats
+//
+// Each seat (someone at the desk, or a script) has its own focus; the panel
+// shows and edits one seat at a time, picked in the header's corner.  Its
+// ring and wires are bright, other seats' rings thinner, their wires dim.
+static std::string viewSeat;  // the seat picked; empty = the first
+static Seat* curSeat() {
+  for (auto& z : lay.seats) if (z.name == viewSeat) return &z;
+  return lay.seats.empty() ? nullptr : &lay.seats[0];
+}
+static bool isCurSeat(const std::string& name) {
+  Seat* z = curSeat();
+  return z && z->name == name;
+}
+// A command as the picked seat (a hub from before seats takes it plain)
+static std::string seatCmd(const std::string& c) {
+  Seat* z = curSeat();
+  return z && !z->name.empty() ? "seat " + z->name + " " + c : c;
+}
+static std::string seatActive() {
+  Seat* z = curSeat();
+  return z ? z->active : lay.active;
+}
+static const std::string& seatLabel(const Seat& z) { return z.label.empty() ? z.name : z.label; }
+// The seats on a machine: the picked one last, so its ring goes outermost
+static std::vector<const Seat*> seatsOn(const std::string& machine) {
+  std::vector<const Seat*> out;
+  const Seat* mine = nullptr;
+  for (auto& z : lay.seats) {
+    if (z.active != machine || machine.empty()) continue;
+    if (isCurSeat(z.name)) mine = &z;
+    else out.push_back(&z);
+  }
+  if (mine) out.push_back(mine);
+  return out;
+}
+
 // ------------------------------------------------------------ options sheet
 
 // Long-press a monitor: a sheet with its shape (16:9, 4:3 ...), whether it
@@ -372,6 +411,7 @@ static void plugInto(int mi, int ni, int fromMon = -1) {
 static int menuIdx = -1;       // the machine (or accessory, menuAcc) the sheet is about
 static bool menuAcc = false;
 static bool menuMon = false;   // ... or the monitor menuIdx
+static bool menuSeats = false; // ... or the seat picker
 static float pickH, pickS, pickV;
 static uint32_t lastColorSend;
 static const Rect MENU{70, 74, 1140, 630};
@@ -379,7 +419,8 @@ static const Rect SV{MENU.x + 30, MENU.y + 158, 300, 186};
 static const Rect HUE{MENU.x + 30, MENU.y + 360, 300, 28};
 static const Rect PREVIEW{MENU.x + 30, MENU.y + 408, 300, 56};
 // Everything tappable on the sheet is listed as it is drawn
-enum HitKind { H_DEFAULT, H_USE, H_DONE, H_KEEP, H_KEEPALL, H_PLAYER, H_ASPECT, H_TURN, H_SIZE };
+enum HitKind { H_DEFAULT, H_USE, H_DONE, H_KEEP, H_KEEPALL, H_PLAYER, H_ASPECT, H_TURN, H_SIZE,
+               H_SEAT_VIEW, H_SEAT_OFF, H_OWN };
 struct Hit { Rect r; HitKind kind; int a, b, c; };
 static std::vector<Hit> hits;
 
@@ -388,8 +429,11 @@ static uint32_t accColor(int i) {
   if (i < 0 || i >= (int)lay.accessories.size()) return 0x6B7280;
   const Accessory& a = lay.accessories[i];
   if (a.color >= 0) return (uint32_t)a.color;
+  if (!lay.seats.empty() && !a.seat.empty() && a.seat != lay.seats[0].name) {
+    Seat* z = lay.seat(a.seat);           // another seat's: in that seat's colour
+    if (z) return z->color;
+  }
   if (a.kind == "kbm") return 0x60A5FA;
-  if (a.kind == "keys") return 0xD97757;   // Claude's keyboard
   static const uint32_t pal[] = {0xF472B6, 0xFACC15, 0xA78BFA, 0x2DD4BF, 0xFB923C};
   return pal[i % 5];
 }
@@ -422,6 +466,7 @@ static void toHsv(uint32_t rgb, float& h, float& s, float& v) {
 static void openMonMenu(int i) {
   menuIdx = i;
   menuAcc = false;
+  menuSeats = false;
   menuMon = true;
   sceneDirty = true;
 }
@@ -433,10 +478,19 @@ static void sendShape(const Monitor& m) {
   computeGrid();
 }
 
+static void openSeatMenu() {
+  menuIdx = 0;
+  menuAcc = false;
+  menuMon = false;
+  menuSeats = true;
+  sceneDirty = true;
+}
+
 static void openMenu(int i, bool acc = false) {
   menuIdx = i;
   menuAcc = acc;
   menuMon = false;
+  menuSeats = false;
   toHsv(sheetColor(), pickH, pickS, pickV);
   sceneDirty = true;
 }
@@ -477,8 +531,26 @@ static void menuHit(const Hit& h) {
     break;
   case H_USE:
     tapCard(menuIdx);
-    if (lay.active == lay.machines[menuIdx].name) menuIdx = -1;
+    if (seatActive() == lay.machines[menuIdx].name) menuIdx = -1;
     break;
+  case H_SEAT_VIEW:  // a = seat: show and edit as that seat
+    viewSeat = lay.seats[h.a].name;
+    menuIdx = -1;
+    break;
+  case H_SEAT_OFF: {  // a = seat: it goes offline (its ring goes)
+    Seat& z = lay.seats[h.a];
+    hub.send(z.name.empty() ? std::string("offline") : "seat " + z.name + " offline");
+    z.offline = true;
+    z.active.clear();
+    say(seatLabel(z) + " is offline");
+    break;
+  }
+  case H_OWN: {  // a = accessory, b = seat: it is that seat's now
+    Accessory& a = lay.accessories[h.a];
+    a.seat = lay.seats[h.b].name;
+    hub.send("own " + a.name + " " + a.seat);
+    break;
+  }
   case H_DONE:
     menuIdx = -1;
     break;
@@ -534,7 +606,10 @@ static void tapCard(int i) {
   if (!m.via.empty() && !m.ready) say(m.label + " has no controller dongle yet");
   else if (!m.agent) say(m.label + " is video only: no keyboard or mouse");
   else if (!m.ready) say(m.label + " is offline (its agent is not running)");
-  else { hub.send("goto " + m.name); lay.active = m.name; }
+  else {
+    hub.send(seatCmd("goto " + m.name));
+    if (Seat* z = curSeat()) { z->active = m.name; z->offline = false; }
+  }
 }
 
 // The desk page's own touches
@@ -603,8 +678,11 @@ static void deskMoved(bool far) {
 static void release() {
   switch (drag) {
   case D_PRESS_LOCK:
-    hub.send("lock");
-    lay.locked = !lay.locked;
+    hub.send(seatCmd("lock"));
+    if (Seat* z = curSeat()) z->locked = !z->locked;
+    break;
+  case D_PRESS_SEAT:
+    if (seatBtn.has(curX, curY)) openSeatMenu();
     break;
   case D_PRESS_RESET:  // let go on it: the hub restarts and everything reconnects
     if (resetBtn.has(curX, curY)) { hub.send("reset"); say("resetting the hub"); }
@@ -641,7 +719,7 @@ static void touchInput(bool down, int x, int y) {
     if (embedded && backBtn.has(x, y)) drag = D_PRESS_BACK;
     else if (!hub.connected() || !lay.valid) drag = D_NONE;
     else if (menuIdx >= 0) {  // the options sheet takes every touch while it is open
-      if (menuMon) {
+      if (menuMon || menuSeats) {
         if (!MENU.has(x, y)) { menuIdx = -1; drag = D_NONE; }
         else for (i = 0; i < (int)hits.size(); i++)
           if (hits[i].r.has(x, y)) { drag = D_MENU_TAP; dragIdx = i; }
@@ -655,6 +733,7 @@ static void touchInput(bool down, int x, int y) {
       }
     }
     else if (lockBtn.has(x, y)) drag = D_PRESS_LOCK;
+    else if (seatBtn.has(x, y)) drag = D_PRESS_SEAT;
     else if (resetBtn.has(x, y)) drag = D_PRESS_RESET;
     else {
       for (i = 0; i < (int)tabRects.size(); i++)
@@ -729,7 +808,6 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
   MonGeo geo = geoOf(m, cell);
   bool fixed = !m.fixed.empty();
   Machine* shown = lay.machine(m.shows);
-  bool kbd = shown && shown->name == lay.active;
   if (lifted) G->fillRoundRect(geo.bezel.x + 8, geo.bezel.y + 10, geo.bezel.w, geo.bezel.h, 10, C(0x08090B));
   if (m.capture) {  // capture box: dark body, preview window, record light
     G->fillSmoothRoundRect(geo.bezel.x, geo.bezel.y, geo.bezel.w, geo.bezel.h, 12, C(0x202429));
@@ -765,10 +843,16 @@ static void drawMonitor(const Monitor& m, const Rect& cell, bool lifted, uint32_
     G->fillRect(s.x, s.y, s.w, s.h, C(0x0B0D10));
     text(m.output ? "no signal" : "-", s.x + s.w / 2, s.y + s.h / 2, 0x4B5563, &fonts::FreeSans9pt7b);
   }
-  if (kbd) {  // this is where the keyboard is
-    for (int i = 0; i < 3; i++)
-      G->drawRoundRect(geo.bezel.x - 2 - i, geo.bezel.y - 2 - i, geo.bezel.w + 4 + 2 * i,
-                      geo.bezel.h + 4 + 2 * i, 10, C(ACCENT));
+  if (shown) {  // a ring for each seat whose pointer is on this monitor, the picked one outside
+    int off = 2;
+    for (const Seat* z : seatsOn(shown->name)) {
+      if (!z->monitor.empty() && z->monitor != m.name) continue;
+      int n = isCurSeat(z->name) ? 3 : 2;
+      for (int i = 0; i < n; i++)
+        G->drawRoundRect(geo.bezel.x - off - i, geo.bezel.y - off - i, geo.bezel.w + 2 * (off + i),
+                         geo.bezel.h + 2 * (off + i), 10, C(z->color));
+      off += n + 1;
+    }
   }
   if (hl) {
     for (int i = 0; i < 4; i++)
@@ -844,13 +928,20 @@ static void padGlyph(int x, int y, float k, uint32_t col, uint32_t bg) {
 static void drawCard(int i, const Rect& r, bool pressed, bool knob = true) {
   Machine& m = lay.machines[i];
   uint32_t col = colorOf(i), bg = pressed ? 0x262D37 : PANEL_BG;
-  bool kbd = m.name == lay.active;
+  std::vector<const Seat*> seated = seatsOn(m.name);
+  bool kbd = !seated.empty() && isCurSeat(seated.back()->name);
   bool console = !m.via.empty();
   G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(bg));
-  if (kbd)
-    for (int k = 0; k < 3; k++) G->drawRoundRect(r.x + k, r.y + k, r.w - 2 * k, r.h - 2 * k, 14 - k, C(ACCENT));
-  else
-    G->drawRoundRect(r.x, r.y, r.w, r.h, 14, C(LINE));
+  if (seated.empty()) G->drawRoundRect(r.x, r.y, r.w, r.h, 14, C(LINE));
+  {  // a ring for each seat on it, the picked one outermost
+    int k = 0;
+    for (auto it = seated.rbegin(); it != seated.rend(); ++it) {
+      int n = isCurSeat((*it)->name) ? 3 : 2;
+      for (int j = 0; j < n; j++, k++)
+        G->drawRoundRect(r.x + k, r.y + k, r.w - 2 * k, r.h - 2 * k, std::max(4, 14 - k), C((*it)->color));
+      k++;
+    }
+  }
   bool lit = m.ready || !m.agent || console;  // consoles have no agent to wait for
   float sc = std::min(1.0f, (r.w - 30) / 160.0f);
   drawArt(*G, m.art, r.x + r.w / 2, r.y + (int)(r.h * 0.41f), sc, lit ? 0 : 0.45f, bg);
@@ -861,6 +952,7 @@ static void drawCard(int i, const Rect& r, bool pressed, bool knob = true) {
   int y = r.y + r.h - 16;
   std::string st;
   if (kbd) st = "in focus";
+  else if (!seated.empty()) st = seatLabel(*seated.back()) + " here";
   else if (console) st = m.pads ? "pad dongle" : "no dongle";
   else if (!m.agent) st = "video only";
   else if (!m.ready) st = "offline";
@@ -969,15 +1061,19 @@ static void drawHeader() {
   int tabsEnd = drawTabs(tx0 + 112);
   int x = SW - 20, y = HEAD_H / 2;
   if (hub.connected() && lay.valid) {
-    x = chip(x, y, lay.locked ? "edges locked" : "edges free", 0, lay.locked ? 0xFBBF24 : 0xC9D1DB, &lockBtn);
-    std::string k = lay.active.empty() ? std::string("focus: nobody") : std::string("focus: ") + labelOf(lay.active);
-    x = chip(x, y, k.c_str(), ACCENT);
+    Seat* z = curSeat();
+    bool lk = z ? z->locked : lay.locked;
+    x = chip(x, y, lk ? "edges locked" : "edges free", 0, lk ? 0xFBBF24 : 0xC9D1DB, &lockBtn);
+    std::string where = !z ? "nobody" : z->offline ? "offline" : z->active.empty() ? "nowhere" : labelOf(z->active);
+    std::string k = (z ? seatLabel(*z) : std::string("focus")) + ": " + where + "  v";
+    x = chip(x, y, k.c_str(), z ? z->color : ACCENT, drag == D_PRESS_SEAT ? TEXT : 0xC9D1DB, &seatBtn);
     if (!lay.switcherPresent) x = chip(x, y, "no switcher", 0x59606B);
     else x = chip(x, y, lay.switcherOnline ? "switcher" : "switcher offline", lay.switcherOnline ? OK_C : BAD_C);
     x = chip(x, y, "hub", OK_C);
     x = chip(x, y, "reset", 0, drag == D_PRESS_RESET ? TEXT : 0xC9D1DB, &resetBtn);
   } else {
     lockBtn = {0, 0, 0, 0};
+    seatBtn = {0, 0, 0, 0};
     resetBtn = {0, 0, 0, 0};
     x = chip(x, y, "no hub", BAD_C);
   }
@@ -1182,9 +1278,43 @@ static void drawMonMenu() {
   hits.push_back({bDone, H_DONE, 0, 0, 0});
 }
 
+// The seat picker: every seat, where it is, "view" to show and edit as it,
+// "go offline" to take its ring (and its control) away until it is used again
+static void drawSeatMenu() {
+  sheetBackdrop(curSeat() ? curSeat()->color : ACCENT);
+  text("Seats", MENU.x + 40, MENU.y + 46, TEXT, &fonts::FreeSansBold18pt7b, middle_left);
+  text("whose focus and wires this panel shows", MENU.x + 42, MENU.y + 86, MUTED, &fonts::FreeSans12pt7b, middle_left);
+  int y = MENU.y + 130;
+  for (size_t i = 0; i < lay.seats.size() && y < MENU.y + MENU.h - 130; i++) {
+    const Seat& z = lay.seats[i];
+    bool mine = isCurSeat(z.name);
+    Rect row{MENU.x + 30, y, MENU.w - 60, 62};
+    G->fillSmoothRoundRect(row.x, row.y, row.w, row.h, 14, C(mine ? 0x232A33 : 0x1A1F26));
+    if (mine) G->drawRoundRect(row.x, row.y, row.w, row.h, 14, C(z.color));
+    G->fillSmoothCircle(row.x + 30, row.y + 31, 12, C(z.color));
+    text(seatLabel(z).c_str(), row.x + 56, row.y + 31, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
+    std::string where = z.offline ? "offline" : z.active.empty() ? "not on any machine"
+                                  : std::string("on ") + labelOf(z.active);
+    text(where.c_str(), row.x + 330, row.y + 31, z.active.empty() ? MUTED : 0xC9D1DB, &fonts::FreeSans12pt7b, middle_left);
+    Rect bView{row.x + row.w - 380, row.y + 8, 170, 46}, bOff{row.x + row.w - 196, row.y + 8, 180, 46};
+    button(bView, mine ? "viewing" : "view", mine ? 0x1F4D3A : 0x2B323C, TEXT);
+    hits.push_back({bView, H_SEAT_VIEW, (int)i, 0, 0});
+    bool can = !z.offline && !z.active.empty();
+    button(bOff, "go offline", can ? 0x4A2A2A : 0x2B323C, can ? TEXT : MUTED);
+    if (can) hits.push_back({bOff, H_SEAT_OFF, (int)i, 0, 0});
+    y += 74;
+  }
+  text("a seat comes back when it is used again (its keyboard, mouse or pad, or a script)",
+       MENU.x + 40, MENU.y + MENU.h - 110, 0x6B7482, &fonts::FreeSans9pt7b, middle_left);
+  Rect bDone{MENU.x + MENU.w - 350, MENU.y + MENU.h - 82, 320, 54};
+  button(bDone, "done", 0x2B323C, TEXT);
+  hits.push_back({bDone, H_DONE, 0, 0, 0});
+}
+
 static void drawMonMenu();
 static void drawMenu() {
   hits.clear();
+  if (menuSeats) { if (menuIdx >= 0) drawSeatMenu(); return; }
   if (menuMon) { drawMonMenu(); return; }
   int nItems = menuAcc ? (int)lay.accessories.size() : (int)lay.machines.size();
   if (menuIdx < 0 || menuIdx >= nItems) { menuIdx = -1; return; }
@@ -1196,8 +1326,7 @@ static void drawMenu() {
   drawArt(*G, art, MENU.x + 76, MENU.y + 62, 0.55f, 0, PANEL_BG);
   text(label.c_str(), MENU.x + 150, MENU.y + 46, TEXT,
        fit(label.c_str(), MENU.w - 200, {&fonts::FreeSansBold18pt7b, &fonts::FreeSansBold12pt7b}), middle_left);
-  std::string sub = menuAcc ? (lay.accessories[menuIdx].kind == "kbm" ? "keyboard + mouse"
-                                       : lay.accessories[menuIdx].kind == "keys" ? "keyboard" : "game controller")
+  std::string sub = menuAcc ? (lay.accessories[menuIdx].kind == "kbm" ? "keyboard + mouse" : "game controller")
                             : lay.machines[menuIdx].name;
   text(sub.c_str(), MENU.x + 152, MENU.y + 86, MUTED, &fonts::FreeSans12pt7b, middle_left);
 
@@ -1276,6 +1405,22 @@ static void drawMenu() {
     if (!any) text("no controllers linked (accessories page)", x2, y, 0x6B7482, &fonts::FreeSans9pt7b, middle_left);
   } else {
     const Accessory& a = lay.accessories[menuIdx];
+    if (lay.seats.size() > 1 && !lay.seats[0].name.empty()) {  // whose it is: it follows that seat's focus
+      text("belongs to", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
+      y += 26;
+      int bx = x2, n = (int)lay.seats.size(), bw = std::min(170, (w2 - 8 * (n - 1)) / n);
+      for (int k = 0; k < n; k++) {
+        const Seat& z = lay.seats[k];
+        Rect b{bx, y, bw, 40};
+        bool on = a.seat == z.name;
+        G->fillSmoothRoundRect(b.x, b.y, b.w, b.h, 10, C(on ? z.color : 0x2B323C));
+        std::string lb = ellipsize(seatLabel(z), bw - 12, &fonts::FreeSansBold9pt7b);
+        text(lb.c_str(), b.x + b.w / 2, b.y + b.h / 2, on ? 0x0B0D10 : 0xC9D1DB, &fonts::FreeSansBold9pt7b);
+        hits.push_back({b, H_OWN, menuIdx, k, 0});
+        bx += bw + 8;
+      }
+      y += 54;
+    }
     toggleRow("works out of focus everywhere", a.keepAll, true, {Rect{}, H_KEEPALL, menuIdx, 0, 0});
     y += 6;
     text(a.kind == "pad" ? "player on each machine" : "may reach", x2, y, MUTED, &fonts::FreeSans12pt7b, middle_left);
@@ -1324,7 +1469,7 @@ static void drawMenu() {
     Machine& m = lay.machines[menuIdx];
     bool usable = m.ready;
     Rect bUse{x3, MENU.y + 480, w3, 54};
-    button(bUse, m.name == lay.active ? "in focus" : "focus it", usable ? 0x1F4D3A : 0x2B323C, usable ? TEXT : MUTED);
+    button(bUse, m.name == seatActive() ? "in focus" : "focus it", usable ? 0x1F4D3A : 0x2B323C, usable ? TEXT : MUTED);
     hits.push_back({bUse, H_USE, 0, 0, 0});
   }
   button(bDone, "done", 0x2B323C, TEXT);
@@ -1475,6 +1620,17 @@ struct AccessoriesPage : Page {
     G->fillSmoothCircle(r.x + r.w / 2 - G->textWidth(st.c_str()) / 2 - 12, r.y + r.h - 22, 5,
                         C(a.present ? OK_C : 0x59606B));
     text(st.c_str(), r.x + r.w / 2 + 2, r.y + r.h - 22, a.present ? 0xC9D1DB : MUTED, &fonts::FreeSans9pt7b);
+    if (lay.seats.size() > 1 && !a.seat.empty()) {  // whose it is, in the top left corner
+      Seat* z = lay.seat(a.seat);
+      if (z) {
+        std::string lb = ellipsize(seatLabel(*z), r.w / 2, &fonts::Font2);
+        G->setFont(&fonts::Font2);
+        int w = G->textWidth(lb.c_str()) + 26;
+        G->fillSmoothRoundRect(r.x + 8, r.y + 8, w, 22, 11, C(0x0F1216));
+        G->fillSmoothCircle(r.x + 19, r.y + 19, 5, C(z->color));
+        text(lb.c_str(), r.x + 28, r.y + 19, isCurSeat(z->name) ? TEXT : MUTED, &fonts::Font2, middle_left);
+      }
+    }
     int kx, ky;
     accKnob(r, kx, ky);
     G->fillSmoothCircle(kx, ky, 12, C(0x0A0C0F));
@@ -1495,8 +1651,10 @@ struct AccessoriesPage : Page {
         int mi = lay.machineIndex(l.screen), ex, ey;
         if (drag == D_LINEPLUG && dragIdx == (int)ai && dragIdx2 == mi) continue;
         if (!lineEnd(ai, mi, ex, ey)) continue;
-        cable(ex, ey, kx, ky, col, a.present ? SOLID : FAINT);
-        G->fillSmoothRoundRect(ex - 6, ey - 9, 12, 14, 3, C(col));
+        bool mine = a.seat.empty() || isCurSeat(a.seat);  // other seats' wires stay in the background
+        uint32_t lc = mine ? col : mix(col, BG, 0.5f);
+        cable(ex, ey, kx, ky, lc, a.present && mine ? SOLID : FAINT);
+        G->fillSmoothRoundRect(ex - 6, ey - 9, 12, 14, 3, C(lc));
         if (a.kind == "pad") {
           std::string pl = "P" + std::to_string(l.player);
           G->fillSmoothRoundRect(ex - 13, ey - 34, 26, 20, 6, C(0x0F1216));

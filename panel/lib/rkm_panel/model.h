@@ -25,9 +25,21 @@ struct Link {
   bool keep = false;      // that machine gets it out of focus too
 };
 
+// Someone at the desk (a person or a script) with its own focus: the hub's
+// docs/SEATS.md.  Each accessory belongs to one.
+struct Seat {
+  std::string name, label;
+  uint32_t color = 0x34D399;
+  std::string active;     // the machine it drives, or empty
+  std::string monitor;    // the monitor its pointer is on
+  bool locked = false;    // its edge switching is off
+  bool offline = false;   // went offline: no focus until it is used again
+};
+
 // Something you hold: the keyboard + mouse, a game pad
 struct Accessory {
   std::string name, label, kind, about;
+  std::string seat;       // whose it is
   bool present = false;
   long color = -1;        // its lines; -1 = default
   bool keepAll = false;   // every machine it is linked to gets it out of focus
@@ -63,6 +75,12 @@ struct Layout {
   std::vector<Machine> machines;
   std::vector<Monitor> monitors;
   std::vector<Accessory> accessories;
+  std::vector<Seat> seats;  // [0] is the first seat (the one commands without a seat are for)
+
+  Seat* seat(const std::string& n) {
+    for (auto& z : seats) if (z.name == n) return &z;
+    return nullptr;
+  }
 
   Accessory* accessory(const std::string& n) {
     for (auto& a : accessories) if (a.name == n) return &a;
@@ -174,9 +192,28 @@ struct Layout {
       a.present = o["present"] | 0;
       a.color = o["color"] | -1L;
       a.keepAll = o["keepAll"] | 0;
+      a.seat = o["seat"] | "";
       for (JsonObject k : o["links"].as<JsonArray>())
         a.links.push_back({k["screen"] | "", k["player"] | 1, (k["keep"] | 0) != 0});
       l.accessories.push_back(a);
+    }
+    for (JsonObject o : doc["seats"].as<JsonArray>()) {
+      Seat z;
+      z.name = o["name"] | "";
+      z.label = o["label"] | "";
+      z.color = o["color"] | 0x34D399u;
+      z.active = o["active"] | "";
+      z.monitor = o["monitor"] | "";
+      z.locked = o["locked"] | 0;
+      z.offline = o["offline"] | 0;
+      l.seats.push_back(z);
+    }
+    if (l.seats.empty()) {  // a hub from before seats: one seat, nameless (plain commands)
+      Seat z;
+      z.label = "focus";
+      z.active = l.active;
+      z.locked = l.locked;
+      l.seats.push_back(z);
     }
     *this = l;
     return true;
