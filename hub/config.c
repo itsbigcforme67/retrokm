@@ -14,6 +14,7 @@ static void copy(char *dst, size_t n, const char *src);
 const AccKind acc_kinds[ACC_KINDS] = {
     { "kbm", "keyboard + mouse" },
     { "pad", "gamepads" },
+    { "keys", "keyboard" },
 };
 
 int acc_kind(const char *id)
@@ -384,6 +385,15 @@ bad:
         copy(k->about, sizeof k->about, "the USB keyboard and mouse on the hub");
         for (i = 0; i < cfg.nscreens; i++) k->player[i] = 1;
     }
+    {   /* Claude's keyboard: scripts type on it with "key-to" (main.c).  It may
+         * type into every machine but the hub's own desktop, out of focus too,
+         * until told otherwise on the accessories page */
+        Accessory *k = acc_new("claude", ACC_KEYS, "Claude's keyboard");
+        copy(k->about, sizeof k->about, "scripts on the hub's control port (key-to)");
+        for (i = 0; i < cfg.nscreens; i++) k->player[i] = !cfg.screens[i].local;
+        k->keep_all = 1;
+        k->present = 1;
+    }
     load_state();
     return 0;
 }
@@ -430,6 +440,8 @@ static void load_state(void)
                 if (a && !seen[a - cfg.acc]) {      /* the file says where it is linked */
                     seen[a - cfg.acc] = 1;
                     memset(a->player, 0, sizeof a->player);
+                    memset(a->keep, 0, sizeof a->keep);
+                    a->keep_all = 0;
                 }
             }
             else if (sscanf(line, "link %31s %31s %d", name, what, &on) == 3) {

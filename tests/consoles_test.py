@@ -177,7 +177,7 @@ try:
     ctl("pad 0004")
     check("keep everywhere works too", xb2.take()[-1:], [pad(4)])
     ctl("keepall script off"); ctl("pad 0"); xb2.take()
-    check("toggles are saved", sorted(l.strip() for l in open(conf + ".state") if l.startswith("keep")), [])
+    check("toggles are saved", sorted(l.strip() for l in open(conf + ".state") if l.startswith("keep") and " claude" not in l), [])
     check("links are saved", "link keyboard xbox 1" in open(conf + ".state").read(), True)
 except Exception:  # a crash in the test itself is a failure, not a quiet stop
     import traceback

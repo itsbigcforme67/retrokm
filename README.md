@@ -197,6 +197,9 @@ Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
   Esc/arrows/F-keys, Ctrl+Alt+Del). Open `http://<hub>:24855/?k=<key>`; the
   key is in `~/.config/retrokm/phone-key` and the service log prints the
   whole link. On an iPhone, Share > Add to Home Screen makes it an app.
+- Scripts type on one machine with `key-to <screen> <key> <0|1>` ("Claude's
+  keyboard", an accessory of its own; see `docs/PROTOCOL.md`), without
+  moving the user's keyboard or mixing with their typing.
 - The control socket accepts the same commands as hotkeys, plus `status`:
 
   ```

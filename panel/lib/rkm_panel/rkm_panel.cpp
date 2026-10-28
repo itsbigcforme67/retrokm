@@ -389,6 +389,7 @@ static uint32_t accColor(int i) {
   const Accessory& a = lay.accessories[i];
   if (a.color >= 0) return (uint32_t)a.color;
   if (a.kind == "kbm") return 0x60A5FA;
+  if (a.kind == "keys") return 0xD97757;   // Claude's keyboard
   static const uint32_t pal[] = {0xF472B6, 0xFACC15, 0xA78BFA, 0x2DD4BF, 0xFB923C};
   return pal[i % 5];
 }
@@ -1191,11 +1192,12 @@ static void drawMenu() {
   const std::string& label = menuAcc ? lay.accessories[menuIdx].label : lay.machines[menuIdx].label;
   sheetBackdrop(col);
   // title
-  std::string art = menuAcc ? (lay.accessories[menuIdx].kind == "kbm" ? "keyboard" : "gamepad") : lay.machines[menuIdx].art;
+  std::string art = menuAcc ? (lay.accessories[menuIdx].kind != "pad" ? "keyboard" : "gamepad") : lay.machines[menuIdx].art;
   drawArt(*G, art, MENU.x + 76, MENU.y + 62, 0.55f, 0, PANEL_BG);
   text(label.c_str(), MENU.x + 150, MENU.y + 46, TEXT,
        fit(label.c_str(), MENU.w - 200, {&fonts::FreeSansBold18pt7b, &fonts::FreeSansBold12pt7b}), middle_left);
-  std::string sub = menuAcc ? (lay.accessories[menuIdx].kind == "kbm" ? "keyboard + mouse" : "game controller")
+  std::string sub = menuAcc ? (lay.accessories[menuIdx].kind == "kbm" ? "keyboard + mouse"
+                                       : lay.accessories[menuIdx].kind == "keys" ? "keyboard" : "game controller")
                             : lay.machines[menuIdx].name;
   text(sub.c_str(), MENU.x + 152, MENU.y + 86, MUTED, &fonts::FreeSans12pt7b, middle_left);
 
@@ -1463,7 +1465,7 @@ struct AccessoriesPage : Page {
     uint32_t col = accColor(i), bg = pressed ? 0x262D37 : PANEL_BG;
     G->fillSmoothRoundRect(r.x, r.y, r.w, r.h, 14, C(bg));
     G->drawRoundRect(r.x, r.y, r.w, r.h, 14, C(mix(col, bg, 0.5f)));
-    drawArt(*G, a.kind == "kbm" ? "keyboard" : "gamepad", r.x + r.w / 2, r.y + 62,
+    drawArt(*G, a.kind != "pad" ? "keyboard" : "gamepad", r.x + r.w / 2, r.y + 62,
             std::min(0.85f, (r.w - 40) / 180.0f), a.present ? 0 : 0.5f, bg);
     text(a.label.c_str(), r.x + r.w / 2, r.y + r.h - 50, a.present ? TEXT : MUTED,
          fit(a.label.c_str(), r.w - 14, {&fonts::FreeSansBold12pt7b, &fonts::FreeSansBold9pt7b, &fonts::FreeSans9pt7b, &fonts::Font2}));

@@ -37,7 +37,20 @@ file is the state of *this* desk and what was learned getting there.
   pointer would not cross to the tall monitor; restarting the laptop agent
   fixed that one).
 - **Control socket:** `printf 'status\n' | nc -q1 127.0.0.1 24851`. It
-  also takes goto, show, tie, lock, key, rel, btn, ddc, lights and reset.
+  also takes goto, show, tie, lock, key, key-to, rel, btn, ddc, lights and reset.
+- **Claude's keyboard** (2026-10-28, built and tested, **not installed**:
+  the owner runs `./install-laptop.sh`, it needs sudo; the panel shows it
+  with a gamepad picture until its firmware is rebuilt). A separate
+  accessory, `claude`, on the accessories page: scripts type with
+  `key-to <screen> <key> <0|1>` straight onto that machine, while the user's
+  keyboard and pointer stay where they are. Like the other accessories it is
+  linked to machines and kept there out of focus (default: every machine but
+  the laptop, kept everywhere); not linked/kept, offline or no keyboard ->
+  `error`, never another machine. Why: 2026-10-28 an Octane reboot command
+  from `type-octane.py` (which used `goto octane` + `key`) was typed into the
+  owner's Claude window on the laptop when they moved the pointer.
+  `sgi bringup/type-octane.py` now uses it (same CLI; `--back` does nothing).
+  Test: `make test-keyto` (no X needed).
 
 - **Phone page** (2026-10-22): user service `retrokm-phone`, port 24855,
   `phone/rkm_phone.py` + `phone/index.html`. It is a panel client (port

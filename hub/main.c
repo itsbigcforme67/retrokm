@@ -787,6 +787,41 @@ void hub_key(int evcode, int usage, int state)
     }
 }
 
+/* Claude's keyboard (an ACC_KEYS accessory): a script types on one machine,
+ * named, while the user's keyboard + mouse stay wherever they are.  It goes
+ * where the accessories page lets it - linked there, and kept there unless
+ * that machine is in focus - and never to any other machine.  Its modifiers
+ * are its own, one set per machine.  Returns NULL or why not. */
+static unsigned char claude_mods[MAX_SCREENS];
+
+static const char *claude_key(Screen *s, int usage, int state)
+{
+    Accessory *a = NULL;
+    unsigned char p[3];
+    int i;
+
+    for (i = 0; i < cfg.nacc && !a; i++)
+        if (cfg.acc[i].kind == ACC_KEYS) a = &cfg.acc[i];
+    if (!a) return "there is no script keyboard";
+    i = (int)(s - cfg.screens);
+    if (!a->player[i]) return "Claude's keyboard is not linked to that machine";
+    if (s != active && !acc_keeps(a, s)) return "Claude's keyboard is not kept on that machine (out of focus)";
+    if (!ready(s)) return "that machine is offline";
+    if (!s->local && !s->kbd && !s->in) return "that machine has no keyboard";
+    if (usage >= HID_LCTRL && usage <= HID_RGUI && state != RKM_KEY_REPEAT) {
+        unsigned char bit = (unsigned char)(1 << (usage - HID_LCTRL));
+        if (state) claude_mods[i] |= bit;
+        else claude_mods[i] &= (unsigned char)~bit;
+    }
+    s->last_input_ms = s->last_key_ms = now_ms();
+    if (s->local) { uinput_key(hid_to_evdev(usage), state); return NULL; }
+    p[0] = remap_usage(s, (unsigned char)usage);
+    p[1] = (unsigned char)state;
+    p[2] = remap_mods(s, claude_mods[i]);
+    send_frame(s->kbd ? s->kbd : s->in, RKM_KEY, p, 3);   /* a hardware keyboard wins */
+    return NULL;
+}
+
 /* ---- game pads ------------------------------------------------------------
  *
  * Each pad (an Accessory) is linked to machines as player 1..4 there.  Its
@@ -1138,6 +1173,15 @@ static void run_command(char *cmd, Conn *r)
         int u = key_by_name(argv[1]);
         if (u < 0) ctl_printf(r, "error: unknown key %s\n", argv[1]);
         else { hub_key(hid_to_evdev(u), u, atoi(argv[2])); ctl_printf(r, "ok\n"); }
+    } else if (!strcasecmp(argv[0], "key-to") && argc == 4) {
+        /* key-to <screen> <name> <0|1|2>: Claude's keyboard, on that machine only */
+        Screen *s = screen_by_name(argv[1]);
+        int u = key_by_name(argv[2]);
+        const char *why;
+        if (!s) ctl_printf(r, "error: no screen %s\n", argv[1]);
+        else if (u < 0) ctl_printf(r, "error: unknown key %s\n", argv[2]);
+        else if ((why = claude_key(s, u, atoi(argv[3])))) ctl_printf(r, "error: %s: %s\n", s->name, why);
+        else ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "plug") && argc == 2) {
         /* plug <console>: it is the one wired into its box now */
         Screen *s = screen_by_name(argv[1]);
@@ -1189,7 +1233,7 @@ static void run_command(char *cmd, Conn *r)
     } else {
         ctl_printf(r, "error: commands are status, goto <screen>, show <screen> [monitor], "
                       "tie <in> <out>, lock [on|off], rel <dx> <dy>, warp <x> <y>, btn <n> <0|1>, "
-                      "key <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], plug <console>, "
+                      "key <name> <0|1>, key-to <screen> <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], plug <console>, "
                       "unplug <box>, link <acc> <screen> [player], unlink <acc> <screen>, "
                       "keep <acc> <screen> on|off, keepall <acc> on|off, reset, quit\n");
     }

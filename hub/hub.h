@@ -13,7 +13,7 @@
 #define MAX_DEVICES   16
 #define EXTRON_MAX_IO 64
 #define MAX_AREAS     8
-#define MAX_ACC       12          /* accessories: the keyboard + mouse, game pads */
+#define MAX_ACC       12          /* accessories: the keyboard + mouse, Claude's keyboard, game pads */
 #define MAX_PADS      4           /* game pads open at once */
 #define MAX_PLAYERS   4           /* pad players (dongles) per screen */
 
@@ -25,7 +25,7 @@
  * RKM_ENTER), a machine that gets it out of focus must be told so when its
  * device joins and when "keep" is turned on, not only on focus changes -
  * see pads_take() in main.c. */
-enum { ACC_KBM, ACC_PAD, ACC_KINDS };
+enum { ACC_KBM, ACC_PAD, ACC_KEYS, ACC_KINDS };   /* ACC_KEYS: a keyboard that scripts type on */
 typedef struct { const char *id, *label; } AccKind;
 extern const AccKind acc_kinds[ACC_KINDS];
 
