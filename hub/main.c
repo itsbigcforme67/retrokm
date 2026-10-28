@@ -1,5 +1,7 @@
 /* RetroKM hub: owns the keyboard, the mouse, the pointer position and the
- * clipboard, and routes them to whichever machine the pointer is on. */
+ * clipboard, and routes them to whichever machine the pointer is on.  Each
+ * seat (someone at the desk, or a script) has its own focus, pointer and
+ * clipboard; see docs/SEATS.md. */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <errno.h>
@@ -33,9 +35,6 @@ static int lfd = -1, cfd = -1, pfd_listen = -1;
 static volatile sig_atomic_t quit;
 static int restart;                        /* "reset": start over once stopped */
 
-static Screen *active;           /* screen receiving input, or NULL */
-static Monitor *active_mon;      /* monitor the pointer is on, or NULL */
-static double px, py;            /* pointer, in the active screen's pixels */
 static long long ptr_moved_ms;   /* when the mouse last moved */
 static double wiggle;            /* how much the mouse swung about lately */
 static long long wiggle_ms;
@@ -72,19 +71,12 @@ static void note_wiggle(int dx, int dy, long long now)
     ly = ay;
     ax = ay = 0;
 }
-static double rel_fx, rel_fy;    /* fractional remainder for relative agents */
-static unsigned char mods;       /* physical modifier state, HID bit order */
-static int buttons;              /* physical mouse buttons held (bit per button) */
-static int locked;               /* edge switching disabled */
-static int touched;              /* any input yet; until then the first screen wins */
-static long long active_lost_ms; /* the active screen's agent dropped: when */
-#define REJOIN_MS 4000           /* how long to wait for it to come back */
-static unsigned char swallowed[256];
+#define REJOIN_MS 4000           /* how long to wait for a dropped machine to come back */
 
-static unsigned char *clip;      /* UTF-8, LF line endings */
-static size_t clip_len;
-static unsigned clip_gen;
-static Screen *clip_src;
+/* The first seat: commands that name no seat are its */
+static Seat *home(void) { return &cfg.seats[0]; }
+/* The seat the hub's own USB keyboard + mouse belong to */
+static Seat *kbd_seat(void) { return &cfg.seats[cfg.nacc ? cfg.acc[0].seat : 0]; }
 
 /* ---- utilities ---------------------------------------------------------- */
 
@@ -143,10 +135,55 @@ int screen_is_desktop(const Screen *s)
     return s->local || (s->in && !strncmp(s->in->peer, "127.0.0.1", 9));
 }
 
-/* The keyboard + mouse may reach this machine (a line on the panel) */
-static int kbm_ok(const Screen *s)
+static int seat_has_devices(const Seat *z)
 {
-    return s && cfg.nacc > 0 && cfg.acc[0].player[s - cfg.screens];
+    int i;
+    for (i = 0; i < cfg.nacc; i++)
+        if (!cfg.acc[i].scripted && &cfg.seats[cfg.acc[i].seat] == z) return 1;
+    return 0;
+}
+
+/* The seat may drive this machine: one of its accessories is wired there
+ * (a seat with no accessories has nothing to wire, and may go anywhere) */
+static int may_go(const Seat *z, const Screen *s)
+{
+    int i;
+    if (!s) return 0;
+    if (!seat_has_devices(z)) return 1;
+    for (i = 0; i < cfg.nacc; i++)
+        if (!cfg.acc[i].scripted && &cfg.seats[cfg.acc[i].seat] == z && cfg.acc[i].player[s - cfg.screens]) return 1;
+    return 0;
+}
+
+/* The seat's keyboard + mouse may reach this machine (a line on the panel) */
+static int kbm_ok(const Seat *z, const Screen *s)
+{
+    int i, any = 0;
+    if (!s) return 0;
+    for (i = 0; i < cfg.nacc; i++) {
+        const Accessory *a = &cfg.acc[i];
+        if (a->scripted || a->kind != ACC_KBM || &cfg.seats[a->seat] != z) continue;
+        any = 1;
+        if (a->player[s - cfg.screens]) return 1;
+    }
+    return !any && may_go(z, s);
+}
+
+/* How many seats are on this machine */
+static int seats_on(const Screen *s)
+{
+    int i, n = 0;
+    for (i = 0; i < cfg.nseats; i++)
+        if (cfg.seats[i].active == s) n++;
+    return n;
+}
+
+static Seat *first_seat_on(const Screen *s)
+{
+    int i;
+    for (i = 0; i < cfg.nseats; i++)
+        if (cfg.seats[i].active == s) return &cfg.seats[i];
+    return NULL;
 }
 
 /* Does s get this accessory even while out of focus? (linked, and kept there
@@ -233,8 +270,11 @@ static void ctl_printf(Conn *c, const char *fmt, ...)
 static void flush_move(Screen *s)
 {
     unsigned char p[4];
+    double px, py;
 
-    if (!s || !s->move_pending) return;
+    if (!s || !s->move_pending || !s->mover) return;
+    px = s->mover->px;
+    py = s->mover->py;
     s->move_pending = 0;
     s->last_move_ms = now_ms();
     if (s->local) {
@@ -251,23 +291,26 @@ static void flush_move(Screen *s)
     }
 }
 
-static void queue_move(Screen *s)
+static void queue_move(Seat *z, Screen *s)
 {
+    if (s->mover != z) flush_move(s);       /* the other seat's last move first */
+    s->mover = z;
     s->move_pending = 1;
     if (now_ms() - s->last_move_ms >= s->min_move_ms) flush_move(s);
 }
 
 /* ---- clipboard ---------------------------------------------------------- */
 
-static void clip_send(Screen *s)
+static void clip_send(Seat *z, Screen *s)
 {
     Conn *c = s->clip;
     unsigned char *buf, hdr[5];
     size_t n, off;
 
-    s->clip_gen = clip_gen;
-    if (!c || !clip) return;
-    buf = text_from_utf8(clip, clip_len, c->charset, c->eol, &n);
+    s->clip_seat = z;
+    s->clip_gen = z->clip_gen;
+    if (!c || !z->clip) return;
+    buf = text_from_utf8(z->clip, z->clip_len, c->charset, c->eol, &n);
     if (!buf) return;
     if (n > (size_t)c->clipmax_kb * 1024) {
         logmsg("clipboard: %lu bytes is more than %s accepts, not sent", (unsigned long)n, s->name);
@@ -283,12 +326,13 @@ static void clip_send(Screen *s)
     }
     send_frame(c, RKM_CLIP_END, NULL, 0);
     free(buf);
-    if (verbose) logmsg("clipboard: sent %lu bytes to %s", (unsigned long)n, s->name);
+    if (verbose) logmsg("clipboard: sent %lu bytes of %s's to %s", (unsigned long)n, z->name, s->name);
 }
 
-static void clip_sync(Screen *s)
+/* The seat's clipboard to the machine, unless it holds it already */
+static void clip_sync(Seat *z, Screen *s)
 {
-    if (s && s->clip && clip && s != clip_src && s->clip_gen != clip_gen) clip_send(s);
+    if (s && s->clip && z->clip && !(s->clip_seat == z && s->clip_gen == z->clip_gen)) clip_send(z, s);
 }
 
 static void clip_received(Conn *c)
@@ -300,14 +344,21 @@ static void clip_received(Conn *c)
     c->clip_in = NULL;
     c->clip_in_active = 0;
     if (!u) return;
-    free(clip);
-    clip = u;
-    clip_len = n;
-    clip_gen++;
-    clip_src = c->screen;
-    c->screen->clip_gen = clip_gen;
-    logmsg("clipboard: %lu bytes from %s", (unsigned long)n, c->screen->name);
-    clip_sync(active);           /* everyone else gets it when the pointer arrives */
+    {   /* it is the clipboard of the seat on that machine (the one that came
+         * last, if several), else of the one that was there last */
+        Seat *z = c->screen->clip_owner;
+        if (!z || (z->active != c->screen && first_seat_on(c->screen))) z = first_seat_on(c->screen);
+        if (!z) z = home();
+        free(z->clip);
+        z->clip = u;
+        z->clip_len = n;
+        z->clip_gen++;
+        z->clip_src = c->screen;
+        c->screen->clip_seat = z;
+        c->screen->clip_gen = z->clip_gen;
+        logmsg("clipboard: %lu bytes from %s, %s's", (unsigned long)n, c->screen->name, z->name);
+        clip_sync(z, z->active);     /* other machines get it when the seat arrives */
+    }
 }
 
 /* ---- layout ------------------------------------------------------------- */
@@ -348,14 +399,14 @@ static Monitor *monitor_showing(const Screen *s)
     return NULL;
 }
 
-static Monitor *neighbor(const Monitor *m, int dir)
+static Monitor *neighbor(const Seat *z, const Monitor *m, int dir)
 {
     Monitor *best = NULL;
     int i;
 
     for (i = 0; i < cfg.nmonitors; i++) {
         Monitor *k = &cfg.monitors[i];
-        if (k == m || k->capture || !ready(k->cur) || k->cur == active || !kbm_ok(k->cur)) continue;
+        if (k == m || k->capture || !ready(k->cur) || k->cur == z->active || !kbm_ok(z, k->cur)) continue;
         switch (dir) {
         case DIR_LEFT:
             if (k->row == m->row && k->col < m->col && (!best || k->col > best->col)) best = k;
@@ -489,12 +540,43 @@ static void pads_leave(Screen *s);
 static void pads_enter(Screen *s);
 static void pads_update(Screen *s, int force);
 
-static void do_leave(Screen *s)
+/* The seat lets go of what it holds on s while another seat stays there
+ * (LEAVE would let go of the other seat's keys too) */
+static void release_held(Seat *z, Screen *s)
 {
-    flush_move(s);
-    s->last_x = px;
-    s->last_y = py;
-    s->have_last = 1;
+    static const int evbtn[] = { 0, BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA };
+    unsigned char p[3];
+    int u, b;
+
+    for (u = 1; u < 256; u++) {
+        if (!z->down[u]) continue;
+        z->down[u] = 0;
+        if (s->local) { uinput_key(hid_to_evdev(u), 0); continue; }
+        p[0] = remap_usage(s, (unsigned char)u);
+        p[1] = RKM_KEY_UP;
+        p[2] = 0;
+        send_frame(s->kbd ? s->kbd : s->in, RKM_KEY, p, 3);
+    }
+    for (b = 1; b <= 5; b++) {
+        if (!(z->buttons & (1 << b))) continue;
+        if (s->local) uinput_key(evbtn[b], 0);
+        else { p[0] = (unsigned char)b; p[1] = 0; send_frame(s->in, RKM_BUTTON, p, 2); }
+    }
+}
+
+static void do_leave(Seat *z, Screen *s)
+{
+    int si = (int)(s - cfg.screens);
+
+    if (s->mover == z) flush_move(s);
+    z->last_x[si] = z->px;
+    z->last_y[si] = z->py;
+    z->have_last[si] = 1;
+    if (seats_on(s) > 1) {                   /* someone else stays on it */
+        release_held(z, s);
+        return;
+    }
+    memset(z->down, 0, sizeof z->down);
     if (s->local) uinput_release_all();
     else send_frame(s->in, RKM_LEAVE, NULL, 0);
     /* a separate clipboard helper uses LEAVE as its cue to report changes */
@@ -503,116 +585,176 @@ static void do_leave(Screen *s)
     if (!pads_keep(s)) pads_leave(s);
 }
 
-static void do_enter(Screen *s)
+/* What a machine hears when the seat arrives and it had no one: ENTER */
+static void enter_frames(Seat *z, Screen *s)
 {
     unsigned char p[5];
     int b;
 
     if (s->local) {
-        uinput_abs((int)px, (int)py, s->w, s->h);
+        uinput_abs((int)z->px, (int)z->py, s->w, s->h);
         for (b = 0; b < 8; b++)                /* carry held modifiers across */
-            if (mods & (1 << b)) uinput_key(hid_to_evdev(HID_LCTRL + b), 1);
-    } else {
-        RKM_PUT16(p, (unsigned)px);
-        RKM_PUT16(p + 2, (unsigned)py);
-        p[4] = remap_mods(s, mods);
-        if (kbm_ok(s)) {
-            send_frame(s->in, RKM_ENTER, p, 5);
-            send_frame(s->kbd, RKM_ENTER, p, 5);
-        }
-        if (is_rel(s)) {
-            /* No absolute positioning: slam into the top-left corner, then
-             * walk out to the entry point. */
-            RKM_PUT16(p, (unsigned)(-30000) & 0xFFFF);
-            RKM_PUT16(p + 2, (unsigned)(-30000) & 0xFFFF);
-            send_frame(s->in, RKM_MOVEREL, p, 4);
-            RKM_PUT16(p, (unsigned)px);
-            RKM_PUT16(p + 2, (unsigned)py);
-            send_frame(s->in, RKM_MOVEREL, p, 4);
-        }
+            if (z->mods & (1 << b)) uinput_key(hid_to_evdev(HID_LCTRL + b), 1);
+        return;
     }
-    clip_sync(s);
+    RKM_PUT16(p, (unsigned)z->px);
+    RKM_PUT16(p + 2, (unsigned)z->py);
+    p[4] = remap_mods(s, z->mods);
+    if (kbm_ok(z, s)) {
+        send_frame(s->in, RKM_ENTER, p, 5);
+        send_frame(s->kbd, RKM_ENTER, p, 5);
+    }
+    if (is_rel(s)) {
+        /* No absolute positioning: slam into the top-left corner, then
+         * walk out to the entry point. */
+        RKM_PUT16(p, (unsigned)(-30000) & 0xFFFF);
+        RKM_PUT16(p + 2, (unsigned)(-30000) & 0xFFFF);
+        send_frame(s->in, RKM_MOVEREL, p, 4);
+        RKM_PUT16(p, (unsigned)z->px);
+        RKM_PUT16(p + 2, (unsigned)z->py);
+        send_frame(s->in, RKM_MOVEREL, p, 4);
+    }
+}
+
+static void do_enter(Seat *z, Screen *s)
+{
+    s->clip_owner = z;
+    if (seats_on(s) > 1) {                   /* joining another seat: its pointer jumps here */
+        if (kbm_ok(z, s) && !is_rel(s)) queue_move(z, s);
+        clip_sync(z, s);
+        pads_update(s, 0);
+        return;
+    }
+    s->mover = z;
+    enter_frames(z, s);
+    clip_sync(z, s);
     pads_enter(s);
 }
 
-static void switch_to(Screen *t, Monitor *m, double x, double y)
+static void switch_to(Seat *z, Screen *t, Monitor *m, double x, double y)
 {
-    if (active == t) { active_mon = m; return; }
-    Screen *was = active;
-    if (active) do_leave(active);
-    active = t;
-    active_mon = m;
+    if (z->active == t) { z->mon = m; return; }
+    Screen *was = z->active;
+    if (was) do_leave(z, was);
+    z->active = t;
+    z->mon = m;
     if (was) pads_update(was, 0);            /* pads it only had through focus let go there */
     if (!t) return;
+    z->offline = 0;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x > t->w - 1) x = t->w - 1;
     if (y > t->h - 1) y = t->h - 1;
     fit_area(t, &x, &y, x, y);
-    px = x;
-    py = y;
-    rel_fx = rel_fy = 0;
-    t->move_pending = 0;
-    t->rel_dx = t->rel_dy = 0;
-    logmsg("-> %s%s%s", t->name, m ? " on monitor " : "", m ? m->name : "");
-    lights_set(lights_color(t));
-    do_enter(t);
+    z->px = x;
+    z->py = y;
+    z->rel_fx = z->rel_fy = 0;
+    if (seats_on(t) == 1) {
+        t->move_pending = 0;
+        t->rel_dx = t->rel_dy = 0;
+    }
+    logmsg("%s -> %s%s%s", z->name, t->name, m ? " on monitor " : "", m ? m->name : "");
+    if (z == kbd_seat()) lights_set(lights_color(t));
+    do_enter(z, t);
 }
 
-static void goto_screen(Screen *t)
+static void goto_screen(Seat *z, Screen *t)
 {
-    if (!t || t == active) return;
-    if (t->have_last) switch_to(t, monitor_showing(t), t->last_x, t->last_y);
-    else switch_to(t, monitor_showing(t), t->w / 2.0, t->h / 2.0);
+    int ti;
+    if (!t || t == z->active) { if (t) z->offline = 0; return; }
+    ti = (int)(t - cfg.screens);
+    if (z->have_last[ti]) switch_to(z, t, monitor_showing(t), z->last_x[ti], z->last_y[ti]);
+    else switch_to(z, t, monitor_showing(t), t->w / 2.0, t->h / 2.0);
 }
 
-/* The active screen went away, or nothing is active yet. */
+/* The seat goes offline: no ring, nothing held, its input dropped */
+static void seat_offline(Seat *z)
+{
+    Screen *was = z->active;
+    if (was) {
+        do_leave(z, was);
+        z->active = NULL;
+        z->mon = NULL;
+        pads_update(was, 0);
+        if (z == kbd_seat()) lights_set(0xFFFFFFFF);
+    }
+    z->was = was ? was : z->was;
+    z->offline = 1;
+    logmsg("%s: offline", z->name);
+}
+
+/* Where a seat starts: its own machine before, else the hub's desktop,
+ * else the first machine it may drive */
+static Screen *seat_start(const Seat *z)
+{
+    int i;
+    if (z->was && ready(z->was) && may_go(z, z->was)) return z->was;
+    for (i = 0; i < cfg.nscreens; i++)
+        if (cfg.screens[i].local && may_go(z, &cfg.screens[i])) return &cfg.screens[i];
+    for (i = 0; i < cfg.nscreens; i++)
+        if (ready(&cfg.screens[i]) && may_go(z, &cfg.screens[i])) return &cfg.screens[i];
+    return NULL;
+}
+
+/* Its own devices were used while it was offline: it comes back */
+static void seat_wake(Seat *z)
+{
+    Screen *t = seat_start(z);
+    z->offline = 0;
+    logmsg("%s: back", z->name);
+    if (t) goto_screen(z, t);
+}
+
+/* The first seat's machine went away, or nothing is active yet. */
 static void fallback(void)
 {
-    Screen *t = NULL;
-    int i;
-
-    for (i = 0; i < cfg.nscreens && !t; i++)
-        if (cfg.screens[i].local) t = &cfg.screens[i];
-    for (i = 0; i < cfg.nscreens && !t; i++)
-        if (ready(&cfg.screens[i])) t = &cfg.screens[i];
-    if (t) goto_screen(t);
+    Seat *z = home();
+    Screen *t;
+    if (z->offline) return;
+    z->was = NULL;
+    if ((t = seat_start(z))) goto_screen(z, t);
 }
 
 /* Called whenever ties or agent connections change. */
 static void relayout(void)
 {
+    int i;
     resolve_monitors();
-    if (active && !ready(active)) {
-        /* Agents reconnect (WiFi blips, a hardware keyboard re-joining): keep
-         * the keyboard where it is for a moment rather than yank it away. */
-        if (!active_lost_ms) {
-            active_lost_ms = now_ms();
-            logmsg("%s: dropped, waiting %d s for it to come back", active->name, REJOIN_MS / 1000);
+    for (i = 0; i < cfg.nseats; i++) {
+        Seat *z = &cfg.seats[i];
+        if (z->active && !ready(z->active)) {
+            /* Agents reconnect (WiFi blips, a hardware keyboard re-joining): keep
+             * the keyboard where it is for a moment rather than yank it away. */
+            if (!z->lost_ms) {
+                z->lost_ms = now_ms();
+                logmsg("%s: dropped, waiting %d s for it to come back (%s)", z->active->name, REJOIN_MS / 1000, z->name);
+            }
+            if (now_ms() - z->lost_ms < REJOIN_MS) continue;
+            logmsg("%s: did not come back (%s)", z->active->name, z->name);
+            z->was = z->active;
+            z->active = NULL;                       /* nothing to say goodbye to */
+            z->mon = NULL;
+            z->lost_ms = 0;
+            if (z == kbd_seat()) lights_set(0xFFFFFFFF);
         }
-        if (now_ms() - active_lost_ms < REJOIN_MS) return;
-        logmsg("%s: did not come back", active->name);
-        active = NULL;                          /* nothing to say goodbye to */
-        active_mon = NULL;
-        lights_set(0xFFFFFFFF);
-    }
-    if (active) active_lost_ms = 0;
-    if (active_mon && active && active_mon->cur != active) {
-        Screen *t = active_mon->cur;
-        if (cfg.follow_tie && ready(t)) {
-            /* the monitor under the pointer now shows another machine */
-            double fx = px / (active->w > 1 ? active->w - 1 : 1);
-            double fy = py / (active->h > 1 ? active->h - 1 : 1);
-            switch_to(t, active_mon, fx * (t->w - 1), fy * (t->h - 1));
-        } else {
-            active_mon = monitor_showing(active);
+        if (z->active) z->lost_ms = 0;
+        if (z->mon && z->active && z->mon->cur != z->active) {
+            Screen *t = z->mon->cur;
+            if (cfg.follow_tie && ready(t) && may_go(z, t)) {
+                /* the monitor under the pointer now shows another machine */
+                double fx = z->px / (z->active->w > 1 ? z->active->w - 1 : 1);
+                double fy = z->py / (z->active->h > 1 ? z->active->h - 1 : 1);
+                switch_to(z, t, z->mon, fx * (t->w - 1), fy * (t->h - 1));
+            } else {
+                z->mon = monitor_showing(z->active);
+            }
+        } else if (z->active && !z->mon) {
+            z->mon = monitor_showing(z->active);
         }
-    } else if (active && !active_mon) {
-        active_mon = monitor_showing(active);
     }
     /* At boot agents connect in any order; until someone uses the keyboard
      * or mouse, keep handing control to the first screen in the config. */
-    if (!active || !touched) fallback();
+    if (!home()->lost_ms && (!home()->active || !home()->touched)) fallback();
 }
 
 void hub_extron_changed(void)
@@ -622,28 +764,19 @@ void hub_extron_changed(void)
 
 int hub_routing(void)
 {
-    return active != NULL;
+    return kbd_seat()->active != NULL || kbd_seat()->offline;
 }
 
 /* ---- input routing ------------------------------------------------------ */
 
-void hub_motion(int dx, int dy)
+static void seat_motion(Seat *z, int dx, int dy)
 {
-    Screen *s = active;
-    double mag, gain, nx, ny;
+    Screen *s = z->active;
+    double mag, gain, nx, ny, px = z->px, py = z->py;
     int dir = 0, r[4];
-    touched = 1;
+    z->touched = 1;
 
     if (!s) return;
-    ptr_moved_ms = now_ms();
-    note_wiggle(dx, dy, ptr_moved_ms);
-    {   /* "trace on": m <ms> <dx> <dy> <wiggle> for each motion, raw */
-        int i;
-        char t[80];
-        int n = snprintf(t, sizeof t, "m %lld %d %d %.2f\n", ptr_moved_ms, dx, dy, wiggle_now(ptr_moved_ms));
-        for (i = 0; i < MAX_CONNS; i++)
-            if (conns[i].kind == CONN_PANEL && conns[i].trace && !conns[i].dead) conn_write(&conns[i], t, (size_t)n);
-    }
     s->last_input_ms = now_ms();
     mag = sqrt((double)dx * dx + (double)dy * dy);
     gain = cfg.speed * s->speed * (1.0 + cfg.accel * (mag > 30 ? 30 : mag) / 10.0);
@@ -664,13 +797,13 @@ void hub_motion(int dx, int dy)
         else if (ny > r[1] + r[3] - 1) dir = DIR_DOWN;
     }
 
-    if (dir && !buttons && !locked && active_mon) {
-        Monitor *m = neighbor(active_mon, dir);
+    if (dir && !z->buttons && !z->locked && z->mon) {
+        Monitor *m = neighbor(z, z->mon, dir);
         if (m) {
             double fx = (px - r[0]) / (r[2] > 1 ? r[2] - 1 : 1), fy = (py - r[1]) / (r[3] > 1 ? r[3] - 1 : 1);
             double tx, ty;
             entry_point(m->cur, dir, fx, fy, &tx, &ty);
-            switch_to(m->cur, m, tx, ty);
+            switch_to(z, m->cur, m, tx, ty);
             return;
         }
     }
@@ -682,44 +815,68 @@ void hub_motion(int dx, int dy)
     fit_area(s, &nx, &ny, px, py);
 
     if (is_rel(s)) {
-        double ax = dx * gain + rel_fx, ay = dy * gain + rel_fy;
+        double ax = dx * gain + z->rel_fx, ay = dy * gain + z->rel_fy;
         int ix = (int)ax, iy = (int)ay;
-        rel_fx = ax - ix;
-        rel_fy = ay - iy;
+        z->rel_fx = ax - ix;
+        z->rel_fy = ay - iy;
+        if (s->mover != z) flush_move(s);
         s->rel_dx += ix;
         s->rel_dy += iy;
     }
-    px = nx;
-    py = ny;
-    if (kbm_ok(s)) queue_move(s);
+    z->px = nx;
+    z->py = ny;
+    if (kbm_ok(z, s)) queue_move(z, s);
 }
 
-void hub_button(int btn, int down)
+void hub_motion(int dx, int dy)
+{
+    Seat *z = kbd_seat();
+    ptr_moved_ms = now_ms();
+    note_wiggle(dx, dy, ptr_moved_ms);
+    {   /* "trace on": m <ms> <dx> <dy> <wiggle> for each motion, raw */
+        int i;
+        char t[80];
+        int n = snprintf(t, sizeof t, "m %lld %d %d %.2f\n", ptr_moved_ms, dx, dy, wiggle_now(ptr_moved_ms));
+        for (i = 0; i < MAX_CONNS; i++)
+            if (conns[i].kind == CONN_PANEL && conns[i].trace && !conns[i].dead) conn_write(&conns[i], t, (size_t)n);
+    }
+    if (z->offline) seat_wake(z);
+    seat_motion(z, dx, dy);
+}
+
+static void seat_button(Seat *z, int btn, int down)
 {
     static const int evbtn[] = { 0, BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA };
-    Screen *s = active;
+    Screen *s = z->active;
     unsigned char p[2];
-    touched = 1;
+    z->touched = 1;
 
     if (btn < 1 || btn > 5) return;
-    if (down) buttons |= 1 << btn;
-    else buttons &= ~(1 << btn);
-    if (!s || !kbm_ok(s)) return;
+    if (down) z->buttons |= 1 << btn;
+    else z->buttons &= ~(1 << btn);
+    if (!s || !kbm_ok(z, s)) return;
     s->last_input_ms = now_ms();
     flush_move(s);
+    if (s->mover != z && !is_rel(s)) { queue_move(z, s); flush_move(s); }   /* click where this seat points */
     if (s->local) { uinput_key(evbtn[btn], down); return; }
     p[0] = (unsigned char)btn;
     p[1] = (unsigned char)down;
     send_frame(s->in, RKM_BUTTON, p, 2);
 }
 
-void hub_wheel(int dy, int dx)
+void hub_button(int btn, int down)
 {
-    Screen *s = active;
-    unsigned char p[4];
-    touched = 1;
+    if (kbd_seat()->offline) seat_wake(kbd_seat());
+    seat_button(kbd_seat(), btn, down);
+}
 
-    if (!s || !kbm_ok(s)) return;
+static void seat_wheel(Seat *z, int dy, int dx)
+{
+    Screen *s = z->active;
+    unsigned char p[4];
+    z->touched = 1;
+
+    if (!s || !kbm_ok(z, s)) return;
     s->last_input_ms = now_ms();
     if (s->local) { uinput_wheel(dy, dx); return; }
     RKM_PUT16(p, (unsigned)dy & 0xFFFF);
@@ -727,23 +884,40 @@ void hub_wheel(int dy, int dx)
     send_frame(s->in, RKM_WHEEL, p, 4);
 }
 
-static void run_command(char *cmd, Conn *reply);
+void hub_wheel(int dy, int dx)
+{
+    if (kbd_seat()->offline) seat_wake(kbd_seat());
+    seat_wheel(kbd_seat(), dy, dx);
+}
 
-void hub_key(int evcode, int usage, int state)
+static void run_seat_command(Seat *z, int argc, char **argv, Conn *r);
+
+/* Does s get this seat's keyboard even while out of the seat's focus? */
+static int seat_keeps_keys(const Seat *z, const Screen *s)
+{
+    int i;
+    for (i = 0; i < cfg.nacc; i++) {
+        const Accessory *a = &cfg.acc[i];
+        if (!a->scripted && a->kind == ACC_KBM && &cfg.seats[a->seat] == z && acc_keeps(a, s)) return 1;
+    }
+    return 0;
+}
+
+static void seat_key(Seat *z, int evcode, int usage, int state)
 {
     Screen *s;
     unsigned char p[3];
     int is_mod = usage >= HID_LCTRL && usage <= HID_RGUI, i;
-    touched = 1;
+    z->touched = 1;
 
     if (is_mod && state != RKM_KEY_REPEAT) {
         unsigned char bit = (unsigned char)(1 << (usage - HID_LCTRL));
-        if (state) mods |= bit;
-        else mods &= (unsigned char)~bit;
+        if (state) z->mods |= bit;
+        else z->mods &= (unsigned char)~bit;
     }
 
     if (usage && !is_mod && state == RKM_KEY_DOWN) {
-        unsigned char held = (unsigned char)((mods | (mods >> 4)) & 0x0F);
+        unsigned char held = (unsigned char)((z->mods | (z->mods >> 4)) & 0x0F);
         /* emergency exit, whatever the config says: ctrl+alt+shift+escape */
         if (usage == HID_ESC && held == (RKM_MOD_LCTRL | RKM_MOD_LSHIFT | RKM_MOD_LALT)) {
             logmsg("emergency exit key pressed");
@@ -759,67 +933,46 @@ void hub_key(int evcode, int usage, int state)
         for (i = 0; i < cfg.nhotkeys; i++) {
             Hotkey *h = &cfg.hotkeys[i];
             if (h->usage == usage && (h->mods & 0x0F) == held) {
-                char cmd[sizeof h->cmd];
-                swallowed[usage] = 1;
+                char cmd[sizeof h->cmd], *av[10], *save = NULL, *tok;
+                int ac = 0;
+                z->swallowed[usage] = 1;
                 memcpy(cmd, h->cmd, sizeof cmd);
-                run_command(cmd, NULL);
+                for (tok = strtok_r(cmd, " \t", &save); tok && ac < 10; tok = strtok_r(NULL, " \t", &save))
+                    av[ac++] = tok;
+                if (ac) run_seat_command(z, ac, av, NULL);   /* as the seat that pressed it */
                 return;
             }
         }
     }
-    if (usage && swallowed[usage]) {
-        if (state == RKM_KEY_UP) swallowed[usage] = 0;
+    if (usage && z->swallowed[usage]) {
+        if (state == RKM_KEY_UP) z->swallowed[usage] = 0;
         return;
     }
 
-    /* the machine in focus, and linked machines that take keys out of focus */
+    /* the seat's machine, and machines that keep its keyboard out of focus */
     for (i = 0; i < cfg.nscreens; i++) {
         s = &cfg.screens[i];
-        if (!kbm_ok(s) || !ready(s) || (s != active && !acc_keeps(&cfg.acc[0], s))) continue;
+        if (!ready(s)) continue;
+        if (s == z->active ? !kbm_ok(z, s) : !seat_keeps_keys(z, s)) continue;
         s->last_input_ms = s->last_key_ms = now_ms();
+        if (s == z->active && usage) z->down[usage] = state != RKM_KEY_UP;
         if (s->local) { uinput_key(evcode, state); continue; }
         if (!usage || !(s->kbd || s->in)) continue;
-        if (s == active) flush_move(s);
+        if (s == z->active) flush_move(s);
         p[0] = remap_usage(s, (unsigned char)usage);
         p[1] = (unsigned char)state;
-        p[2] = remap_mods(s, mods);
+        p[2] = remap_mods(s, z->mods);
         send_frame(s->kbd ? s->kbd : s->in, RKM_KEY, p, 3);   /* a hardware keyboard wins */
     }
 }
 
-/* Claude's keyboard (an ACC_KEYS accessory): a script types on one machine,
- * named, while the user's keyboard + mouse stay wherever they are.  It goes
- * where the accessories page lets it - linked there, and kept there unless
- * that machine is in focus - and never to any other machine.  Its modifiers
- * are its own, one set per machine.  Returns NULL or why not. */
-static unsigned char claude_mods[MAX_SCREENS];
-
-static const char *claude_key(Screen *s, int usage, int state)
+void hub_key(int evcode, int usage, int state)
 {
-    Accessory *a = NULL;
-    unsigned char p[3];
-    int i;
-
-    for (i = 0; i < cfg.nacc && !a; i++)
-        if (cfg.acc[i].kind == ACC_KEYS) a = &cfg.acc[i];
-    if (!a) return "there is no script keyboard";
-    i = (int)(s - cfg.screens);
-    if (!a->player[i]) return "Claude's keyboard is not linked to that machine";
-    if (s != active && !acc_keeps(a, s)) return "Claude's keyboard is not kept on that machine (out of focus)";
-    if (!ready(s)) return "that machine is offline";
-    if (!s->local && !s->kbd && !s->in) return "that machine has no keyboard";
-    if (usage >= HID_LCTRL && usage <= HID_RGUI && state != RKM_KEY_REPEAT) {
-        unsigned char bit = (unsigned char)(1 << (usage - HID_LCTRL));
-        if (state) claude_mods[i] |= bit;
-        else claude_mods[i] &= (unsigned char)~bit;
+    if (kbd_seat()->offline) {
+        if (state != RKM_KEY_DOWN) return;     /* a key let go of from before */
+        seat_wake(kbd_seat());
     }
-    s->last_input_ms = s->last_key_ms = now_ms();
-    if (s->local) { uinput_key(hid_to_evdev(usage), state); return NULL; }
-    p[0] = remap_usage(s, (unsigned char)usage);
-    p[1] = (unsigned char)state;
-    p[2] = remap_mods(s, claude_mods[i]);
-    send_frame(s->kbd ? s->kbd : s->in, RKM_KEY, p, 3);   /* a hardware keyboard wins */
-    return NULL;
+    seat_key(kbd_seat(), evcode, usage, state);
 }
 
 /* ---- game pads ------------------------------------------------------------
@@ -842,7 +995,7 @@ static int pad_player(const Accessory *a, const Screen *s)
 /* Does this pad's input go to s right now? */
 static int pad_goes(const Accessory *a, const Screen *s)
 {
-    return a->kind == ACC_PAD && a->present && pad_player(a, s) && (s == active || acc_keeps(a, s));
+    return a->kind == ACC_PAD && a->present && pad_player(a, s) && (s == cfg.seats[a->seat].active || acc_keeps(a, s));
 }
 
 int hub_pad_on_desktop(const Accessory *a)
@@ -927,14 +1080,15 @@ static void pads_enter(Screen *s)
     else pads_take(s);
 }
 
-/* Hand focus to the next / previous machine this pad may drive */
+/* Hand the pad's seat's focus to the next / previous machine this pad may drive */
 static void pad_cycle(const Accessory *a, int dir)
 {
-    int i, n = cfg.nscreens, cur = active ? (int)(active - cfg.screens) : -1;
+    Seat *z = &cfg.seats[a->seat];
+    int i, n = cfg.nscreens, cur = z->active ? (int)(z->active - cfg.screens) : -1;
     for (i = 1; i <= n; i++) {
         Screen *s = &cfg.screens[((cur + dir * i) % n + n) % n];
-        if (s != active && ready(s) && pad_player(a, s) && (has_pads(s) || screen_is_desktop(s))) {
-            goto_screen(s);
+        if (s != z->active && ready(s) && pad_player(a, s) && (has_pads(s) || screen_is_desktop(s))) {
+            goto_screen(z, s);
             return;
         }
     }
@@ -946,7 +1100,8 @@ void hub_pad(Accessory *a)
     unsigned pressed = a->st.buttons & ~pad_prev[ai];
 
     pad_prev[ai] = a->st.buttons;
-    touched = 1;
+    if (!a->scripted && pressed && cfg.seats[a->seat].offline) seat_wake(&cfg.seats[a->seat]);
+    cfg.seats[a->seat].touched = 1;
     pad_eff[ai] = a->st;
     if ((a->st.buttons & RKM_PAD_GUIDE) && (pressed & (RKM_PAD_RB | RKM_PAD_LB))) {
         pad_latched[ai] = 1;
@@ -966,8 +1121,8 @@ void hub_pad(Accessory *a)
     }
 }
 
-/* The control port's pad: scripts drive the machine in focus as player 1 */
-static Accessory *script_pad(void)
+/* The control port's pad: scripts drive the seat's machine as player 1 */
+static Accessory *script_pad(Seat *z)
 {
     static Accessory *a;
     int i;
@@ -978,10 +1133,11 @@ static Accessory *script_pad(void)
         strcpy(a->label, "Scripts (control port)");
         a->kind = ACC_PAD;
         a->color = -1;
-        a->scripted = 1;
     }
     if (a) {
+        a->scripted = 1;
         a->present = 1;
+        a->seat = (int)(z - cfg.seats);
         for (i = 0; i < cfg.nscreens; i++) a->player[i] = 1;
     }
     return a;
@@ -1043,11 +1199,32 @@ static int accessory_command(int argc, char **argv, Conn *r, int panel)
         logmsg("%s: kept out of focus %s%s", a->name, on ? "on " : "no longer on ", all ? "everywhere" : s->name);
         for (i = 0; a->kind == ACC_PAD && i < cfg.nscreens; i++) {
             Screen *t = &cfg.screens[i];
-            if (!pad_player(a, t) || t == active) continue;
+            if (!pad_player(a, t) || seats_on(t)) continue;
             if (pads_keep(t)) pads_take(t);
             else pads_leave(t);
         }
         config_save_state();
+        if (!panel) ctl_printf(r, "ok\n");
+        return 1;
+    }
+    if (!strcasecmp(argv[0], "own") && argc == 3) {
+        /* own <accessory> <seat>: it belongs to that seat now, and follows its focus */
+        Seat *z = seat_by_name(argv[2]);
+        int i;
+        if (!(a = acc_by_name(argv[1])) || a->scripted || !z) {
+            ctl_printf(r, "%sno such accessory or seat\n", err);
+            return 1;
+        }
+        if (&cfg.seats[a->seat] != z) {
+            Seat *old = &cfg.seats[a->seat];
+            if (a->kind == ACC_KBM && old->active) release_held(old, old->active);
+            a->seat = (int)(z - cfg.seats);
+            logmsg("%s now belongs to %s", a->name, z->name);
+            for (i = 0; i < cfg.nscreens; i++)
+                if (a->kind == ACC_PAD && pad_player(a, &cfg.screens[i])) pads_update(&cfg.screens[i], 0);
+            if (a == &cfg.acc[0]) lights_set(z->active ? lights_color(z->active) : 0xFFFFFFFF);
+            config_save_state();
+        }
         if (!panel) ctl_printf(r, "ok\n");
         return 1;
     }
@@ -1073,14 +1250,31 @@ static int plug_console(Screen *c, Screen *box, Conn *r, int panel)
     return 0;
 }
 
+/* seat <name> on <screen> at x,y [on monitor m] [locked] color=rrggbb clipboard=<bytes>,
+ * or "seat <name> offline" / "seat <name> nowhere" */
+static void seat_line(Conn *r, const Seat *z)
+{
+    ctl_printf(r, "seat %-12s ", z->name);
+    if (z->active) {
+        ctl_printf(r, "on %s at %d,%d", z->active->name, (int)z->px, (int)z->py);
+        if (z->mon) ctl_printf(r, " on monitor %s", z->mon->name);
+    } else {
+        ctl_printf(r, z->offline ? "offline" : "nowhere");
+    }
+    ctl_printf(r, "%s color=%06lx clipboard=%lu\n", z->locked ? " [locked]" : "", (unsigned long)z->color,
+               (unsigned long)z->clip_len);
+}
+
 static void cmd_status(Conn *r)
 {
+    Seat *z = home();
     int i;
 
-    ctl_printf(r, "active: %s", active ? active->name : "(none)");
-    if (active) ctl_printf(r, " at %d,%d", (int)px, (int)py);
-    ctl_printf(r, "%s%s%s\n", active_mon ? " on monitor " : "", active_mon ? active_mon->name : "",
-               locked ? " [locked]" : "");
+    ctl_printf(r, "active: %s", z->active ? z->active->name : "(none)");
+    if (z->active) ctl_printf(r, " at %d,%d", (int)z->px, (int)z->py);
+    ctl_printf(r, "%s%s%s\n", z->mon ? " on monitor " : "", z->mon ? z->mon->name : "",
+               z->locked ? " [locked]" : "");
+    for (i = 0; i < cfg.nseats; i++) seat_line(r, &cfg.seats[i]);
     for (i = 0; i < cfg.nscreens; i++) {
         Screen *s = &cfg.screens[i];
         ctl_printf(r, "screen %-12s %4dx%-4d %s input=%s clipboard=%s", s->name, s->w, s->h,
@@ -1109,7 +1303,8 @@ static void cmd_status(Conn *r)
         const Accessory *a = &cfg.acc[i];
         int k, any = 0;
         if (a->scripted) continue;
-        ctl_printf(r, "accessory %-24s %s %s ->", a->name, acc_kinds[a->kind].id, a->present || a->kind == ACC_KBM ? "here" : "away");
+        ctl_printf(r, "accessory %-24s %s %s seat=%s ->", a->name, acc_kinds[a->kind].id,
+                   a->present || a->kind == ACC_KBM ? "here" : "away", cfg.seats[a->seat].name);
         for (k = 0; k < cfg.nscreens; k++)
             if (a->player[k]) {
                 ctl_printf(r, a->kind == ACC_PAD ? " %s:P%d" : " %s", cfg.screens[k].name, a->player[k]);
@@ -1117,30 +1312,109 @@ static void cmd_status(Conn *r)
             }
         ctl_printf(r, "%s  (%s)\n", any ? "" : " nothing", a->label);
     }
-    ctl_printf(r, "clipboard: %lu bytes, generation %u, from %s\n", (unsigned long)clip_len,
-               clip_gen, clip_src ? clip_src->name : "-");
+    for (i = 0; i < cfg.nseats; i++) {
+        z = &cfg.seats[i];
+        ctl_printf(r, "clipboard %s: %lu bytes, generation %u, from %s\n", z->name, (unsigned long)z->clip_len,
+                   z->clip_gen, z->clip_src ? z->clip_src->name : "-");
+    }
 }
 
-static void run_command(char *cmd, Conn *r)
+/* Input to a seat that went offline brings it back */
+static int seat_input_ok(Seat *z, Conn *r)
 {
-    char *argv[10] = { 0 }, *save = NULL, *tok;
-    int argc = 0;
+    if (z->offline) seat_wake(z);
+    if (!z->active) { ctl_printf(r, "error: %s is not on any machine\n", z->name); return 0; }
+    return 1;
+}
 
-    for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 10; tok = strtok_r(NULL, " \t\r\n", &save))
-        argv[argc++] = tok;
-    if (argc == 0) return;
+static int seat_goto(Seat *z, Screen *s, Conn *r)
+{
+    if (!ready(s)) { ctl_printf(r, "error: %s is offline\n", s->name); return -1; }
+    if (!may_go(z, s)) { ctl_printf(r, "error: %s is not wired to %s\n", z->name, s->name); return -1; }
+    goto_screen(z, s);
+    return 0;
+}
 
+/* Remove a seat: its accessories go to the first seat */
+static void seat_remove(Seat *z)
+{
+    int zi = (int)(z - cfg.seats), i;
+    seat_offline(z);
+    free(z->clip);
+    for (i = 0; i < cfg.nacc; i++) {
+        if (cfg.acc[i].seat == zi) cfg.acc[i].seat = 0;
+        else if (cfg.acc[i].seat > zi) cfg.acc[i].seat--;
+    }
+    for (i = 0; i < cfg.nscreens; i++) {
+        Screen *s = &cfg.screens[i];
+        Seat **p[3] = { &s->clip_seat, &s->clip_owner, &s->mover };
+        int k;
+        for (k = 0; k < 3; k++) {
+            if (*p[k] == z) *p[k] = NULL;
+            else if (*p[k] > z) (*p[k])--;
+        }
+    }
+    memmove(z, z + 1, (size_t)(cfg.nseats - zi - 1) * sizeof *z);
+    cfg.nseats--;
+}
+
+/* Seats: add, remove, colour.  Returns 1 if the command was one of these. */
+static int seat_admin(int argc, char **argv, Conn *r, int panel)
+{
+    const char *err = panel ? "error " : "error: ";
+    Seat *z;
+    if (!strcasecmp(argv[1], "add") && argc >= 3) {
+        /* seat add <name> [rrggbb] */
+        if (seat_by_name(argv[2])) { ctl_printf(r, "%sthere is a seat %s already\n", err, argv[2]); return 1; }
+        if (!strcasecmp(argv[2], "add") || !strcasecmp(argv[2], "remove") || !strcasecmp(argv[2], "color") ||
+            !(z = seat_add(argv[2], argc >= 4 ? (long)(strtoul(argv[3][0] == '#' ? argv[3] + 1 : argv[3], NULL, 16) & 0xFFFFFF)
+                                              : 0x60A5FA))) {
+            ctl_printf(r, "%scannot add that seat\n", err);
+            return 1;
+        }
+        logmsg("seat %s added", z->name);
+        config_save_state();
+        if (!panel) ctl_printf(r, "ok\n");
+        return 1;
+    }
+    if (!strcasecmp(argv[1], "remove") && argc == 3) {
+        /* seat remove <name>: not the first seat */
+        if (!(z = seat_by_name(argv[2])) || z == home()) { ctl_printf(r, "%scannot remove that seat\n", err); return 1; }
+        logmsg("seat %s removed", z->name);
+        seat_remove(z);
+        config_save_state();
+        if (!panel) ctl_printf(r, "ok\n");
+        return 1;
+    }
+    if (!strcasecmp(argv[1], "color") && argc == 4) {
+        /* seat color <name> <rrggbb> */
+        if (!(z = seat_by_name(argv[2]))) { ctl_printf(r, "%sno seat %s\n", err, argv[2]); return 1; }
+        z->color = (long)(strtoul(argv[3][0] == '#' ? argv[3] + 1 : argv[3], NULL, 16) & 0xFFFFFF);
+        config_save_state();
+        if (!panel) ctl_printf(r, "ok\n");
+        return 1;
+    }
+    return 0;
+}
+
+static void cmd_pointer(Seat *z, Conn *r);
+
+/* A command as seat z: everything a person at the desk can do */
+static void run_seat_command(Seat *z, int argc, char **argv, Conn *r)
+{
     if (!strcasecmp(argv[0], "status")) {
         cmd_status(r);
     } else if (!strcasecmp(argv[0], "goto") && argc == 2) {
         Screen *s = screen_by_name(argv[1]);
         if (!s) ctl_printf(r, "error: no screen %s\n", argv[1]);
-        else if (!ready(s)) ctl_printf(r, "error: %s is offline\n", s->name);
-        else { goto_screen(s); ctl_printf(r, "ok\n"); }
+        else if (seat_goto(z, s, r) == 0) ctl_printf(r, "ok\n");
+    } else if (!strcasecmp(argv[0], "offline")) {
+        seat_offline(z);
+        ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "show") && argc >= 2) {
         /* route a machine's video to a monitor (default: the one under the pointer) */
         Screen *s = screen_by_name(argv[1]);
-        Monitor *m = argc >= 3 ? monitor_by_name(argv[2]) : active_mon;
+        Monitor *m = argc >= 3 ? monitor_by_name(argv[2]) : z->mon;
         if (!s || !s->extron_input) ctl_printf(r, "error: %s has no switcher input\n", argv[1]);
         else if (!m || m->fixed) ctl_printf(r, "error: no switched monitor to show it on\n");
         else { extron_tie(s->extron_input, m->extron_output); ctl_printf(r, "ok\n"); }
@@ -1148,40 +1422,48 @@ static void run_command(char *cmd, Conn *r)
         extron_tie(atoi(argv[1]), atoi(argv[2]));
         ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "lock")) {
-        locked = argc >= 2 ? !strcasecmp(argv[1], "on") : !locked;
-        ctl_printf(r, "edge switching %s\n", locked ? "locked" : "unlocked");
+        z->locked = argc >= 2 ? !strcasecmp(argv[1], "on") : !z->locked;
+        ctl_printf(r, "edge switching %s\n", z->locked ? "locked" : "unlocked");
     } else if (!strcasecmp(argv[0], "rel") && argc == 3) {          /* synthetic input */
-        hub_motion(atoi(argv[1]), atoi(argv[2]));
-        ctl_printf(r, "ok\n");
+        if (seat_input_ok(z, r)) {
+            if (z == kbd_seat()) ptr_moved_ms = now_ms();
+            seat_motion(z, atoi(argv[1]), atoi(argv[2]));
+            ctl_printf(r, "ok\n");
+        }
     } else if (!strcasecmp(argv[0], "warp") && argc == 3) {
-        /* warp <x> <y>: put the pointer there on the machine in control
+        /* warp <x> <y>: put the seat's pointer there on its machine
          * (its own pixels; the phone page's screen view taps with it) */
-        if (!active || !kbm_ok(active) || is_rel(active)) ctl_printf(r, "error: cannot warp there\n");
-        else {
-            px = clampd(atof(argv[1]), 0, active->w - 1);
-            py = clampd(atof(argv[2]), 0, active->h - 1);
-            queue_move(active);
+        if (!seat_input_ok(z, r)) {
+        } else if (!kbm_ok(z, z->active) || is_rel(z->active)) {
+            ctl_printf(r, "error: cannot warp there\n");
+        } else {
+            z->px = clampd(atof(argv[1]), 0, z->active->w - 1);
+            z->py = clampd(atof(argv[2]), 0, z->active->h - 1);
+            queue_move(z, z->active);
             ctl_printf(r, "ok\n");
         }
     } else if (!strcasecmp(argv[0], "btn") && argc == 3) {
-        hub_button(atoi(argv[1]), atoi(argv[2]));
-        ctl_printf(r, "ok\n");
+        if (seat_input_ok(z, r)) { seat_button(z, atoi(argv[1]), atoi(argv[2])); ctl_printf(r, "ok\n"); }
     } else if (!strcasecmp(argv[0], "wheel") && argc == 2) {
-        hub_wheel(atoi(argv[1]), 0);
-        ctl_printf(r, "ok\n");
+        if (seat_input_ok(z, r)) { seat_wheel(z, atoi(argv[1]), 0); ctl_printf(r, "ok\n"); }
     } else if (!strcasecmp(argv[0], "key") && argc == 3) {
         int u = key_by_name(argv[1]);
         if (u < 0) ctl_printf(r, "error: unknown key %s\n", argv[1]);
-        else { hub_key(hid_to_evdev(u), u, atoi(argv[2])); ctl_printf(r, "ok\n"); }
+        else if (seat_input_ok(z, r)) { seat_key(z, hid_to_evdev(u), u, atoi(argv[2])); ctl_printf(r, "ok\n"); }
     } else if (!strcasecmp(argv[0], "key-to") && argc == 4) {
-        /* key-to <screen> <name> <0|1|2>: Claude's keyboard, on that machine only */
+        /* key-to <screen> <name> <0|1|2>: Claude's seat goes there (if not
+         * there yet) and presses the key; from before seats */
         Screen *s = screen_by_name(argv[1]);
+        Seat *c = seat_by_name("claude");
         int u = key_by_name(argv[2]);
-        const char *why;
         if (!s) ctl_printf(r, "error: no screen %s\n", argv[1]);
         else if (u < 0) ctl_printf(r, "error: unknown key %s\n", argv[2]);
-        else if ((why = claude_key(s, u, atoi(argv[3])))) ctl_printf(r, "error: %s: %s\n", s->name, why);
-        else ctl_printf(r, "ok\n");
+        else if (!c) ctl_printf(r, "error: there is no claude seat\n");
+        else if (!s->local && !s->kbd && !s->in) ctl_printf(r, "error: %s: that machine has no keyboard\n", s->name);
+        else if ((c->active == s || seat_goto(c, s, r) == 0) && c->active == s) {
+            seat_key(c, hid_to_evdev(u), u, atoi(argv[3]));
+            ctl_printf(r, "ok\n");
+        }
     } else if (!strcasecmp(argv[0], "plug") && argc == 2) {
         /* plug <console>: it is the one wired into its box now */
         Screen *s = screen_by_name(argv[1]);
@@ -1191,7 +1473,7 @@ static void run_command(char *cmd, Conn *r)
         if (plug_console(NULL, screen_by_name(argv[1]), r, 0) == 0) ctl_printf(r, "ok\n");
     } else if (accessory_command(argc, argv, r, 0)) {
     } else if (!strcasecmp(argv[0], "pad") && argc >= 2) {
-        /* pad <buttons hex> [lt rt lx ly rx ry]: as if the real pad did it */
+        /* pad <buttons hex> [lt rt lx ly rx ry]: as if a real pad of the seat's did it */
         PadState ps;
         memset(&ps, 0, sizeof ps);
         ps.buttons = (unsigned)strtoul(argv[1], NULL, 16) & 0xFFFF;
@@ -1199,10 +1481,12 @@ static void run_command(char *cmd, Conn *r)
         if (argc >= 6) { ps.lx = (short)atoi(argv[4]); ps.ly = (short)atoi(argv[5]); }
         if (argc >= 8) { ps.rx = (short)atoi(argv[6]); ps.ry = (short)atoi(argv[7]); }
         {
-            Accessory *a = script_pad();
+            Accessory *a = script_pad(z);
             if (a) { a->st = ps; hub_pad(a); }
         }
         ctl_printf(r, "ok\n");
+    } else if (!strcasecmp(argv[0], "pointer")) {
+        cmd_pointer(z, r);
     } else if (!strcasecmp(argv[0], "ddc")) {
         /* ddc: what each DDC monitor reports; ddc <monitor> <input>: switch it */
         int i, v;
@@ -1219,9 +1503,10 @@ static void run_command(char *cmd, Conn *r)
             ctl_printf(r, "ok\n");
         }
     } else if (!strcasecmp(argv[0], "lights") && argc == 2) {
-        /* lights #rrggbb | off (keyboard's own) | auto (the active machine's) */
+        /* lights #rrggbb | off (keyboard's own) | auto (its seat's machine's) */
+        Seat *k = kbd_seat();
         if (!strcasecmp(argv[1], "off")) lights_set(0xFFFFFFFF);
-        else if (!strcasecmp(argv[1], "auto")) lights_set(active ? lights_color(active) : 0xFFFFFFFF);
+        else if (!strcasecmp(argv[1], "auto")) lights_set(k->active ? lights_color(k->active) : 0xFFFFFFFF);
         else lights_set(strtoul(argv[1][0] == '#' ? argv[1] + 1 : argv[1], NULL, 16));
         ctl_printf(r, "ok\n");
     } else if (!strcasecmp(argv[0], "quit")) {
@@ -1231,11 +1516,36 @@ static void run_command(char *cmd, Conn *r)
         logmsg("reset asked for");
         quit = restart = 1;
     } else {
-        ctl_printf(r, "error: commands are status, goto <screen>, show <screen> [monitor], "
-                      "tie <in> <out>, lock [on|off], rel <dx> <dy>, warp <x> <y>, btn <n> <0|1>, "
-                      "key <name> <0|1>, key-to <screen> <name> <0|1>, wheel <n>, pad <hex> [lt rt lx ly rx ry], plug <console>, "
-                      "unplug <box>, link <acc> <screen> [player], unlink <acc> <screen>, "
-                      "keep <acc> <screen> on|off, keepall <acc> on|off, reset, quit\n");
+        ctl_printf(r, "error: commands are status, seats, seat <name> <command>, seat add <name> [rrggbb], "
+                      "seat remove <name>, seat color <name> <rrggbb>, goto <screen>, offline, "
+                      "show <screen> [monitor], tie <in> <out>, lock [on|off], rel <dx> <dy>, warp <x> <y>, "
+                      "btn <n> <0|1>, key <name> <0|1>, key-to <screen> <name> <0|1>, wheel <n>, "
+                      "pad <hex> [lt rt lx ly rx ry], pointer, plug <console>, unplug <box>, "
+                      "link <acc> <screen> [player], unlink <acc> <screen>, keep <acc> <screen> on|off, "
+                      "keepall <acc> on|off, own <acc> <seat>, reset, quit\n");
+    }
+}
+
+static void run_command(char *cmd, Conn *r)
+{
+    char *argv[12] = { 0 }, *save = NULL, *tok;
+    int argc = 0, i;
+
+    for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 12; tok = strtok_r(NULL, " \t\r\n", &save))
+        argv[argc++] = tok;
+    if (argc == 0) return;
+
+    if (!strcasecmp(argv[0], "seats")) {
+        for (i = 0; i < cfg.nseats; i++) seat_line(r, &cfg.seats[i]);
+        ctl_printf(r, "ok\n");
+    } else if (!strcasecmp(argv[0], "seat") && argc >= 3) {
+        /* seat <name> <command ...>: the command as that seat */
+        Seat *z;
+        if (seat_admin(argc, argv, r, 0)) return;
+        if (!(z = seat_by_name(argv[1]))) { ctl_printf(r, "error: no seat %s\n", argv[1]); return; }
+        run_seat_command(z, argc - 2, argv + 2, r);
+    } else {
+        run_seat_command(home(), argc, argv, r);
     }
 }
 
@@ -1315,10 +1625,25 @@ static void layout_json(Sbuf *b)
     int i, k;
     char about[sizeof cfg.screens[0].about];
 
+    /* "active", "locked" and each screen's "focus" are the first seat's (for old panels) */
     sb_printf(b, "{\"active\":");
-    sb_str(b, active ? active->name : "");
+    sb_str(b, home()->active ? home()->active->name : "");
+    sb_printf(b, ",\"seats\":[");
+    for (i = 0; i < cfg.nseats; i++) {
+        const Seat *z = &cfg.seats[i];
+        sb_printf(b, "%s{\"name\":", i ? "," : "");
+        sb_str(b, z->name);
+        sb_printf(b, ",\"label\":");
+        sb_str(b, z->label[0] ? z->label : z->name);
+        sb_printf(b, ",\"color\":%ld,\"active\":", z->color);
+        sb_str(b, z->active ? z->active->name : "");
+        sb_printf(b, ",\"monitor\":");
+        sb_str(b, z->mon ? z->mon->name : "");
+        sb_printf(b, ",\"locked\":%d,\"offline\":%d,\"devices\":%d}", z->locked, z->offline, seat_has_devices(z));
+    }
+    sb_printf(b, "]");
     sb_printf(b, ",\"locked\":%d,\"switcher\":{\"present\":%d,\"online\":%d,\"inputs\":%d,\"outputs\":%d}",
-              locked, cfg.extron_dev[0] != 0, extron_online(), cfg.extron_inputs, cfg.extron_outputs);
+              home()->locked, cfg.extron_dev[0] != 0, extron_online(), cfg.extron_inputs, cfg.extron_outputs);
     sb_printf(b, ",\"screens\":[");
     for (i = 0; i < cfg.nscreens; i++) {
         Screen *s = &cfg.screens[i];
@@ -1331,7 +1656,7 @@ static void layout_json(Sbuf *b)
         sb_printf(b, ",\"input\":%d,\"ready\":%d,\"agent\":%d,\"kbd\":%d,\"soft\":%d,\"w\":%d,\"h\":%d,"
                   "\"color\":%lu,\"colorSet\":%d,\"buddy\":%d,\"pads\":%d,\"focus\":%d,\"via\":",
                   s->extron_input, ready(s), !s->no_agent, s->kbd != NULL, s->in != NULL || s->local, s->w, s->h,
-                  lights_color(s), s->color >= 0, s->buddy != NULL, has_pads(s), s == active);
+                  lights_color(s), s->color >= 0, s->buddy != NULL, has_pads(s), s == home()->active);
         sb_str(b, s->via ? s->via->name : "");
         sb_printf(b, ",\"plugged\":");
         sb_str(b, s->plugged ? s->plugged->name : "");
@@ -1351,8 +1676,10 @@ static void layout_json(Sbuf *b)
         sb_str(b, a->label);
         sb_printf(b, ",\"kind\":");
         sb_str(b, acc_kinds[a->kind].id);
-        sb_printf(b, ",\"present\":%d,\"color\":%ld,\"keepAll\":%d,\"about\":", a->present || a->kind == ACC_KBM,
+        sb_printf(b, ",\"present\":%d,\"color\":%ld,\"keepAll\":%d,\"seat\":", a->present || a->kind == ACC_KBM,
                   a->color, a->keep_all);
+        sb_str(b, cfg.seats[a->seat].name);
+        sb_printf(b, ",\"about\":");
         sb_str(b, a->about);
         sb_printf(b, ",\"links\":[");
         for (j = 0; j < cfg.nscreens; j++)
@@ -1429,19 +1756,19 @@ static Monitor *monitor_at(int col, int row)
 /* pointer <screen> <monitor> <fx> <fy> <idle s> <wiggle>: where the pointer
  * is, as a fraction across and down the monitor it is on, and how hard it is
  * being wiggled (about-turns, fading over ~1.5 s) - lil' C watches it */
-static void cmd_pointer(Conn *r)
+static void cmd_pointer(Seat *z, Conn *r)
 {
-    const Screen *s = active;
-    double x0 = 0, y0 = 0, w, h;
+    const Screen *s = z->active;
+    double x0 = 0, y0 = 0, w, h, px = z->px, py = z->py;
     int ai;
-    if (!s || !active_mon) { ctl_printf(r, "pointer - - 0 0 -1 0\n"); return; }
+    if (!s || !z->mon) { ctl_printf(r, "pointer - - 0 0 -1 0\n"); return; }
     w = s->w > 1 ? s->w : 1;
     h = s->h > 1 ? s->h : 1;
     if (has_areas(s) && (ai = area_at(s, px, py)) >= 0) {
         x0 = s->area[ai][0]; y0 = s->area[ai][1];
         w = s->area[ai][2]; h = s->area[ai][3];
     }
-    ctl_printf(r, "pointer %s %s %.3f %.3f %.1f %.1f\n", s->name, active_mon->name,
+    ctl_printf(r, "pointer %s %s %.3f %.3f %.1f %.1f\n", s->name, z->mon->name,
                clampd((px - x0) / w, 0, 1), clampd((py - y0) / h, 0, 1),
                ptr_moved_ms ? (now_ms() - ptr_moved_ms) / 1000.0 : -1.0, wiggle_now(now_ms()));
 }
@@ -1479,13 +1806,29 @@ static const char *cmd_rest(char *from, const char *line_end)
 
 static void run_panel_command(char *cmd, Conn *r)
 {
-    char *argv[12] = { 0 }, *save = NULL, *tok;
+    char *argv_[12] = { 0 }, **argv = argv_, *save = NULL, *tok;
     const char *cmd_end = cmd + strlen(cmd);
     int argc = 0;
+
+    Seat *z = home();
+    char **av = argv;
 
     for (tok = strtok_r(cmd, " \t\r\n", &save); tok && argc < 12; tok = strtok_r(NULL, " \t\r\n", &save))
         argv[argc++] = tok;
     if (argc == 0) return;
+    if (!strcasecmp(argv[0], "seat") && argc >= 3) {
+        /* seat <name> goto|lock|offline|pointer ...: as that seat */
+        if (seat_admin(argc, argv, r, 1)) return;
+        if (!(z = seat_by_name(argv[1]))) { ctl_printf(r, "error no seat %s\n", argv[1]); return; }
+        argc -= 2;
+        av = argv + 2;
+        if (strcasecmp(av[0], "goto") && strcasecmp(av[0], "lock") && strcasecmp(av[0], "offline") &&
+            strcasecmp(av[0], "pointer")) {
+            ctl_printf(r, "error a seat can goto, lock, offline or pointer here\n");
+            return;
+        }
+    }
+    argv = av;
 
     if (!strcasecmp(argv[0], "layout")) {
         r->layout_sent = 0;                       /* send it again, even if unchanged */
@@ -1564,7 +1907,7 @@ static void run_panel_command(char *cmd, Conn *r)
         if (!s) { ctl_printf(r, "error no screen %s\n", argv[1]); return; }
         s->color = !strcasecmp(argv[2], "default") ? s->config_color : (long)(strtoul(argv[2], NULL, 16) & 0xFFFFFF);
         config_save_state();
-        if (s == active) lights_set(lights_color(s));
+        if (s == kbd_seat()->active) lights_set(lights_color(s));
     } else if (accessory_command(argc, argv, r, 1)) {
     } else if (!strcasecmp(argv[0], "plug") && argc == 2) {
         /* plug <console>: the cable from it now goes into its box */
@@ -1576,13 +1919,16 @@ static void run_panel_command(char *cmd, Conn *r)
     } else if (!strcasecmp(argv[0], "goto") && argc == 2) {
         Screen *s = screen_by_name(argv[1]);
         if (!s || !ready(s)) ctl_printf(r, "error %s is offline\n", argv[1]);
-        else goto_screen(s);
+        else if (!may_go(z, s)) ctl_printf(r, "error %s is not wired to %s\n", z->name, s->name);
+        else goto_screen(z, s);
+    } else if (!strcasecmp(argv[0], "offline")) {
+        seat_offline(z);
     } else if (!strcasecmp(argv[0], "lock")) {
-        locked = argc >= 2 ? !strcasecmp(argv[1], "on") : !locked;
+        z->locked = argc >= 2 ? !strcasecmp(argv[1], "on") : !z->locked;
     } else if (!strcasecmp(argv[0], "activity")) {
         cmd_activity(r);
     } else if (!strcasecmp(argv[0], "pointer")) {
-        cmd_pointer(r);
+        cmd_pointer(z, r);
     } else if (!strcasecmp(argv[0], "trace") && argc == 2) {
         /* trace on|off: stream raw mouse motion to this connection */
         r->trace = !strcasecmp(argv[1], "on");
@@ -1628,7 +1974,9 @@ static void run_panel_command(char *cmd, Conn *r)
     } else {
         ctl_printf(r, "error commands are layout, tie <screen> <monitor>, untie <monitor>, "
                       "move <monitor> <col> <row>, share <monitor> [on|off], color <screen> <RRGGBB|default>, "
-                      "goto <screen>, lock [on|off], activity, buddy <screen> show|hide [label], "
+                      "goto <screen>, lock [on|off], offline, seat <name> goto|lock|offline|pointer, "
+                      "seat add <name> [rrggbb], seat remove <name>, seat color <name> <rrggbb>, own <acc> <seat>, "
+                      "activity, buddy <screen> show|hide [label], "
                       "sound <screen> <id> <rate> <chirp> <gap> <lo> <hi> <level> <lead> <channels>, ping\n");
     }
 }
@@ -1736,7 +2084,7 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
             else kick(s->clip);
         }
         s->clip = c;
-        s->clip_gen = 0;
+        s->clip_seat = NULL;
     }
     if (c->caps & RKM_CAP_BUDDY) s->buddy = c;
     if (c->caps & RKM_CAP_SOUND) s->sound = c;
@@ -1747,9 +2095,14 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
            c->caps & RKM_CAP_REL ? " relative" : "", c->caps & RKM_CAP_KEYS ? " hardware-keyboard" : "",
            c->caps & RKM_CAP_PAD ? " game-pad" : "");
 
-    if (s == active) {
-        if (c->caps & (RKM_CAP_INPUT | RKM_CAP_KEYS | RKM_CAP_PAD)) do_enter(s);   /* agent restarted under the pointer */
-        else clip_sync(s);
+    if (first_seat_on(s)) {                  /* agent restarted under a seat's pointer */
+        Seat *z = s->clip_owner && s->clip_owner->active == s ? s->clip_owner : first_seat_on(s);
+        if (c->caps & (RKM_CAP_INPUT | RKM_CAP_KEYS | RKM_CAP_PAD)) {
+            s->mover = z;
+            enter_frames(z, s);
+            pads_enter(s);
+        }
+        clip_sync(z, s);
     } else if ((c->caps & RKM_CAP_PAD) && pads_keep(s)) {
         pads_take(s);                        /* a dongle (re)joined a machine that keeps a pad */
     }
@@ -1854,10 +2207,15 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
             s->w = (int)RKM_GET16(p);
             s->h = (int)RKM_GET16(p + 2);
             if (len >= 5 && p[4] && len >= 5 + 12u * p[4]) screen_monitors(s, p + 5, p[4]);
-            if (s == active) {
-                if (px > s->w - 1) px = s->w - 1;
-                if (py > s->h - 1) py = s->h - 1;
-                if (has_areas(s) && area_at(s, px, py) < 0) fit_area(s, &px, &py, px, py);
+            {
+                int k;
+                for (k = 0; k < cfg.nseats; k++) {
+                    Seat *z = &cfg.seats[k];
+                    if (z->active != s) continue;
+                    if (z->px > s->w - 1) z->px = s->w - 1;
+                    if (z->py > s->h - 1) z->py = s->h - 1;
+                    if (has_areas(s) && area_at(s, z->px, z->py) < 0) fit_area(s, &z->px, &z->py, z->px, z->py);
+                }
             }
             logmsg("%s: resolution is now %dx%d", s->name, s->w, s->h);
         }
@@ -2009,7 +2367,10 @@ static void housekeeping(void)
     long long now = now_ms();
     int i;
 
-    if (active_lost_ms && active && !ready(active) && now - active_lost_ms >= REJOIN_MS) relayout();
+    for (i = 0; i < cfg.nseats; i++) {
+        Seat *z = &cfg.seats[i];
+        if (z->lost_ms && z->active && !ready(z->active) && now - z->lost_ms >= REJOIN_MS) { relayout(); break; }
+    }
     if (now - last_ping < 1000) return;
     for (i = 0; i < MAX_CONNS; i++) {
         Conn *c = &conns[i];
@@ -2121,9 +2482,12 @@ int main(int argc, char **argv)
             pfd[n].events = (short)(POLLIN | (conns[i].out_len ? POLLOUT : 0));
             pc[n++] = &conns[i];
         }
-        if (active && active->move_pending) {
-            long long wait = active->min_move_ms - (now_ms() - active->last_move_ms);
-            timeout = wait < 1 ? 1 : (int)wait;
+        for (i = 0; i < cfg.nscreens; i++) {    /* moves held back by a machine's rate limit */
+            Screen *s = &cfg.screens[i];
+            if (s->move_pending) {
+                long long wait = s->min_move_ms - (now_ms() - s->last_move_ms);
+                if (wait < timeout) timeout = wait < 1 ? 1 : (int)wait;
+            }
         }
 
         if (poll(pfd, (nfds_t)n, timeout) < 0 && errno != EINTR) break;
@@ -2147,9 +2511,10 @@ int main(int argc, char **argv)
             }
         }
 
-        if (active && active->move_pending &&
-            now_ms() - active->last_move_ms >= active->min_move_ms)
-            flush_move(active);
+        for (i = 0; i < cfg.nscreens; i++) {
+            Screen *s = &cfg.screens[i];
+            if (s->move_pending && now_ms() - s->last_move_ms >= s->min_move_ms) flush_move(s);
+        }
         input_tick();
         pad_tick();
         lights_tick();
@@ -2159,7 +2524,8 @@ int main(int argc, char **argv)
         panel_push(0);
     }
 
-    if (active) do_leave(active);
+    for (i = 0; i < cfg.nseats; i++)          /* the last one off each machine sends LEAVE */
+        if (cfg.seats[i].active) { do_leave(&cfg.seats[i], cfg.seats[i].active); cfg.seats[i].active = NULL; }
     if (restart) {                              /* agents redo their displays too */
         unsigned char f = RKM_RESET_DISPLAYS;
         for (i = 0; i < MAX_CONNS; i++)

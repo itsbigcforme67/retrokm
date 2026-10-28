@@ -14,7 +14,6 @@ static void copy(char *dst, size_t n, const char *src);
 const AccKind acc_kinds[ACC_KINDS] = {
     { "kbm", "keyboard + mouse" },
     { "pad", "gamepads" },
-    { "keys", "keyboard" },
 };
 
 int acc_kind(const char *id)
@@ -22,7 +21,28 @@ int acc_kind(const char *id)
     int k;
     for (k = 0; k < ACC_KINDS; k++)
         if (!strcmp(acc_kinds[k].id, id)) return k;
+    if (!strcmp(id, "keys")) return ACC_KBM;   /* Claude's keyboard, before seats (2026-10-28) */
     return -1;
+}
+
+Seat *seat_by_name(const char *name)
+{
+    int i;
+    for (i = 0; i < cfg.nseats; i++)
+        if (!strcasecmp(cfg.seats[i].name, name)) return &cfg.seats[i];
+    return NULL;
+}
+
+Seat *seat_add(const char *name, long color)
+{
+    Seat *z = seat_by_name(name);
+    if (z) return z;
+    if (cfg.nseats >= MAX_SEATS || !*name) return NULL;
+    z = &cfg.seats[cfg.nseats++];
+    memset(z, 0, sizeof *z);
+    copy(z->name, sizeof z->name, name);
+    z->color = color;
+    return z;
 }
 
 Accessory *acc_by_name(const char *name)
@@ -126,7 +146,8 @@ int config_load(const char *path)
 {
     FILE *f = fopen(path, "r");
     char line[512];
-    enum { S_NONE, S_HUB, S_EXTRON, S_SCREEN, S_MONITOR, S_HOTKEYS } sec = S_NONE;
+    enum { S_NONE, S_HUB, S_EXTRON, S_SCREEN, S_MONITOR, S_HOTKEYS, S_SEAT } sec = S_NONE;
+    Seat *seat = NULL;
     Screen *scr = NULL;
     Monitor *mon = NULL;
     int lineno = 0, i;
@@ -174,6 +195,13 @@ int config_load(const char *path)
             if (!strcasecmp(kind, "hub")) sec = S_HUB;
             else if (!strcasecmp(kind, "extron")) sec = S_EXTRON;
             else if (!strcasecmp(kind, "hotkeys")) sec = S_HOTKEYS;
+            else if (!strcasecmp(kind, "seat")) {
+                /* [seat james]: someone at the desk; the first one is the
+                 * keyboard + mouse's and gets commands that name no seat */
+                if (!*name || !(seat = seat_add(name, 0x22C55E))) goto bad;
+                seat->from_config = 1;
+                sec = S_SEAT;
+            }
             else if (!strcasecmp(kind, "screen")) {
                 if (!*name || cfg.nscreens >= MAX_SCREENS) goto bad;
                 sec = S_SCREEN;
@@ -299,6 +327,11 @@ int config_load(const char *path)
             else if (!strcasecmp(k, "label")) copy(mon->label, sizeof mon->label, v);
             else goto bad;
             break;
+        case S_SEAT:
+            if (!strcasecmp(k, "color") && *v) seat->color = strtol(v[0] == '#' ? v + 1 : v, NULL, 16) & 0xFFFFFF;
+            else if (!strcasecmp(k, "label")) copy(seat->label, sizeof seat->label, v);
+            else goto bad;
+            break;
         case S_HOTKEYS: {
             Hotkey *h;
             if (cfg.nhotkeys >= MAX_HOTKEYS) goto bad;
@@ -385,14 +418,20 @@ bad:
         copy(k->about, sizeof k->about, "the USB keyboard and mouse on the hub");
         for (i = 0; i < cfg.nscreens; i++) k->player[i] = 1;
     }
-    {   /* Claude's keyboard: scripts type on it with "key-to" (main.c).  It may
-         * type into every machine but the hub's own desktop, out of focus too,
-         * until told otherwise on the accessories page */
-        Accessory *k = acc_new("claude", ACC_KEYS, "Claude's keyboard");
-        copy(k->about, sizeof k->about, "scripts on the hub's control port (key-to)");
+    if (cfg.nseats == 0) {
+        Seat *z = seat_add("main", 0x22C55E);
+        z->from_config = 1;
+    }
+    {   /* Claude's seat and its keyboard + mouse, played by scripts on the
+         * control port ("seat claude ..."); wired to every machine but the
+         * hub's own desktop until told otherwise */
+        Seat *z = seat_add("claude", 0xD97757);
+        Accessory *k = acc_new("claude", ACC_KBM, "Claude's keyboard + mouse");
+        if (!z->label[0]) copy(z->label, sizeof z->label, "Claude");
+        copy(k->about, sizeof k->about, "scripts on the hub's control port (seat claude ...)");
         for (i = 0; i < cfg.nscreens; i++) k->player[i] = !cfg.screens[i].local;
-        k->keep_all = 1;
         k->present = 1;
+        k->seat = (int)(z - cfg.seats);
     }
     load_state();
     return 0;
@@ -406,6 +445,7 @@ static void load_state(void)
     char line[256], name[32];
     int col, row, on, k;
     unsigned char seen[MAX_ACC];        /* accessories whose links the file lists */
+    int has_seats = 0;
 
     memset(seen, 0, sizeof seen);
 
@@ -470,9 +510,27 @@ static void load_state(void)
                 Accessory *a = acc_by_name(name);
                 if (a) a->color = (long)(rgb & 0xFFFFFF);
             }
+            else if (!strncmp(line, "seats ", 6)) has_seats = 1;
+            else if (sscanf(line, "seat %31s %x %n", name, &rgb, &col) == 2) {
+                Seat *z = seat_add(name, (long)(rgb & 0xFFFFFF));
+                if (z) z->color = (long)(rgb & 0xFFFFFF);
+                if (z && *trim(line + col)) copy(z->label, sizeof z->label, trim(line + col));
+            }
+            else if (sscanf(line, "aseat %31s %31s", name, what) == 2) {
+                Accessory *a = acc_by_name(name);
+                Seat *z = seat_by_name(what);
+                if (a && z) a->seat = (int)(z - cfg.seats);
+            }
         }
     }
     fclose(f);
+    if (!has_seats) {   /* a state file from before seats: Claude's keyboard was kept everywhere */
+        Accessory *a = acc_by_name("claude");
+        if (a) {
+            a->keep_all = 0;
+            memset(a->keep, 0, sizeof a->keep);
+        }
+    }
 }
 
 int config_save_state(void)
@@ -499,10 +557,14 @@ int config_save_state(void)
     for (i = 0; i < cfg.nscreens; i++)
         if (cfg.screens[i].color != cfg.screens[i].config_color && cfg.screens[i].color >= 0)
             fprintf(f, "color %s %06lx\n", cfg.screens[i].name, (unsigned long)cfg.screens[i].color);
+    fprintf(f, "seats 1\n");                        /* seats, and whose each accessory is */
+    for (i = 0; i < cfg.nseats; i++)
+        fprintf(f, "seat %s %06lx %s\n", cfg.seats[i].name, (unsigned long)cfg.seats[i].color, cfg.seats[i].label);
     for (i = 0; i < cfg.nacc; i++) {                 /* accessories and where they are linked */
         const Accessory *a = &cfg.acc[i];
         int k;
         fprintf(f, "accessory %s %s %s\n", a->name, acc_kinds[a->kind].id, a->label);
+        fprintf(f, "aseat %s %s\n", a->name, cfg.seats[a->seat].name);
         for (k = 0; k < cfg.nscreens; k++)
             if (a->player[k]) fprintf(f, "link %s %s %d\n", a->name, cfg.screens[k].name, a->player[k]);
         if (a->color >= 0) fprintf(f, "acolor %s %06lx\n", a->name, (unsigned long)a->color);

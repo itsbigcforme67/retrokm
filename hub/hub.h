@@ -13,7 +13,8 @@
 #define MAX_DEVICES   16
 #define EXTRON_MAX_IO 64
 #define MAX_AREAS     8
-#define MAX_ACC       12          /* accessories: the keyboard + mouse, Claude's keyboard, game pads */
+#define MAX_ACC       12          /* accessories: the keyboard + mouse, Claude's, game pads */
+#define MAX_SEATS     8           /* people (or scripts) at the desk, each with a focus */
 #define MAX_PADS      4           /* game pads open at once */
 #define MAX_PLAYERS   4           /* pad players (dongles) per screen */
 
@@ -25,11 +26,12 @@
  * RKM_ENTER), a machine that gets it out of focus must be told so when its
  * device joins and when "keep" is turned on, not only on focus changes -
  * see pads_take() in main.c. */
-enum { ACC_KBM, ACC_PAD, ACC_KEYS, ACC_KINDS };   /* ACC_KEYS: a keyboard that scripts type on */
+enum { ACC_KBM, ACC_PAD, ACC_KINDS };
 typedef struct { const char *id, *label; } AccKind;
 extern const AccKind acc_kinds[ACC_KINDS];
 
 struct Screen;
+struct Seat;
 
 enum { CONN_FREE = 0, CONN_AGENT, CONN_CTL, CONN_PANEL };
 
@@ -75,9 +77,10 @@ typedef struct Screen {
     char about[160];             /* how it is attached, for the panel (built by the hub) */
     long long last_input_ms;     /* the hub last sent it input (0 = never) */
     long long last_key_ms;       /* ... a key */
-    unsigned clip_gen;           /* hub clipboard generation this screen has */
-    double last_x, last_y;       /* where the pointer was when we left */
-    int have_last;
+    struct Seat *clip_seat;      /* whose clipboard it holds ... */
+    unsigned clip_gen;           /* ... and which generation of it */
+    struct Seat *clip_owner;     /* the seat that came last: its clipboard is that seat's */
+    struct Seat *mover;          /* the seat whose pointer it is drawing */
     int move_pending;
     int rel_dx, rel_dy;          /* pending motion for relative-only agents */
     long long last_move_ms;
@@ -135,7 +138,37 @@ typedef struct Accessory {
     int keep_all;                /* ... every machine it is linked to does */
     PadState st;                 /* pads: as last read */
     int scripted;                /* the control port's pad: not saved, not on the panel */
+    int seat;                    /* the seat it belongs to: its input follows that seat's focus */
 } Accessory;
+
+/* Someone at the desk (docs/SEATS.md): a person, or a script.  Each has
+ * its own focus, pointer, held keys and clipboard.  [0] is the first seat:
+ * commands that name no seat are its, and it gets a machine at start. */
+typedef struct Seat {
+    char name[32];
+    char label[48];
+    long color;                  /* 0xRRGGBB: its ring on the panel */
+    int from_config;
+    struct Screen *active;       /* the machine it drives, or NULL */
+    struct Monitor *mon;         /* the monitor its pointer is on */
+    double px, py;               /* its pointer, in that machine's pixels */
+    double rel_fx, rel_fy;       /* fractional remainder for relative agents */
+    unsigned char mods;          /* modifiers it holds, HID bit order */
+    int buttons;                 /* mouse buttons it holds (bit per button) */
+    int locked;                  /* edge switching off */
+    int offline;                 /* went offline: no focus, input dropped (devices bring it back) */
+    struct Screen *was;          /* ... where it was */
+    int touched;                 /* any input yet; until then the first seat takes the first machine */
+    long long lost_ms;           /* its machine's agent dropped: when */
+    unsigned char swallowed[256];
+    unsigned char down[256];     /* keys it holds down on its machine */
+    double last_x[MAX_SCREENS], last_y[MAX_SCREENS];   /* where its pointer was on each */
+    unsigned char have_last[MAX_SCREENS];
+    unsigned char *clip;         /* its clipboard: UTF-8, LF line endings */
+    size_t clip_len;
+    unsigned clip_gen;
+    struct Screen *clip_src;
+} Seat;
 
 typedef struct Hotkey {
     unsigned char mods;          /* RKM_MOD_CTRL etc, side-insensitive */
@@ -169,6 +202,8 @@ typedef struct Config {
     int nhotkeys;
     Accessory acc[MAX_ACC];      /* [0] is the keyboard + mouse */
     int nacc;
+    Seat seats[MAX_SEATS];
+    int nseats;
 } Config;
 
 extern Config cfg;
@@ -194,6 +229,8 @@ int config_save_state(void);
 Accessory *acc_by_name(const char *name);
 Accessory *acc_add(const char *name, int kind, const char *label);   /* known, or new with default links */
 int acc_kind(const char *id);           /* -1 if unknown */
+Seat *seat_by_name(const char *name);
+Seat *seat_add(const char *name, long color);   /* NULL if full */
 
 /* keymap.c */
 int evdev_to_hid(int code);

@@ -34,12 +34,12 @@ clean:
 	$(MAKE) -C hub clean
 	rm -rf build
 
-.PHONY: all hub test test-consoles test-reset test-keyto clean
+.PHONY: all hub test test-consoles test-reset test-seats clean
 
 # The reset command (the hub restarts in place); needs only the hub.
 test-reset: hub
 	python3 tests/reset_test.py
 
-# Claude's keyboard (key-to): types on one machine, the user's keys elsewhere; needs only the hub.
-test-keyto: hub
-	python3 tests/keyto_test.py
+# Seats (docs/SEATS.md): the user and Claude on different machines at once; needs only the hub.
+test-seats: hub
+	python3 tests/seats_test.py
