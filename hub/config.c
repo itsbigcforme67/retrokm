@@ -477,6 +477,7 @@ static void load_state(void)
                 char *label = trim(line + col);
                 Accessory *a = acc_by_name(name);
                 if (!a) a = acc_new(name, acc_kind(what), label);
+                if (a && !strcmp(a->name, "script")) a->scripted = 1;   /* the control port's pad (main.c) */
                 if (a && !seen[a - cfg.acc]) {      /* the file says where it is linked */
                     seen[a - cfg.acc] = 1;
                     memset(a->player, 0, sizeof a->player);
