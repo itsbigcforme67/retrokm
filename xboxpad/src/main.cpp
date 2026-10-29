@@ -276,7 +276,7 @@ static void command(String in, Print &reply) {
                s.mounted ? "taken" : "idle", (unsigned)s.reports, (unsigned)s.xid_reqs,
                rumbleNow.left, rumbleNow.right);
   reply.println("commands: show | name <screen> | label <board name> | hub <host> | player 1-4 | mode pc|xbox | reboot"
-                " | i2c | servo <port> <deg> | servo stop|push|back <deg> | servo backms <ms> | press [ms]");
+                " | i2c | power | servo <port> <deg> | servo stop|push|back <deg> | servo backms <ms> | press [ms]");
 }
 
 static WiFiUDP ctlUdp;  // echo show | nc -u -w1 <ip> 24854

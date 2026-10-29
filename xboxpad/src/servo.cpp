@@ -11,6 +11,7 @@
 //   servo back <deg>         spin away from it (saved, default 110)
 //   servo backms <ms>        extra return time beyond the push, to reach the backstop (saved,
 //                            default 100; too much leans on the backstop and can peel the servo off)
+//   power                    the base's INA226 (0x40): battery-side voltage and shunt (charging)
 //   press [ms]               push for ms (default 300: the two-sided arm on the Xbox, 29 Oct), back for ms + backms, stop
 #include "servo.h"
 #include <Preferences.h>
@@ -19,6 +20,7 @@
 #define SERVO_SDA 38
 #define SERVO_SCL 39
 #define SERVO_ADDR 0x38
+#define INA_ADDR 0x40  // the Atom Motion v1.1's INA226 power monitor
 #define SERVO_PORT 1  // the power-button servo's port on the base
 
 static Preferences sp;
@@ -60,6 +62,14 @@ void servo_loop() {
   }
 }
 
+static bool inaRead(uint8_t reg, int16_t &v) {
+  Wire.beginTransmission(INA_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0 || Wire.requestFrom(INA_ADDR, 2) != 2) return false;
+  v = (int16_t)(Wire.read() << 8 | Wire.read());
+  return true;
+}
+
 static bool setting(const String &what, int v, Print &reply) {
   int *p = what == "stop" ? &stopDeg : what == "push" ? &pushDeg : what == "back" ? &backDeg
          : what == "backms" ? &backMs : nullptr;
@@ -89,6 +99,14 @@ bool servo_command(String in, Print &reply) {
       int t = sda; sda = scl; scl = t;
       Wire.begin(sda, scl, 100000);
     }
+    return true;
+  }
+  if (in == "power") {
+    wireBegin();
+    int16_t shunt, bus;
+    if (!inaRead(0x01, shunt) || !inaRead(0x02, bus)) { reply.println("power: no answer at 0x40"); return true; }
+    // bus: 1.25 mV per bit; shunt: 2.5 uV per bit (the sign says which way current flows)
+    reply.printf("power: bus %.3f V, shunt %.3f mV\n", bus * 0.00125, shunt * 0.0025);
     return true;
   }
   if (in.startsWith("servo ")) {
