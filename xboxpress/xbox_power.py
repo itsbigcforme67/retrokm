@@ -8,8 +8,8 @@
 A press can miss, so it checks after each one and retries, each a little longer.
 
 The Xbox is on when the Xbox pad (xboxpad/, powered by the console's USB) answers and the
-console polls it (its "reports" count climbs, ~125 a second), or the Xbox's MAC answers on
-the LAN (the address changes). Off: neither. The capture card can't tell: it keeps the last
+console polls it (its "reports" count climbs, ~125 a second); off when it doesn't. Its LAN
+address (DHCP, 192.168.1.115 on 29 Oct) is shown when one of the known ones answers. The capture card can't tell: it keeps the last
 frame. The presser (xboxpress/, on its own power) does the pressing.
 Never power it off while a game is saving: this tool doesn't know what's on screen.
 """
@@ -21,11 +21,10 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-XBOX_MAC = "00:0d:3a:31:08:ab"
 PAD = ("xboxpad.local", 24854)
 PRESSER = ("xboxpress.local", 24854)
 SUBNET = "192.168.1."
-KNOWN = [115, 116, 118, 165]  # addresses it has had; tried first
+KNOWN = [115, 116, 118, 165]  # addresses it has had (MAC 00:0D:3A:31:08:AB)
 PRESS_MS = int(os.environ.get("PRESS_MS", "410"))  # first try; 380 clicked 10/10 on 29 Oct (battery 3.3-3.5 V)
 STEP_MS = 30   # each retry presses this much longer: a press can miss (tape, battery)
 TRIES = 4
@@ -56,21 +55,12 @@ def ping(ip):
 
 
 def xbox_ip():
-    """The Xbox's address if it answers, else None (its MAC's known neighbour entry, or the
-    addresses it has had; no subnet sweep: that took ~25 s every off check)."""
-    neigh = subprocess.run(["ip", "neigh"], capture_output=True, text=True).stdout.lower()
-    for line in neigh.splitlines():
-        f = line.split()
-        if XBOX_MAC in f and "failed" not in f and "incomplete" not in f and ping(f[0]):
-            return f[0]
+    """The first of the Xbox's known addresses that answers a ping, else None. Shown only, not
+    used for on/off: the laptop is behind a WiFi extender that rewrites MACs, so we can't check
+    it is the Xbox, and another device could take the address while the Xbox is off."""
     with ThreadPoolExecutor(len(KNOWN)) as ex:
-        list(ex.map(ping, [SUBNET + str(a) for a in KNOWN]))
-    neigh = subprocess.run(["ip", "neigh"], capture_output=True, text=True).stdout.lower()
-    for line in neigh.splitlines():
-        f = line.split()
-        if XBOX_MAC in f and "failed" not in f and "incomplete" not in f and ping(f[0]):
-            return f[0]
-    return None
+        up = list(ex.map(ping, [SUBNET + str(a) for a in KNOWN]))
+    return next((SUBNET + str(a) for a, u in zip(KNOWN, up) if u), None)
 
 
 def reports():
@@ -86,7 +76,7 @@ def state():
         b = reports()
         polling = b is not None and b > a
     ip = xbox_ip()
-    return ("on" if polling or ip else "off"), ip, polling
+    return ("on" if polling else "off"), ip, polling
 
 
 def wait_for(want, seconds):
