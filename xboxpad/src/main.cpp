@@ -12,6 +12,7 @@
 //   show | name <screen> | label <board name> | hub <host> | player 1-4 | mode pc|xbox | reboot
 // (player: which of the console's pad ports this is; one dongle per port)
 #include "dongle.h"
+#include "servo.h"
 #include <errno.h>
 #include <ArduinoOTA.h>
 #include <HWCDC.h>
@@ -247,6 +248,7 @@ static void loadSettings() {
 
 static void command(String in, Print &reply) {
   in.trim();
+  if (servo_command(in, reply)) return;
   if (in.startsWith("name ")) { name = in.substring(5); prefs.putString("name", name); hubClose("renamed"); }
   else if (in.startsWith("hub ")) { hubHost = in.substring(4); prefs.putString("hub", hubHost); hubClose("new hub"); }
   else if (in.startsWith("label ")) { label = in.substring(6); prefs.putString("label", label); }
@@ -273,7 +275,8 @@ static void command(String in, Print &reply) {
                welcomed ? "up" : "down", hasPad ? "ours" : "elsewhere",
                s.mounted ? "taken" : "idle", (unsigned)s.reports, (unsigned)s.xid_reqs,
                rumbleNow.left, rumbleNow.right);
-  reply.println("commands: show | name <screen> | label <board name> | hub <host> | player 1-4 | mode pc|xbox | reboot");
+  reply.println("commands: show | name <screen> | label <board name> | hub <host> | player 1-4 | mode pc|xbox | reboot"
+                " | i2c | servo <port> <deg> | servo rest|push <deg> | press [ms]");
 }
 
 static WiFiUDP ctlUdp;  // echo show | nc -u -w1 <ip> 24854
@@ -344,6 +347,7 @@ void loop() {
   if (usb_mode == MODE_PC) console();
   pollHub();
   watchUsb();
+  servo_loop();
   flushLog();
   Status st = {label.c_str(), name.c_str(),
                WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("joining WiFi"),
