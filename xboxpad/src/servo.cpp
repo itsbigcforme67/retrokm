@@ -11,7 +11,7 @@
 //   servo back <deg>         spin away from it (saved, default 110)
 //   servo backms <ms>        extra return time beyond the push, to reach the backstop (saved,
 //                            default 100; too much leans on the backstop and can peel the servo off)
-//   press [ms]               push for ms (default 250), back for ms + backms, stop
+//   press [ms]               push for ms (default 300: the two-sided arm on the Xbox, 29 Oct), back for ms + backms, stop
 #include "servo.h"
 #include <Preferences.h>
 #include <Wire.h>
@@ -108,7 +108,7 @@ bool servo_command(String in, Print &reply) {
   }
   if (in == "press" || in.startsWith("press ")) {
     wireBegin();
-    int ms = in.length() > 6 ? in.substring(6).toInt() : 250;
+    int ms = in.length() > 6 ? in.substring(6).toInt() : 300;
     if (ms < 20 || ms > 3000) { reply.println("press: 20-3000 ms"); return true; }
     if (!setAngle(SERVO_PORT, pushDeg)) { reply.println("press: no answer at 0x38"); return true; }
     phase = PUSHING;
