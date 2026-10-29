@@ -75,7 +75,7 @@ The board (an Atom EchoS3R) sits in an M5Stack Atom Motion base: servo driver
 at I2C 0x38 on G38/G39, with its own servo power and battery. The servo on port 1
 is a continuous-rotation one (the value is speed: about 90 stops it), so `press`
 is timed: spin toward the button (`servo push`, for `press <ms>`, default 250),
-spin back for `servo backms` (default 400) so the arm ends against a backstop,
+spin back as long plus `servo backms` (default 100) so the arm just reaches a backstop,
 then stop (`servo stop`). Settings are saved. Code in src/servo.cpp.
 
 ## Driving it from scripts (or Claude)
