@@ -1,10 +1,11 @@
 // The power-button servo: an M5Stack Atom Motion base (I2C 0x38, 4 servo ports, own servo
-// power and battery) on G38 (SDA) / G39 (SCL) through the Atom slot. i2c tries both pin orders
+// power and battery) on SERVO_SDA / SERVO_SCL through the Atom slot (G38/G39 on an S3, G25/G21 on
+// an Atom Lite). i2c tries both pin orders
 // and remembers the one that answers.
 // The servo is a continuous-rotation one: the "angle" sets speed and direction, 90 (about)
 // stops it. So a press is timed: spin toward the button, then spin back a little longer so
 // the arm ends against a backstop (no drift from press to press), then stop.
-//   i2c                      list what answers on G38/G39, trying both pin orders
+//   i2c                      list what answers on the I2C pins, trying both pin orders
 //   servo <port 1-4> <deg>   raw value to a port (continuous servo: 90 stops, else spins)
 //   servo stop <deg>         the value that holds it still (saved, default 90)
 //   servo push <deg>         spin toward the button (saved, default 70)
@@ -17,8 +18,10 @@
 #include <Preferences.h>
 #include <Wire.h>
 
+#ifndef SERVO_SDA  // Atom S3 family; platformio.ini passes 25 / 21 for the Atom Lite
 #define SERVO_SDA 38
 #define SERVO_SCL 39
+#endif
 #define SERVO_ADDR 0x38
 #define INA_ADDR 0x40  // the Atom Motion v1.1's INA226 power monitor
 #define SERVO_PORT 1  // the power-button servo's port on the base
