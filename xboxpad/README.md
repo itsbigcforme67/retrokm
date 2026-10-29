@@ -62,7 +62,7 @@ settings come on UDP 24854 (and USB serial in pc mode):
 
     echo show | nc -u -w1 xboxpad.local 24854
     show | name <screen> | label <board name> | hub <host> | player 1-4 | mode pc|xbox | reboot
-    i2c | servo <port 1-4> <deg> | servo rest|push <deg> | press [ms]
+    i2c | servo <port 1-4> <deg> | servo stop|push|back <deg> | servo backms <ms> | press [ms]
 
 `player` is which pad port of the console this dongle sits in (one dongle
 per port). On the panel's accessories page, each controller linked to the
@@ -73,12 +73,10 @@ merge into one).
 
 The board (an Atom EchoS3R) sits in an M5Stack Atom Motion base: servo driver
 at I2C 0x38 on G38/G39, with its own servo power and battery. The servo on port 1
-presses the console's power button: set `servo rest <deg>` (arm clear) and
-`servo push <deg>` (button pressed) once, then `press` pushes, holds 500 ms
-(or `press <ms>`) and always goes back to rest. Code in src/servo.cpp.
-
-The screen shows the mode, whether the Xbox has taken the pad, the hub link,
-whether this screen has the pad right now, the buttons and the rumble.
+is a continuous-rotation one (the value is speed: about 90 stops it), so `press`
+is timed: spin toward the button (`servo push`, for `press <ms>`, default 250),
+spin back for `servo backms` (default 400) so the arm ends against a backstop,
+then stop (`servo stop`). Settings are saved. Code in src/servo.cpp.
 
 ## Driving it from scripts (or Claude)
 

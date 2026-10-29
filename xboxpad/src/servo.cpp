@@ -1,12 +1,16 @@
 // The power-button servo: an M5Stack Atom Motion base (I2C 0x38, 4 servo ports, own servo
 // power and battery) on G38 (SDA) / G39 (SCL) through the Atom slot. i2c tries both pin orders
 // and remembers the one that answers.
-// The base makes the pulses; we write one angle register per port.
+// The servo is a continuous-rotation one: the "angle" sets speed and direction, 90 (about)
+// stops it. So a press is timed: spin toward the button, then spin back a little longer so
+// the arm ends against a backstop (no drift from press to press), then stop.
 //   i2c                      list what answers on G38/G39, trying both pin orders
-//   servo <port 1-4> <deg>   move a port to 0-180
-//   servo rest <deg>         angle that keeps the arm off the button (saved)
-//   servo push <deg>         angle that presses the button (saved)
-//   press [ms]               push, hold (default 500 ms), back to rest; never left pushed
+//   servo <port 1-4> <deg>   raw value to a port (continuous servo: 90 stops, else spins)
+//   servo stop <deg>         the value that holds it still (saved, default 90)
+//   servo push <deg>         spin toward the button (saved, default 70)
+//   servo back <deg>         spin away from it (saved, default 110)
+//   servo backms <ms>        how long the return runs, to the backstop (saved, default 400)
+//   press [ms]               push for ms (default 250), back for backms, stop
 #include "servo.h"
 #include <Preferences.h>
 #include <Wire.h>
@@ -19,16 +23,19 @@
 static Preferences sp;
 static bool begun;
 static int sda = SERVO_SDA, scl = SERVO_SCL;
-static int restDeg = -1, pushDeg = -1;
-static uint32_t releaseAt;  // millis() when a press goes back to rest, 0 = none
+static int stopDeg, pushDeg, backDeg, backMs;
+static enum { IDLE, PUSHING, RETURNING } phase;
+static uint32_t phaseEnd;  // millis() when the current phase ends
 
 static void wireBegin() {
   if (begun) return;
   sp.begin("servo", false);
   if (sp.getBool("swap", false)) { sda = SERVO_SCL; scl = SERVO_SDA; }
   Wire.begin(sda, scl, 100000);
-  restDeg = sp.getInt("rest", -1);
-  pushDeg = sp.getInt("push", -1);
+  stopDeg = sp.getInt("stop", 90);
+  pushDeg = sp.getInt("push", 70);
+  backDeg = sp.getInt("back", 110);
+  backMs = sp.getInt("backms", 400);
   begun = true;
 }
 
@@ -40,10 +47,28 @@ static bool setAngle(int port, int deg) {
 }
 
 void servo_loop() {
-  if (releaseAt && (int32_t)(millis() - releaseAt) >= 0) {
-    releaseAt = 0;
-    setAngle(SERVO_PORT, restDeg);
+  if (phase == IDLE || (int32_t)(millis() - phaseEnd) < 0) return;
+  if (phase == PUSHING) {
+    setAngle(SERVO_PORT, backDeg);
+    phase = RETURNING;
+    phaseEnd = millis() + backMs;
+  } else {
+    setAngle(SERVO_PORT, stopDeg);
+    phase = IDLE;
   }
+}
+
+static bool setting(const String &what, int v, Print &reply) {
+  int *p = what == "stop" ? &stopDeg : what == "push" ? &pushDeg : what == "back" ? &backDeg
+         : what == "backms" ? &backMs : nullptr;
+  if (!p) return false;
+  bool ms = p == &backMs;
+  if (ms ? (v < 50 || v > 5000) : (v < 0 || v > 180)) { reply.println(ms ? "servo: 50-5000 ms" : "servo: 0-180"); return true; }
+  *p = v;
+  sp.putInt(what.c_str(), v);
+  if (p == &stopDeg && phase == IDLE) setAngle(SERVO_PORT, stopDeg);
+  reply.printf("servo stop=%d push=%d back=%d backms=%d\n", stopDeg, pushDeg, backDeg, backMs);
+  return true;
 }
 
 bool servo_command(String in, Print &reply) {
@@ -69,28 +94,24 @@ bool servo_command(String in, Print &reply) {
     String arg = in.substring(6);
     int sp1 = arg.indexOf(' ');
     String what = sp1 < 0 ? arg : arg.substring(0, sp1);
-    int deg = sp1 < 0 ? -1 : arg.substring(sp1 + 1).toInt();
-    if (deg < 0 || deg > 180) { reply.println("servo: angle 0-180"); return true; }
-    if (what == "rest" || what == "push") {
-      (what == "rest" ? restDeg : pushDeg) = deg;
-      sp.putInt(what.c_str(), deg);
-      reply.printf("servo %s = %d (rest=%d push=%d)\n", what.c_str(), deg, restDeg, pushDeg);
-      return true;
-    }
+    int v = sp1 < 0 ? -1 : arg.substring(sp1 + 1).toInt();
+    if (sp1 < 0) { reply.printf("servo stop=%d push=%d back=%d backms=%d\n", stopDeg, pushDeg, backDeg, backMs); return true; }
+    if (setting(what, v, reply)) return true;
     int port = what.toInt();
-    if (port < 1 || port > 4) { reply.println("servo: port 1-4, rest or push"); return true; }
-    reply.printf("servo %d -> %d: %s\n", port, deg, setAngle(port, deg) ? "ok" : "no answer at 0x38");
+    if (port < 1 || port > 4) { reply.println("servo: port 1-4, stop, push, back or backms"); return true; }
+    if (v < 0 || v > 180) { reply.println("servo: 0-180"); return true; }
+    phase = IDLE;  // a raw value cancels a press in progress
+    reply.printf("servo %d -> %d: %s\n", port, v, setAngle(port, v) ? "ok" : "no answer at 0x38");
     return true;
   }
   if (in == "press" || in.startsWith("press ")) {
     wireBegin();
-    int ms = in.length() > 6 ? in.substring(6).toInt() : 500;
-    if (restDeg < 0 || pushDeg < 0) { reply.println("press: set servo rest and servo push first"); return true; }
-    if (ms < 50 || ms > 10000) { reply.println("press: 50-10000 ms"); return true; }
+    int ms = in.length() > 6 ? in.substring(6).toInt() : 250;
+    if (ms < 20 || ms > 3000) { reply.println("press: 20-3000 ms"); return true; }
     if (!setAngle(SERVO_PORT, pushDeg)) { reply.println("press: no answer at 0x38"); return true; }
-    releaseAt = millis() + ms;
-    if (!releaseAt) releaseAt = 1;
-    reply.printf("press: %d ms, then back to %d\n", ms, restDeg);
+    phase = PUSHING;
+    phaseEnd = millis() + ms;
+    reply.printf("press: push %d ms at %d, back %d ms at %d, stop at %d\n", ms, pushDeg, backMs, backDeg, stopDeg);
     return true;
   }
   return false;
