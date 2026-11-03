@@ -5,7 +5,18 @@ the monitors and TVs, and the switchers and scalers you already own. It
 works out the cables, shows what cannot reach what and why, suggests the
 kinds of hardware that fill the gaps, and writes a starter `retrokm.conf`.
 
-Open `index.html` in a browser: straight from disk, or on GitHub Pages.
+There are two pages on the same plan:
+
+- **`desk.html`, the desk builder**: the simple, visual way. Your machines
+  are tiles; drag them onto your screens (or tap a machine, then a
+  screen) to draw a **mode**: one layout you want to switch to, with
+  everything in it on screen at once. Make one mode for work, one for
+  games, and so on. Each placed machine gets a mark (✓ works with what you
+  own, ★ works with the suggested hardware, ✗ not possible, with why).
+- **`index.html`, the detailed planner**: lists and checkboxes for every
+  setting, the cables to plug, the wiring picture and the config.
+
+Open either in a browser: straight from disk, or on GitHub Pages.
 There is no server, no build step and nothing downloaded from the
 internet. The plan stays in your browser (it is remembered between visits)
 until you save it as a JSON file.
@@ -39,6 +50,13 @@ prices or shop links: check a box's manual before you buy it.
   conversion more, and a machine taking a monitor input that other
   machines want costs a lot, so a switch gets used. Every jack holds one
   cable.
+- **Modes**: each mode is routed before anything else, one show at a
+  time, each with everything the earlier shows hold blocked (see Side by
+  side below for what a route holds). Two orders are tried. Suggestions
+  count every show that works, so a box that fixes part of a mode still
+  counts. The config lists each mode as commands for the hub's control
+  port (`plug ps2`, `show tink tv` ...): the hub has no single "mode"
+  command yet, but a script or Claude's seat can send these lines.
 - **Side by side**: two machines that should be on screen at the same
   time are routed first, the second one with everything the first holds
   blocked. A route holds each scaler or converter it passes (one picture
@@ -60,7 +78,9 @@ prices or shop links: check a box's manual before you buy it.
 
 | file | what |
 |---|---|
-| `index.html`, `style.css`, `app.js` | the page |
+| `desk.html`, `desk.js` | the desk builder (drag machines onto screens, modes) |
+| `index.html`, `app.js` | the detailed planner |
+| `style.css` | both pages |
 | `logic.js` | routing, suggestions, reasons, the config (no page code) |
 | `catalogue.js` | the kinds of hardware it knows; entries with a `deviceFile` match `devices/` |
 | `examples/*.json`, `examples.js` | example plans (the `.js` copy is for opening from disk) |
@@ -84,5 +104,7 @@ device file in `devices/` too (see `devices/README.md`) and point
 - A monitor with several inputs gets one `video =` (plus `shared =` for a
   machine cabled straight to it); further inputs are listed as comments.
 - Cables cannot be drawn or moved by hand; the planner lays them all.
+- Modes are not a hub feature yet: the config has them as lists of
+  control commands to send, not as one hotkey each.
 - Resolutions and refresh rates are only covered roughly (15 kHz console
   video on a PC monitor is flagged).

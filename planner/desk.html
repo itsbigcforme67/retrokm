@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RetroKM Desk Builder</title>
+<meta name="description" content="Drag your machines onto your screens to draw the layouts you want; the builder works out what hardware makes each one possible.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>RetroKM desk builder</h1>
+    <p class="lede">Draw the layouts you want — which machine on which screen — and the builder works out
+      what hardware makes each one possible. Make as many modes as you like: one for work, one for games…</p>
+    <div class="bar">
+      <label class="btn">Example
+        <select id="example" aria-label="Load an example desk">
+          <option value="">Load an example…</option>
+        </select>
+      </label>
+      <button class="btn" id="save" type="button">Save plan</button>
+      <label class="btn" for="load">Open plan…</label>
+      <input type="file" id="load" accept=".json,application/json" hidden>
+      <button class="btn quiet" id="new" type="button">Start over</button>
+      <a class="btn" href="index.html">Detailed planner →</a>
+    </div>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </div>
+</header>
+
+<main class="wrap grid">
+  <div class="col">
+    <section class="card" aria-labelledby="h-tray">
+      <h2 id="h-tray"><span class="step">1</span> Your machines</h2>
+      <p class="hint">Drag a machine onto a screen below, or tap it and then tap a screen. ⋯ edits it.</p>
+      <div id="tray" class="tray"></div>
+      <div id="machine-edit"></div>
+      <div class="add">
+        <select id="machine-preset" aria-label="Kind of machine to add"></select>
+        <button class="btn primary" id="add-machine" type="button">Add machine</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-desk">
+      <h2 id="h-desk"><span class="step">2</span> Modes</h2>
+      <p class="hint">A mode is one layout you want to be able to switch to: everything in it shows at the same time.</p>
+      <div class="tabs" id="tabs" role="tablist" aria-label="Modes"></div>
+      <div class="row" id="mode-bar"></div>
+      <div class="desk" id="desk"></div>
+      <div id="mode-why"></div>
+      <div id="monitor-edit"></div>
+      <div class="add">
+        <select id="monitor-preset" aria-label="Kind of screen to add"></select>
+        <button class="btn primary" id="add-monitor" type="button">Add screen</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card" aria-labelledby="h-owned">
+      <h2 id="h-owned"><span class="step">3</span> Hardware you own</h2>
+      <p class="hint">Switchers, scalers and converters you already have. Leave it empty to see what a desk needs from scratch.</p>
+      <div id="owned" class="chips"></div>
+      <div class="add">
+        <select id="hardware-pick" aria-label="Hardware to add"></select>
+        <button class="btn" id="add-hardware" type="button">Add</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-verdict">
+      <h2 id="h-verdict"><span class="step">4</span> What it takes</h2>
+      <div id="verdict"></div>
+      <div id="suggestions"></div>
+      <h3>Get the config</h3>
+      <p class="hint">A starter <code>retrokm.conf</code> with your switchers, machines, screens and each mode
+        written out as commands for the hub. The <a href="index.html">detailed planner</a> shows the cables and the wiring picture.</p>
+      <div class="bar">
+        <button class="btn primary" id="download" type="button">Download retrokm.conf</button>
+        <button class="btn" id="copy" type="button">Copy</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="wrap foot">
+  <p>Suggestions are kinds of hardware with well-known examples, not shopping advice: check a box's manual
+    before buying. Part of <a href="https://github.com/itsbigcforme67/retrokm">RetroKM</a>.</p>
+</footer>
+
+<script src="catalogue.js"></script>
+<script src="logic.js"></script>
+<script src="examples.js"></script>
+<script src="desk.js"></script>
+</body>
+</html>

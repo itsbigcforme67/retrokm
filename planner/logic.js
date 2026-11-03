@@ -620,7 +620,10 @@
         `With ${need}, they can (${M.get(u.a).name} on ${T.get(x.ta).name}, ${M.get(u.b).name} on ${T.get(x.tb).name}).`);
     }
     const modeUnlocks = new Map();
-    for (const u of unlocks.filter(x => x.mode)) {
+    // a show that could not work even on its own is covered by the plain
+    // pair's sentence below; here only the ones the rest of the mode was in the way of
+    const aloneOk = u => before.reach[u.m] && before.reach[u.m][u.t] && before.reach[u.m][u.t].ok;
+    for (const u of unlocks.filter(x => x.mode && aloneOk(x))) {
       if (!modeUnlocks.has(u.mode)) modeUnlocks.set(u.mode, []);
       modeUnlocks.get(u.mode).push(u);
     }
@@ -674,10 +677,7 @@
     const M = id => plan.machines.find(x => x.id === id).name;
     const T = id => plan.monitors.find(x => x.id === id).name;
     const alone = routing.reach[sh.m] && routing.reach[sh.m][sh.t];
-    if (!alone || !alone.ok) {
-      const d = diagnose(plan, routing, sh.m, sh.t);
-      return short ? d.replace(/\.$/, '').replace(/^./, c => c.toLowerCase()) : d;
-    }
+    if (!alone || !alone.ok) return short ? '' : diagnose(plan, routing, sh.m, sh.t);
     // it works on its own, so something another show in the mode holds is in the way
     const res = routing.modes && routing.modes.find(x => x.id === md.id);
     const mine = new Set(holds(plan, alone.hops));

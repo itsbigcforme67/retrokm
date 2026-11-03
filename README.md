@@ -8,8 +8,9 @@ which monitor.
 
 "RetroKM" is a working name; rename freely.
 
-**Planning a desk?** The [setup planner](planner/) (`planner/index.html`,
-open it in a browser) lays out machines, monitors and switchers, suggests
+**Planning a desk?** The [setup planner](planner/) (open
+`planner/desk.html` in a browser and drag your machines onto your screens,
+or `planner/index.html` for every detail) works out the cables, suggests
 the hardware that is missing and why, and writes a starter `retrokm.conf`.
 
 ## How it works

@@ -12,7 +12,8 @@
   <div class="wrap">
     <h1>RetroKM setup planner</h1>
     <p class="lede">Add your machines, your monitors and the boxes you already own. The planner works out the cables,
-      what is missing and why, and writes a starter <code>retrokm.conf</code>. Nothing leaves your browser.</p>
+      what is missing and why, and writes a starter <code>retrokm.conf</code>. Nothing leaves your browser.
+      Prefer dragging machines onto screens? Try the <a href="desk.html">desk builder</a>: same plan, simpler view.</p>
     <div class="bar">
       <label class="btn">Example
         <select id="example" aria-label="Load an example desk">
@@ -23,6 +24,7 @@
       <label class="btn" for="load">Open plan…</label>
       <input type="file" id="load" accept=".json,application/json" hidden>
       <button class="btn quiet" id="new" type="button">Start over</button>
+      <a class="btn" href="desk.html">Desk builder (visual) →</a>
     </div>
     <p class="status" id="status" role="status" aria-live="polite"></p>
   </div>
@@ -73,6 +75,7 @@
       <label class="check"><input type="checkbox" id="with-suggestions" checked> Use the suggestions in the picture, cables and config</label>
       <div id="suggestions"></div>
       <div id="missing"></div>
+      <div id="modes"></div>
       <div id="side"></div>
       <div id="notes"></div>
     </section>

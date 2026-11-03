@@ -120,10 +120,15 @@
             onchange: e => { m.hub = e.target.checked; changed(true); } }), 'The hub runs on it')),
         h('div', { class: 'label' }, 'Should show on'),
         plan.monitors.length
-          ? h('div', { class: 'chips' }, plan.monitors.map(t => h('button', {
-              type: 'button', class: 'chip', 'aria-pressed': String(wants.includes(t.id)),
-              onclick: () => { m.wants = wants.includes(t.id) ? wants.filter(x => x !== t.id) : wants.concat(t.id); changed(true); },
-            }, t.name)))
+          ? h('div', { class: 'chips' }, plan.monitors.map(t => {
+              // a mode that puts it there wants it too (change that in the desk builder)
+              const byMode = !wants.includes(t.id) && P.wantsOf(plan, m).includes(t.id);
+              return h('button', {
+                type: 'button', class: 'chip', 'aria-pressed': String(wants.includes(t.id) || byMode), disabled: byMode,
+                title: byMode ? 'A mode puts it here (desk builder)' : null,
+                onclick: () => { m.wants = wants.includes(t.id) ? wants.filter(x => x !== t.id) : wants.concat(t.id); changed(true); },
+              }, t.name, byMode ? ' (mode)' : '');
+            }))
           : h('p', { class: 'empty' }, 'Add monitors in step 2.'),
         plan.machines.length > 1 && [
           h('div', { class: 'label' }, 'On screen at the same time as'),
@@ -301,6 +306,20 @@
     if (r.missing.length) {
       miss.append(h('h3', {}, 'Still not possible'));
       for (const m of r.missing) miss.append(h('div', { class: 'miss' }, h('p', {}, m.reason)));
+    }
+    const modesBox = $('modes');
+    modesBox.replaceChildren();
+    const used = r.modes.filter(md => md.shows.length);
+    if (used.length) {
+      modesBox.append(h('h3', {}, 'Modes'), h('p', { class: 'note' }, 'Layouts drawn in the ', h('a', { href: 'desk.html' }, 'desk builder'), '.'));
+      const M = id => byId(r.withSuggestions.machines, id).name, T = id => byId(r.withSuggestions.monitors, id).name;
+      for (const md of used) {
+        const mark = { ok: '✓', plan: '★', bad: '✗' }[md.status];
+        const text = { ok: 'works now', plan: 'works with the suggestions', bad: 'not possible yet' }[md.status];
+        modesBox.append(h('p', { class: 'note' }, h('span', { class: md.status === 'bad' ? 'bad' : md.status }, mark + ' '),
+          `${md.name} (${md.shows.map(x => M(x.m) + ' on ' + T(x.t)).join(', ')}): ${text}.`));
+        for (const x of md.shows.filter(y => y.status === 'bad')) modesBox.append(h('div', { class: 'miss' }, h('p', {}, x.reason)));
+      }
     }
     const side = $('side');
     side.replaceChildren();
