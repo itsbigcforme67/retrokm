@@ -55,14 +55,7 @@
     try { localStorage.setItem(STORE, JSON.stringify(plan)); } catch (e) { /* private window: fine */ }
   }
 
-  function download(name, text, type) {
-    const url = URL.createObjectURL(new Blob([text], { type }));
-    const a = h('a', { href: url, download: name });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
+  const download = (name, text, type) => window.RetroKMUI.offer(name, text, type);
 
   const byId = (list, id) => list.find(x => x.id === id);
 
@@ -560,11 +553,12 @@
     const ex = EXAMPLES[e.target.value];
     e.target.value = '';
     if (!ex) return;
-    if ((plan.machines.length || plan.monitors.length) && !confirm('Replace your plan with the example? Save yours first if you want to keep it.')) return;
-    setPlan(ex, 'Loaded the example.');
+    if (plan.machines.length || plan.monitors.length)
+      window.RetroKMUI.ask('Replace your plan with the example? Save yours first if you want to keep it.', 'Load the example', () => setPlan(ex, 'Loaded the example.'));
+    else setPlan(ex, 'Loaded the example.');
   });
   $('new').addEventListener('click', () => {
-    if (confirm('Start over with an empty plan?')) setPlan({}, 'Empty plan.');
+    window.RetroKMUI.ask('Start over with an empty plan?', 'Start over', () => setPlan({}, 'Empty plan.'));
   });
   $('save').addEventListener('click', () => {
     const name = (plan.name || 'desk').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'desk';

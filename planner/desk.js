@@ -54,14 +54,7 @@
     try { localStorage.setItem(STORE, JSON.stringify(plan)); } catch (e) { /* private window: fine */ }
     try { localStorage.setItem(STORE_MODE, modeId || ''); } catch (e) { /* fine */ }
   }
-  function download(name, text, type) {
-    const url = URL.createObjectURL(new Blob([text], { type }));
-    const a = h('a', { href: url, download: name });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
+  const download = (name, text, type) => window.RetroKMUI.offer(name, text, type);
   function freshName(name, list) {
     const taken = new Set(list.map(x => x.name.toLowerCase()));
     let v = name, n = 2;
@@ -286,10 +279,13 @@
       } }, 'Duplicate'),
       h('button', { type: 'button', onclick: () => { cur.shows = []; changed(); } }, 'Clear'),
       plan.modes.length > 1 && h('button', { type: 'button', class: 'danger', onclick: () => {
-        if (cur.shows.length && !confirm(`Delete the mode "${cur.name}"?`)) return;
-        plan.modes = plan.modes.filter(x => x !== cur);
-        modeId = null;
-        changed();
+        const drop = () => {
+          plan.modes = plan.modes.filter(x => x !== cur);
+          modeId = null;
+          changed();
+        };
+        if (cur.shows.length) window.RetroKMUI.ask(`Delete the mode "${cur.name}"?`, 'Delete it', drop);
+        else drop();
       } }, 'Delete'));
   }
 
@@ -475,19 +471,24 @@
     const ex = EXAMPLES[e.target.value];
     e.target.value = '';
     if (!ex) return;
-    if ((plan.machines.length || plan.monitors.length) && !confirm('Replace your plan with the example? Save yours first if you want to keep it.')) return;
-    plan = P.normalizePlan(ex);
-    modeId = null;
-    picked = editing = null;
-    changed();
-    say('Loaded the example.');
+    const go = () => {
+      plan = P.normalizePlan(ex);
+      modeId = null;
+      picked = editing = null;
+      changed();
+      say('Loaded the example.');
+    };
+    if (plan.machines.length || plan.monitors.length)
+      window.RetroKMUI.ask('Replace your plan with the example? Save yours first if you want to keep it.', 'Load the example', go);
+    else go();
   });
   $('new').addEventListener('click', () => {
-    if (!confirm('Start over with an empty plan?')) return;
-    plan = P.normalizePlan({});
-    modeId = null;
-    picked = editing = null;
-    changed();
+    window.RetroKMUI.ask('Start over with an empty plan?', 'Start over', () => {
+      plan = P.normalizePlan({});
+      modeId = null;
+      picked = editing = null;
+      changed();
+    });
   });
   $('save').addEventListener('click', () => download('retrokm-plan.json', JSON.stringify(plan, null, 2) + '\n', 'application/json'));
   $('load').addEventListener('change', e => {
@@ -720,7 +721,9 @@
     $('tab-design').setAttribute('aria-selected', String(v === 'design'));
     $('tab-try').setAttribute('aria-selected', String(v === 'try'));
     if (v === 'try') { if (!sim) simBuild(); drawTry(); }
-    if (location.hash !== (v === 'try' ? '#try' : '')) history.replaceState(null, '', v === 'try' ? '#try' : location.pathname);
+    try {
+      if (location.hash !== (v === 'try' ? '#try' : '')) history.replaceState(null, '', v === 'try' ? '#try' : location.pathname);
+    } catch (e) { /* some frames refuse: the view still changes */ }
   }
   $('tab-design').addEventListener('click', () => setView('design'));
   $('tab-try').addEventListener('click', () => setView('try'));
@@ -730,4 +733,5 @@
   draw();
   analyse();
   if (location.hash === '#try') setView('try');
+  window.addEventListener('hashchange', () => setView(location.hash === '#try' ? 'try' : 'design'));
 })();
