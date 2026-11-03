@@ -34,7 +34,7 @@ clean:
 	$(MAKE) -C hub clean
 	rm -rf build
 
-.PHONY: all hub test test-consoles test-reset test-seats test-switching clean
+.PHONY: all hub test test-consoles test-reset test-seats test-switching test-planner clean
 
 # Video devices, wires and routes through simulated switchers; needs only the hub.
 test-switching: hub
@@ -47,3 +47,8 @@ test-reset: hub
 # Seats (docs/SEATS.md): the user and Claude on different machines at once; needs only the hub.
 test-seats: hub
 	python3 tests/seats_test.py
+
+# The setup planner (planner/): its logic, and its configs loading in the hub; needs node.
+test-planner: hub
+	node planner/test.mjs
+	python3 tests/planner_test.py

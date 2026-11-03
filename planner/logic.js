@@ -228,7 +228,7 @@
   /*
    * Cables are laid one wanted pair at a time, as a cheapest-path search
    * over what exists: an existing cable is almost free, a new one costs 1
-   * (5 when a machine would take a monitor input that other machines want
+   * (10 when a machine would take a monitor input that other machines want
    * too, 3 for a box doing that, so a switch gets used), a conversion
    * costs 2, going through hardware not bought yet 1.5.  Ports hold one
    * cable each.  The order matters for a greedy search, so it is run again
@@ -341,7 +341,7 @@
         if (st.toUsed.has(toKey(to)) || !takes(monitorAccepts(target, inp), s.sig)) return;
         // a monitor several machines want is better fed from a switch, which
         // keeps this port free for the others
-        const c = !shared ? 1 : s.from.t === 'm' ? 5 : 3;
+        const c = !shared ? 1 : s.from.t === 'm' ? 10 : 3;
         open.push({ cost: s.cost + c + (inp === s.sig ? 0 : 0.3), goal: true, prev: s, monInput: i, sig: s.sig,
                     cable: { from: s.from, to, sig: s.sig } });
       });
@@ -392,6 +392,7 @@
     for (let n = 0; n < maxSteps && curR.failed.length; n++) {
       const inPlay = signalsInPlay(cur);
       let best = null;
+      const gains = [];
       for (const c of CAT) {
         if (!c.suggest) continue;
         const ins = c.kind === 'switch' ? c.accepts : c.ins.flatMap(j => j.accepts);
@@ -401,13 +402,15 @@
         trial.hardware.push(hw);
         const r = route(trial);
         const gain = r.okCount - curR.okCount;
+        if (gain > 0) gains.push({ c, gain });
         if (gain > 0 && (!best || gain > best.gain || (gain === best.gain && c.weight < best.cat.weight)))
           best = { gain, cat: c, trial, r, hw };
       }
       if (!best) break;
       const before = okSet(curR), after = okSet(best.r);
       const unlocks = [...after].filter(k => !before.has(k)).map(k => { const [m, t] = k.split('|'); return { m, t }; });
-      steps.push({ item: best.cat, hardwareId: best.hw.id, unlocks, reason: explain(cur, curR, best, unlocks) });
+      const alternatives = gains.filter(g => g.gain === best.gain && g.c !== best.cat).map(g => g.c);
+      steps.push({ item: best.cat, hardwareId: best.hw.id, unlocks, alternatives, reason: explain(cur, curR, best, unlocks) });
       cur = best.trial;
       curR = best.r;
     }

@@ -14,9 +14,10 @@
  * driver: extron-sis or text = the hub can set it; manual = buttons, a
  * remote or moving plugs (the hub cannot set it yet).
  *
- * weight: how big a step buying one is (1 small adapter ... 6 a premium
- * scaler).  Only used to pick between suggestions that help equally; it is
- * not a price.
+ * weight: which to suggest first when two help equally: lower first.
+ * Roughly how big a step buying one is (1 a small adapter, 6 a premium
+ * scaler), except that a cheap AV converter comes after the retro scalers
+ * because it looks so much worse.  Not a price.
  *
  * Plain classic script (no modules) so the page works when opened from disk.
  */
@@ -100,7 +101,7 @@
       need: 'a retro scaler (consoles to HDMI, with low lag and good 240p)',
       examples: ['RetroTINK 5X Pro', 'RetroTINK 4K'],
       notes: 'One picture at a time: whichever jack is selected.',
-      weight: 4, suggest: true,
+      weight: 3, suggest: true,
     },
     {
       id: 'ossc', short: 'ossc', name: 'OSSC (Open Source Scan Converter)', category: 'Scaler that accepts sync-on-green',
@@ -114,7 +115,7 @@
       need: 'a scaler that accepts RGB and sync-on-green (workstations and consoles to HDMI)',
       examples: ['OSSC', 'RetroTINK 4K'],
       notes: 'No composite or S-Video.  Line-doubles with almost no lag.',
-      weight: 3, suggest: true,
+      weight: 3.5, suggest: true,
     },
     {
       id: 'retrotink-4k', short: 'tink4k', name: 'RetroTINK 4K', category: 'Scaler that accepts everything analog',
@@ -139,7 +140,7 @@
       need: 'a basic AV to HDMI converter',
       examples: ['any small composite / S-Video to HDMI box'],
       notes: 'Cheap, but adds lag and often mangles 240p games; a retro scaler looks much better.',
-      weight: 1, suggest: true,
+      weight: 5, suggest: true,
     },
     {
       id: 'vga-to-hdmi', short: 'vga2hdmi', name: 'VGA to HDMI converter', category: 'VGA to HDMI converter',
