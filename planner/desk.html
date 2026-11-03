@@ -25,11 +25,51 @@
       <button class="btn quiet" id="new" type="button">Start over</button>
       <a class="btn" href="index.html">Detailed planner →</a>
     </div>
+    <div class="views" role="tablist" aria-label="View">
+      <button type="button" role="tab" class="view-tab" id="tab-design" aria-selected="true">Design</button>
+      <button type="button" role="tab" class="view-tab" id="tab-try" aria-selected="false">Try it out</button>
+    </div>
     <p class="status" id="status" role="status" aria-live="polite"></p>
   </div>
 </header>
 
-<main class="wrap grid">
+<main class="wrap" id="try-view" hidden>
+  <section class="card" aria-labelledby="h-try">
+    <h2 id="h-try">Try it out</h2>
+    <p class="hint">A pretend desk running RetroKM on the cables the planner laid. Drag a machine onto a screen
+      (or tap it, then a screen), or switch to one of your modes. You see what the hub does by itself (⚡), what
+      you do by hand (✋), and what gets in the way (⚠). Point at a screen to see where the keyboard goes.</p>
+    <div class="row">
+      <span class="label inline">Hardware:</span>
+      <div class="seg" role="radiogroup" aria-label="Which hardware">
+        <button type="button" role="radio" id="sim-owned">What I own</button>
+        <button type="button" role="radio" id="sim-sug">With the suggestions</button>
+      </div>
+      <button type="button" id="sim-reset">All screens off</button>
+    </div>
+    <div class="row" id="sim-modes"></div>
+    <div id="sim-tray" class="tray"></div>
+    <div id="sim-desk" class="sim-desk"></div>
+    <div id="sim-last" class="sim-last" aria-live="polite"></div>
+    <div id="sim-control" class="control-banner" aria-live="polite"></div>
+    <div class="row">
+      <input type="text" id="sim-type" class="name" placeholder="Type here: it goes where the pointer is" aria-label="Type to the machine under the pointer">
+    </div>
+    <p class="note" id="sim-typed"></p>
+  </section>
+  <div class="grid">
+    <section class="card" aria-labelledby="h-log">
+      <h2 id="h-log">What happened</h2>
+      <div id="sim-log"><p class="empty">Nothing yet: put a machine on a screen.</p></div>
+    </section>
+    <section class="card" aria-labelledby="h-limits">
+      <h2 id="h-limits">Limits of this setup</h2>
+      <ul id="sim-limits" class="limits"></ul>
+    </section>
+  </div>
+</main>
+
+<main class="wrap grid" id="design-view">
   <div class="col">
     <section class="card" aria-labelledby="h-tray">
       <h2 id="h-tray"><span class="step">1</span> Your machines</h2>

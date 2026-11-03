@@ -37,7 +37,7 @@
   }
   const names = list => list.length <= 1 ? list.join('') : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1];
   const byId = (list, id) => list.find(x => x.id === id);
-  const hue = m => HUES[plan.machines.indexOf(m) % HUES.length];
+  const hue = m => HUES[Math.max(0, plan.machines.findIndex(x => x.id === m.id)) % HUES.length];
 
   function say(text) {
     $('status').textContent = text;
@@ -110,7 +110,13 @@
 
   /* Drag with a pointer (mouse, pen or finger); a press that does not move
    * is a tap, which picks the machine for tap-to-place. */
-  function draggable(el, mId) {
+  function draggable(el, mId, onDrop, onTap) {
+    onDrop = onDrop || place;
+    onTap = onTap || (() => {
+      picked = picked === mId ? null : mId;
+      draw();
+      if (picked) say(`Now tap a screen for ${byId(plan.machines, mId).name}.`);
+    });
     el.addEventListener('pointerdown', e => {
       if (e.button || e.target.closest('button')) return;
       const x0 = e.clientX, y0 = e.clientY;
@@ -163,12 +169,8 @@
         if (ghost) {
           ghost.remove();
           const t = ev.type === 'pointerup' && target(ev);
-          if (t) place(mId, t.dataset.drop);
-        } else if (ev.type === 'pointerup') {
-          picked = picked === mId ? null : mId;
-          draw();
-          if (picked) say(`Now tap a screen for ${byId(plan.machines, mId).name}.`);
-        }
+          if (t) onDrop(mId, t.dataset.drop);
+        } else if (ev.type === 'pointerup') onTap();
       };
       el.addEventListener('pointermove', move);
       el.addEventListener('pointerup', up);
@@ -177,9 +179,7 @@
     el.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        picked = picked === mId ? null : mId;
-        draw();
-        if (picked) say(`Now choose a screen for ${byId(plan.machines, mId).name}.`);
+        onTap();
       }
     });
   }
@@ -426,6 +426,10 @@
   function analyse() {
     result = P.analyse(plan);
     draw();
+    if (sim) {                    // the plan changed: the pretend desk starts again
+      simBuild();
+      if (view === 'try') drawTry();
+    }
   }
 
   // ---- buttons -----------------------------------------------------------------------
@@ -525,8 +529,205 @@
     timer = setTimeout(analyse, 120);
   });
 
+  // ---- try it out ----------------------------------------------------------------------
+
+  let view = 'design', simOwned = false, sim = null, simPicked = null, active = null, log = [], lastLost = new Set();
+  try { simOwned = localStorage.getItem('retrokm-try-owned') === '1'; } catch (e) { simOwned = false; }
+
+  function simBuild() {
+    if (!result) return;
+    sim = simOwned ? P.simulator(result.plan, result.now.cables) : P.simulator(result.withSuggestions, result.routing.cables);
+    log = [];
+    active = null;
+    simPicked = null;
+    lastLost = new Set();
+  }
+  const sp = () => (sim ? sim.plan : plan);
+  const mName = id => byId(sp().machines, id).name;
+  const tName = id => byId(sp().monitors, id).name;
+
+  function entry(title, items, cls) {
+    log.unshift({ title, items, cls });
+    log = log.slice(0, 6);
+  }
+  function itemsOf(r, mId, tId) {
+    if (!r.ok) {
+      const fixes = simOwned && result.routing.reach[mId] && result.routing.reach[mId][tId] && result.routing.reach[mId][tId].ok;
+      return [{ cls: 'fail', text: fixes
+        ? `With what you own there is no way from ${mName(mId)} to ${tName(tId)}. The suggested hardware fixes that: switch to “With the suggestions” above to try it.`
+        : r.reason }];
+    }
+    return r.steps.map(x => ({ cls: x.auto ? 'auto' : 'hand', text: x.text }))
+      .concat(r.lost.map(l => ({ cls: 'lost', text: `${tName(l.t)} loses ${mName(l.m)}: ${l.why}.` })));
+  }
+  function simShow(mId, tId) {
+    const r = sim.show(mId, tId);
+    lastLost = new Set(r.lost.map(l => l.t));
+    entry(`${mName(mId)} on ${tName(tId)}`, itemsOf(r, mId, tId), !r.ok ? 'bad' : r.lost.length ? 'warn' : 'ok');
+    simPicked = null;
+    if (r.ok) active = tId;
+    drawTry();
+  }
+  function simMode(md) {
+    const rs = sim.mode(md);
+    const items = [];
+    let cls = 'ok';
+    lastLost = new Set();
+    for (const r of rs) {
+      if (!r.ok) cls = 'bad';
+      else if (r.lost.length && cls === 'ok') cls = 'warn';
+      items.push({ cls: 'head', text: `${mName(r.m)} on ${tName(r.t)}` + (r.ok && !r.kept ? ' (then lost again, below)' : '') });
+      items.push(...itemsOf(r, r.m, r.t));
+      r.lost.forEach(l => lastLost.add(l.t));
+    }
+    if (!rs.length) items.push({ cls: 'fail', text: 'This mode has nothing in it yet.' });
+    entry(`Switched to "${md.name}"`, items, cls);
+    drawTry();
+  }
+
+  function controlText() {
+    if (!active) return 'Point at a screen (or tap one) to see where the keyboard and mouse go.';
+    const c = sim.control(active);
+    if (c.kind === 'none') return `${tName(active)} shows nothing: the pointer would just pass over it.`;
+    if (c.kind === 'video') return `${mName(c.m)} on ${tName(active)} is video only: no keyboard or mouse there.`;
+    return `⌨ Keyboard and mouse → ${mName(c.m)} (on ${tName(active)}). Copy here, paste on another machine: the clipboard follows.`;
+  }
+  function setActive(tId) {
+    if (active === tId) return;
+    active = tId;
+    for (const el of $('sim-desk').querySelectorAll('.sim-screen')) el.classList.toggle('active', el.dataset.t === tId);
+    $('sim-control').textContent = controlText();
+    typed();
+  }
+  function typed() {
+    const v = $('sim-type').value;
+    const out = $('sim-typed');
+    if (!v) { out.textContent = ''; return; }
+    const c = active && sim.control(active);
+    out.textContent = !c || c.kind === 'none' ? 'Those keys go nowhere: no machine under the pointer.'
+      : c.kind === 'video' ? `${mName(c.m)} has no keyboard: those keys go nowhere.`
+      : `${mName(c.m)} receives: “${v}”`;
+  }
+
+  function drawTry() {
+    if (!sim) simBuild();
+    if (!sim) return;
+    $('sim-owned').setAttribute('aria-checked', String(simOwned));
+    $('sim-sug').setAttribute('aria-checked', String(!simOwned));
+    const p = sim.plan;
+
+    const modes = $('sim-modes');
+    modes.replaceChildren();
+    const used = p.modes.filter(md => md.shows.length);
+    if (used.length) {
+      modes.append(h('span', { class: 'label inline' }, 'Switch to:'));
+      for (const md of used) modes.append(h('button', { type: 'button', onclick: () => simMode(md) }, md.name));
+    }
+
+    const tray = $('sim-tray');
+    tray.replaceChildren();
+    for (const m of p.machines) {
+      const where = [...sim.on].find(([, v]) => v.m === m.id);
+      const el = tile(m, { 'aria-label': `${m.name}. Drag onto a screen, or tap it and then a screen.` });
+      el.classList.toggle('picked', simPicked === m.id);
+      el.setAttribute('aria-pressed', String(simPicked === m.id));
+      if (where) el.append(h('span', { class: 'where' }, 'on ' + tName(where[0])));
+      draggable(el, m.id, simShow, () => {
+        simPicked = simPicked === m.id ? null : m.id;
+        drawTry();
+        if (simPicked) say(`Now tap a screen for ${m.name}.`);
+      });
+      tray.append(el);
+    }
+
+    const desk = $('sim-desk');
+    desk.replaceChildren(h('div', { class: 'cursor', id: 'cursor', 'aria-hidden': 'true' }));
+    for (const t of p.monitors) {
+      const v = sim.on.get(t.id);
+      const m = v && byId(p.machines, v.m);
+      const screen = h('div', {
+        class: `sim-screen ${t.kind}` + (active === t.id ? ' active' : '') + (simPicked ? ' armed' : '') + (lastLost.has(t.id) ? ' lost' : ''),
+        'data-t': t.id, tabindex: '0', role: 'button',
+        'aria-label': simPicked ? `Show ${mName(simPicked)} on ${t.name}` : `${t.name}: ${m ? m.name : 'no signal'}`,
+        onclick: () => { if (simPicked) simShow(simPicked, t.id); else setActive(t.id); },
+        onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (simPicked) simShow(simPicked, t.id); else setActive(t.id); } },
+      });
+      if (m) {
+        screen.append(h('div', { class: 'pic', style: `--hue:${hue(m)}` },
+          m.kind === 'computer' ? [h('span', { class: 'menubar' }), h('span', { class: 'win' })] : null,
+          h('b', {}, m.name),
+          h('small', {}, m.kind === 'console' ? '▶ playing' : m.agent || m.hub ? 'desktop' : 'video only')));
+      } else screen.append(h('span', { class: 'nosig' }, 'NO SIGNAL'));
+      const via = v ? v.hops.filter(x => x.dev).map(x => byId(p.hardware, x.dev).name) : [];
+      desk.append(h('div', { class: 'station', 'data-drop': t.id },
+        screen,
+        h('div', { class: 'stand' }, h('span', { class: 'sname' }, t.name),
+          v && h('button', { type: 'button', class: 'more', title: 'Turn off', 'aria-label': `Clear ${t.name}`,
+            onclick: () => { sim.clear(t.id); entry(`${t.name} cleared`, [], 'ok'); drawTry(); } }, '×'),
+          h('span', { class: 'via' }, via.length ? 'through ' + via.join(' → ') : v ? 'cabled straight in' : ''))));
+    }
+    $('sim-control').textContent = controlText();
+    typed();
+
+    // the last thing that happened, next to the screens (the full log is further down)
+    const last = $('sim-last');
+    last.replaceChildren();
+    if (log.length) {
+      const e = log[0];
+      const hand = e.items.filter(i => i.cls === 'hand').length, auto = e.items.filter(i => i.cls === 'auto').length;
+      const bad = e.items.filter(i => i.cls === 'lost' || i.cls === 'fail');
+      last.className = 'sim-last ' + e.cls;
+      last.append(h('strong', {}, { ok: '✓ ', warn: '⚠ ', bad: '✗ ' }[e.cls] + e.title),
+        (auto || hand) ? h('span', {}, ` — ${auto ? auto + ' done by the hub' : ''}${auto && hand ? ', ' : ''}${hand ? hand + ' by hand' : ''}.`) : null,
+        bad.map(i => h('div', {}, i.text)),
+        h('a', { href: '#h-log' }, 'All steps'));
+    }
+
+    const lg = $('sim-log');
+    lg.replaceChildren();
+    if (!log.length) lg.append(h('p', { class: 'empty' }, 'Nothing yet: put a machine on a screen, or switch to a mode.'));
+    for (const e of log)
+      lg.append(h('div', { class: 'log-entry ' + e.cls }, h('h3', {}, e.title),
+        e.items.length ? h('ul', {}, e.items.map(it => it.cls === 'head' ? h('li', { class: 'head' }, h('strong', {}, it.text))
+          : h('li', { class: it.cls }, it.text))) : null));
+
+    const lim = $('sim-limits');
+    lim.replaceChildren();
+    const ls = P.limits(result, simOwned);
+    if (!ls.length) lim.append(h('li', {}, 'Nothing stands out: everything you asked for works.'));
+    for (const l of ls) lim.append(h('li', {}, l));
+  }
+
+  // the pretend pointer: follows the mouse over the desk, and the screen under it gets the keyboard
+  $('sim-desk').addEventListener('pointermove', e => {
+    if (e.pointerType !== 'mouse') return;
+    const desk = $('sim-desk'), cur = $('cursor'), r = desk.getBoundingClientRect();
+    if (cur) { cur.style.display = 'block'; cur.style.left = (e.clientX - r.left) + 'px'; cur.style.top = (e.clientY - r.top) + 'px'; }
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const scr = under && under.closest('.sim-screen');
+    if (scr) setActive(scr.dataset.t);
+  });
+  $('sim-desk').addEventListener('pointerleave', () => { const cur = $('cursor'); if (cur) cur.style.display = 'none'; });
+  $('sim-type').addEventListener('input', typed);
+  $('sim-owned').addEventListener('click', () => { simOwned = true; try { localStorage.setItem('retrokm-try-owned', '1'); } catch (e) { /* fine */ } simBuild(); drawTry(); });
+  $('sim-sug').addEventListener('click', () => { simOwned = false; try { localStorage.setItem('retrokm-try-owned', '0'); } catch (e) { /* fine */ } simBuild(); drawTry(); });
+  $('sim-reset').addEventListener('click', () => { simBuild(); drawTry(); say('All screens off.'); });
+
+  function setView(v) {
+    view = v;
+    $('design-view').hidden = v !== 'design';
+    $('try-view').hidden = v !== 'try';
+    $('tab-design').setAttribute('aria-selected', String(v === 'design'));
+    $('tab-try').setAttribute('aria-selected', String(v === 'try'));
+    if (v === 'try') { if (!sim) simBuild(); drawTry(); }
+    if (location.hash !== (v === 'try' ? '#try' : '')) history.replaceState(null, '', v === 'try' ? '#try' : location.pathname);
+  }
+  $('tab-design').addEventListener('click', () => setView('design'));
+  $('tab-try').addEventListener('click', () => setView('try'));
+
   fill();
   mode();
   draw();
   analyse();
+  if (location.hash === '#try') setView('try');
 })();

@@ -422,7 +422,8 @@
              modes, modeFailed, modeShowsOk, score: okCount + togetherOk + modeShowsOk };
   }
 
-  function search(ctx, st, mId, tId, blocked) {
+  /* fixed: only the cables there are (the live try-out), no new ones */
+  function search(ctx, st, mId, tId, blocked, fixed) {
     const mach = ctx.machines.get(mId), target = ctx.monitors.get(tId);
     if (!mach || !target) return null;
     const shared = (ctx.demand.get(tId) || 0) > 1;
@@ -476,6 +477,7 @@
         }
         continue;
       }
+      if (fixed) continue;
       // a new cable from this port: to the monitor, or into any free device input
       target.inputs.forEach((inp, i) => {
         const to = { t: 't', id: tId, port: i };
@@ -1068,10 +1070,151 @@
     return L.join('\n') + '\n';
   }
 
+  // ---- the live try-out --------------------------------------------------------
+
+  /*
+   * A pretend desk running RetroKM on the cables of a plan.  show(m, t) is
+   * what the hub's "show" would do, plus what a person has to do by hand:
+   * it finds a way along the cables that leaves the other screens alone,
+   * or else takes over what is in the way (the hub does the same) and says
+   * which screens lose their picture and why.  No new cables, ever.
+   */
+  function simulator(plan, cables) {
+    plan = normalizePlan(plan);
+    const ctx = buildCtx(plan);
+    const st = { cables, byFrom: new Map(), toUsed: new Set() };
+    for (const c of cables) { st.byFrom.set(fromKey(c.from), c); st.toUsed.add(toKey(c.to)); }
+    const M = id => plan.machines.find(x => x.id === id);
+    const T = id => plan.monitors.find(x => x.id === id);
+    const H = id => plan.hardware.find(x => x.id === id);
+    const on = new Map();        // monitor id -> { m, hops }
+    const feedsInto = tId => cables.filter(c => c.to.t === 't' && c.to.id === tId).length;
+    // in the try-out a screen shows one machine; holds() counts it whole
+    const held = hops => holds(plan, hops).map(k => k.startsWith('ti:') ? 't:' + k.split(':')[1] : k);
+
+    function steps(mId, tId, hops) {
+      const out = [];
+      for (const hp of hops) {
+        if (!hp.dev) continue;
+        const hw = H(hp.dev), ports = portsOf(hw);
+        if (hw.kind === 'switch') {
+          const what = hw.outs === 1 ? `input ${hp.inPort + 1}` : `input ${hp.inPort + 1} to output ${hp.outPort + 1}`;
+          if (hw.driver !== 'manual') out.push({ auto: true, text: `The hub sets ${hw.name}: ${what}.` });
+          else out.push({ auto: false, text: `Set ${hw.name} to ${what} (its buttons or remote).` });
+        } else if (ports.ins.length > 1) {
+          const jack = ports.ins[hp.inPort].name;
+          const nice = { scart: 'SCART', svideo: 'S-Video', vga: 'VGA', hdmi: 'HDMI', dvi: 'DVI' }[jack] || jack;
+          out.push({ auto: false, text: `Pick the ${nice} input on ${hw.name} (its remote or buttons): the hub cannot set it.` });
+        }
+      }
+      const last = hops[hops.length - 1];
+      if (feedsInto(tId) > 1) {
+        const t = T(tId);
+        out.push({ auto: false, text: `Pick the ${SIGNALS[t.inputs[last.input]].label} input on ${t.name}` +
+          (t.kind === 'monitor' ? ' (or let the hub do it over DDC/CI: ddc = in the config).' : ' (its remote).') });
+      }
+      if (hops.some(hp => hp.dev && H(hp.dev).driver === 'manual') && M(mId).agent)
+        out.push({ auto: false, text: `Tell the hub ${M(mId).name} is the one showing (tap it on the panel or phone page), so the keyboard knows.` });
+      if (!out.length) out.push({ auto: true, text: 'Nothing to switch: it is cabled straight there.' });
+      return out;
+    }
+
+    function show(mId, tId) {
+      const m = M(mId), t = T(tId);
+      if (!m || !t) return { ok: false, reason: 'Unknown machine or screen.', steps: [], lost: [] };
+      if (on.get(tId) && on.get(tId).m === mId) return { ok: true, steps: [{ auto: true, text: `${m.name} is already on ${t.name}.` }], lost: [] };
+      const others = new Set();
+      for (const [k, v] of on) if (k !== tId) held(v.hops).forEach(x => others.add(x));
+      let r = search(ctx, st, mId, tId, others, true);
+      const lost = [];
+      if (!r) {
+        r = search(ctx, st, mId, tId, null, true);
+        if (!r) {
+          const why = (cables.some(c => c.from.t === 'm' && c.from.id === mId))
+            ? `No cables lead from ${m.name} to ${t.name} in this setup.` : `${m.name} is not cabled to anything yet.`;
+          const native = diagnose(plan, null, mId, tId);
+          return { ok: false, reason: why + (/no common box/.test(native) ? ' ' + native : ''), steps: [], lost: [] };
+        }
+        const mine = new Set(held(r.hops));
+        for (const [k, v] of [...on]) {
+          if (k === tId) continue;
+          const clash = held(v.hops).find(x => mine.has(x));
+          if (clash) {
+            lost.push({ t: k, m: v.m, why: `${M(mId).name} and ${M(v.m).name} both need ${holdName(plan, clash)}` });
+            on.delete(k);
+          }
+        }
+      }
+      on.set(tId, { m: mId, hops: r.hops });
+      return { ok: true, steps: steps(mId, tId, r.hops), lost, hops: r.hops };
+    }
+
+    function clear(tId) { on.delete(tId); }
+
+    /* A mode: each of its shows in turn.  Screens the mode does not use
+     * keep their picture unless something takes it over. */
+    function mode(md) {
+      const results = md.shows.map(sh => Object.assign({ m: sh.m, t: sh.t }, show(sh.m, sh.t)));
+      // a later show may have taken an earlier one's screen
+      for (const r of results) r.kept = !!(on.get(r.t) && on.get(r.t).m === r.m);
+      return results;
+    }
+
+    /* Who gets the keyboard and mouse on a screen */
+    function control(tId) {
+      const v = on.get(tId);
+      if (!v) return { kind: 'none' };
+      const m = M(v.m);
+      if (m.agent || m.hub) return { kind: 'kbm', m: m.id };
+      return { kind: 'video', m: m.id };
+    }
+
+    return { show, clear, mode, control, on, plan };
+  }
+
+  /* The limits of a setup, in plain words, for the try-out: with the
+   * suggested hardware, or (owned) only what is owned */
+  function limits(result, owned) {
+    const out = [];
+    const p = owned ? result.plan : result.withSuggestions;
+    const routing = owned ? result.now : result.routing;
+    const M = id => p.machines.find(x => x.id === id).name, T = id => p.monitors.find(x => x.id === id).name;
+    for (const md of result.modes) {
+      if (!md.shows.length) continue;
+      if (owned && md.status === 'plan') out.push(`"${md.name}" needs the suggested hardware (${names(md.shows.filter(x => x.status === 'plan').map(x => M(x.m) + ' on ' + T(x.t)))}).`);
+      for (const x of md.shows) if (x.status === 'bad') out.push(`"${md.name}": ${x.reason}`);
+    }
+    if (owned) {
+      for (const f of routing.failed) {
+        const fixed = result.routing.reach[f.m] && result.routing.reach[f.m][f.t] && result.routing.reach[f.m][f.t].ok;
+        out.push(fixed ? `With what you own, ${M(f.m)} cannot reach ${T(f.t)}; the suggested hardware fixes that.` : diagnose(p, routing, f.m, f.t));
+      }
+      for (const f of routing.togetherFailed) out.push(apartReason(p, routing, f.a, f.b));
+    } else {
+      for (const a of result.apart) out.push(a.reason);
+      for (const m of result.missing) out.push(m.reason);
+    }
+    const conv = p.hardware.filter(h => h.kind === 'converter' && routing.cables.some(c => c.to.id === h.id));
+    for (const h of conv) {
+      const users = [...new Set(routing.cables.filter(c => c.to.id === h.id && c.from.t === 'm').map(c => M(c.from.id)))];
+      if (users.length > 1) out.push(`${names(users)} share ${h.name}: only one of them can be on screen through it at a time.`);
+    }
+    const manual = p.hardware.filter(h => h.driver === 'manual' && routing.cables.some(c => c.to.id === h.id));
+    if (manual.length) out.push(`The hub cannot switch ${names(manual.map(h => h.name))}: you do that with a remote or buttons.`);
+    const video = p.machines.filter(m => !m.agent && !m.hub && routing.cables.some(c => c.from.t === 'm' && c.from.id === m.id));
+    if (video.length) out.push(`${names(video.map(m => m.name))} ${video.length > 1 ? 'are' : 'is'} video only: no keyboard or mouse goes there (a game pad can, with the pad dongle).`);
+    for (const t of p.monitors) {
+      const n = routing.cables.filter(c => c.to.t === 't' && c.to.id === t.id).length;
+      if (n > 1) out.push(`${T(t.id)} has ${n} cables in: its input is picked on the screen itself${t.kind === 'monitor' ? ' or over DDC/CI' : ''}.`);
+    }
+    return out;
+  }
+
   const api = {
     SIGNALS, SIGNAL_KEYS, MACHINE_PRESETS, MONITOR_PRESETS, CATALOGUE: CAT,
     takes, normalizePlan, normalizeHardware, hardwareFromCatalogue, parseDeviceFile, portsOf,
     wantedPairs, wantsOf, togetherPairs, apartReason, modeReason, route, suggest, analyse, diagnose, wiringList, describeHops, makeConfig, newId,
+    simulator, limits,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.RetroKMPlanner = api;

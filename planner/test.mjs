@@ -354,6 +354,52 @@ test('the config lists each mode as control-port commands', () => {
   assert.equal(a.modes.find(m => m.id === 'retro').status, 'plan');
 });
 
+// ---- the live try-out ------------------------------------------------------------
+
+test('try-out: a shared scaler takes a screen away, and says why', () => {
+  const a = P.analyse(example('retro-desk.json'));
+  const sim = P.simulator(a.plan, a.now.cables);
+  const r1 = sim.show('ps2', 'tv');
+  assert.ok(r1.ok);
+  assert.ok(r1.steps.some(s => !s.auto && /Pick the component input on RetroTINK 5X Pro/.test(s.text)), 'the 5X is set by hand');
+  assert.ok(r1.steps.some(s => s.auto && /The hub sets HDMI matrix/.test(s.text)), 'the matrix by the hub');
+  const r2 = sim.show('n64', 'cap');
+  assert.ok(r2.ok);
+  assert.deepEqual(r2.lost.map(l => [l.t, l.m]), [['tv', 'ps2']]);
+  assert.match(r2.lost[0].why, /N64 and PlayStation 2 both need RetroTINK 5X Pro/);
+  assert.equal(sim.control('tv').kind, 'none');
+  assert.deepEqual(sim.control('cap'), { kind: 'video', m: 'n64' });
+});
+
+test('try-out: with the suggestions both stay on', () => {
+  const a = P.analyse(example('retro-desk.json'));
+  const sim = P.simulator(a.withSuggestions, a.routing.cables);
+  const rs = sim.mode(a.withSuggestions.modes.find(m => m.id === 'retro'));
+  assert.ok(rs.every(r => r.ok && r.kept && !r.lost.length), JSON.stringify(rs.map(r => r.lost)));
+  assert.equal(sim.on.size, 3);
+});
+
+test('try-out: no new cables, keyboard only on machines with an agent', () => {
+  const a = P.analyse(example('retro-desk.json'));
+  const sim = P.simulator(a.plan, a.now.cables);
+  const r = sim.show('octane', 'cap');
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /No cables lead from SGI Octane to Capture card/);
+  assert.ok(sim.show('octane', 'crt').ok);
+  assert.deepEqual(sim.control('crt'), { kind: 'kbm', m: 'octane' });
+  assert.equal(sim.show('pc', 'crt').steps[0].text, 'The hub sets Extron MVX 88 VGA A: input 2 to output 1.');
+});
+
+test('try-out: the limits of a setup', () => {
+  const a = P.analyse(example('retro-desk.json'));
+  const owned = P.limits(a, true).join('\n'), sug = P.limits(a, false).join('\n');
+  assert.match(owned, /"Retro night" needs the suggested hardware/);
+  assert.match(owned, /With what you own, SGI Octane cannot reach Capture card; the suggested hardware fixes that/);
+  assert.match(owned, /The hub cannot switch RetroTINK 5X Pro/);
+  assert.match(owned, /PlayStation 2, N64 and Dreamcast are video only/);
+  assert.ok(!/needs the suggested hardware/.test(sug));
+});
+
 test('impossible pairs are explained', () => {
   const plan = {
     machines: [machine('PS2', ['component'], ['crt'], { kind: 'console' })],

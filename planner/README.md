@@ -13,6 +13,15 @@ There are two pages on the same plan:
   everything in it on screen at once. Make one mode for work, one for
   games, and so on. Each placed machine gets a mark (✓ works with what you
   own, ★ works with the suggested hardware, ✗ not possible, with why).
+- **Try it out** (`desk.html#try`, the second tab of the desk builder): a
+  pretend desk running RetroKM on the cables the planner laid, with what
+  you own or with the suggestions. Drag machines onto screens or switch
+  to a mode and it tells you what would happen: what the hub switches by
+  itself (⚡), what you do by hand with a remote or buttons (✋), which
+  screen loses its picture because a box only carries one (⚠), and what
+  cannot work (✗). Point at a screen to see where the keyboard and mouse
+  go, and type to see who gets the keys. A list of the setup's limits
+  sits beside it.
 - **`index.html`, the detailed planner**: lists and checkboxes for every
   setting, the cables to plug, the wiring picture and the config.
 
@@ -74,11 +83,16 @@ prices or shop links: check a box's manual before you buy it.
   when a switcher feeds it, or becomes a `[screen]` with `agent = no` that
   the machines plugged into it name with `via =`. See `docs/SWITCHING.md`.
 
+The try-out is a simulation of the plan, not of your real boxes: it
+uses no new cables, treats every screen as showing one machine, and says
+what the hub would do, the way the hub's own router does it (a free way
+first, else take over what is in the way).
+
 ## Files
 
 | file | what |
 |---|---|
-| `desk.html`, `desk.js` | the desk builder (drag machines onto screens, modes) |
+| `desk.html`, `desk.js` | the desk builder (drag machines onto screens, modes) and the try-out |
 | `index.html`, `app.js` | the detailed planner |
 | `style.css` | both pages |
 | `logic.js` | routing, suggestions, reasons, the config (no page code) |
