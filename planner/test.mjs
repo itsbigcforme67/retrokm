@@ -21,6 +21,13 @@ let n = 0;
 const machine = (name, outputs, wants, extra) => Object.assign({ id: 'm' + (++n), name, kind: 'computer', outputs, agent: true, wants }, extra);
 const monitor = (id, name, inputs, extra) => Object.assign({ id, name, kind: 'monitor', inputs, sog: false, atOnce: 1 }, extra);
 const owned = id => P.hardwareFromCatalogue(id);
+// what a way holds, the router's own idea (see logic.js holds)
+const holdsOf = (plan, hops) => hops.flatMap(h => {
+  if (h.dev) return [plan.hardware.find(x => x.id === h.dev).kind === 'converter' ? 'dc:' + h.dev : 'do:' + h.dev + ':' + h.outPort];
+  if (h.monitor) return [plan.monitors.find(x => x.id === h.monitor).atOnce > 1 ? 'ti:' + h.monitor + ':' + h.input : 't:' + h.monitor];
+  return [];
+});
+const apartText = (r, plan) => P.apartReason(plan, r, r.together[0].a, r.together[0].b);
 
 /* A small reader for the generated config: sections in order, keys with
  * comments stripped the way the hub strips them. */
@@ -221,6 +228,83 @@ test('a box that can serve more of what is missing is picked on a tie', () => {
   assert.ok(!/lets them share/.test(a.suggestions[0].reason), 'the scaler is not credited with sharing: ' + a.suggestions[0].reason);
 });
 
+// ---- side by side ------------------------------------------------------------
+
+const consoles = (extra) => Object.assign({
+  machines: [machine('PS2', ['component'], ['tv', 'cap'], { id: 'ps2', kind: 'console', agent: false, alongside: ['n64'] }),
+             machine('N64', ['svideo'], ['tv', 'cap'], { id: 'n64', kind: 'console', agent: false })],
+  monitors: [monitor('tv', 'TV', ['hdmi'], { kind: 'tv' }), monitor('cap', 'Capture', ['hdmi'], { kind: 'capture' })],
+  hardware: [Object.assign(owned('retrotink-5x'), { id: 'tink' }), Object.assign(owned('hdmi-matrix-4x4'), { id: 'mx' })],
+}, extra);
+
+test('"at the same time as" is kept both ways, and only for real machines', () => {
+  const plan = P.normalizePlan({ machines: [
+    machine('A', [], null, { id: 'a', alongside: ['b', 'a', 'ghost', 'b'] }), machine('B', [], null, { id: 'b' })] });
+  assert.deepEqual(plan.machines.map(m => m.alongside), [['b'], ['a']]);
+  assert.deepEqual(P.togetherPairs(plan), [{ a: 'a', b: 'b' }]);
+});
+
+test('two consoles through one scaler cannot be on screen together; a second scaler fixes it', () => {
+  const a = P.analyse(consoles());
+  assert.equal(a.now.okCount, 4, 'each reaches both screens, one at a time');
+  assert.equal(a.now.together[0].ok, false);
+  assert.match(apartText(a.now, a.plan), /both have to go through RetroTINK 5X Pro, which shows one picture at a time/);
+  const st = a.suggestions[0];
+  assert.ok(st && st.unlocks.some(u => u.together), 'a suggestion for the pair');
+  assert.match(st.reason, /PS2 and N64 could not show at the same time: both have to go through RetroTINK 5X Pro/);
+  assert.match(st.reason, /they can \((PS2 on TV, N64 on Capture|PS2 on Capture, N64 on TV)\)/);
+  const x = a.routing.together[0];
+  assert.ok(x.ok && x.ta !== x.tb);
+  const ha = new Set(holdsOf(a.withSuggestions, x.hopsA));
+  assert.ok(!holdsOf(a.withSuggestions, x.hopsB).some(k => ha.has(k)), 'the two ways share nothing');
+  assert.equal(a.missing.length + a.apart.length, 0);
+});
+
+test('one screen that shows one picture: explained, not suggested', () => {
+  const plan = consoles();
+  plan.machines.forEach(m => { m.wants = ['tv']; });
+  const a = P.analyse(plan);
+  assert.equal(a.apart.length, 1);
+  assert.match(a.apart[0].reason, /they only show on TV, which shows one picture at a time/);
+  assert.ok(!a.suggestions.some(s => s.unlocks.some(u => u.together)));
+});
+
+test('a screen that shows two pictures at once can hold both', () => {
+  const plan = consoles();
+  plan.machines.forEach(m => { m.wants = ['tv']; });
+  plan.monitors[0].atOnce = 2;
+  plan.monitors[0].inputs = ['hdmi', 'hdmi'];
+  plan.hardware.push(Object.assign(owned('retrotink-5x'), { id: 'tink2', name: 'Second 5X' }));
+  const a = P.analyse(plan);
+  assert.equal(a.now.together[0].ok, true, JSON.stringify(a.apart));
+  assert.equal(a.now.together[0].ta, 'tv');
+  assert.equal(a.now.together[0].tb, 'tv');
+});
+
+test('a hand switch with one output is one picture too', () => {
+  const plan = {
+    machines: [machine('Wii U', ['hdmi'], ['tv', 'cap'], { id: 'w', alongside: ['s'] }), machine('Switch', ['hdmi'], ['tv', 'cap'], { id: 's' })],
+    monitors: [monitor('tv', 'TV', ['hdmi']), monitor('cap', 'Capture', ['hdmi'])],
+    hardware: [Object.assign(owned('hdmi-switch-4x1'), { id: 'hs' })],
+  };
+  const r = P.route(P.normalizePlan(plan));
+  // each machine has one output, so both can only reach the screens through the switch... or one
+  // goes straight to a screen, which is what makes them fit
+  assert.equal(r.together[0].ok, true);
+  const ha = new Set(holdsOf(P.normalizePlan(plan), r.together[0].hopsA));
+  assert.ok(!holdsOf(P.normalizePlan(plan), r.together[0].hopsB).some(k => ha.has(k)));
+});
+
+test('the example desk: PS2 and N64 side by side after the suggestions', () => {
+  const a = P.analyse(example('retro-desk.json'));
+  assert.equal(a.now.together[0].ok, false);
+  assert.equal(a.routing.together[0].ok, true);
+  assert.equal(a.missing.length + a.apart.length, 0);
+  const text = P.makeConfig(a.withSuggestions, a.routing.cables);
+  checkConf(text);
+  assert.match(text, /^#   playstation-2 and n64$/m);
+});
+
 test('impossible pairs are explained', () => {
   const plan = {
     machines: [machine('PS2', ['component'], ['crt'], { kind: 'console' })],
@@ -258,7 +342,7 @@ test('config for the example desk', () => {
   // the scaler the Extron feeds is looked through: a wire from the Extron into the matrix
   const wires = c.of('wire').flatMap(w => w.keys);
   assert.ok(wires.some(([a2, b]) => /^mvx\.out\d$/.test(a2) && /^matrix\.in\d$/.test(b)), JSON.stringify(wires));
-  assert.match(text, /# through OSSC/);
+  assert.match(text, /# through (OSSC|RetroTINK 4K)/);
   assert.match(text, /^ctrl\+alt\+1 = goto laptop$/m);
 });
 

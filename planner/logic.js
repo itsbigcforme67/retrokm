@@ -112,8 +112,17 @@
         agent: m.agent === undefined ? m.kind !== 'console' : !!m.agent,
         hub: !!m.hub,
         wants: Array.isArray(m.wants) ? m.wants.filter(id => monIds.has(id)) : null,
+        alongside: Array.isArray(m.alongside) ? m.alongside.filter(id => typeof id === 'string') : [],
       });
     }
+    // "show at the same time as": other machines only, and both ways round
+    const machIds = new Set(out.machines.map(m => m.id));
+    for (const m of out.machines) m.alongside = [...new Set(m.alongside)].filter(id => id !== m.id && machIds.has(id));
+    for (const m of out.machines)
+      for (const id of m.alongside) {
+        const o = out.machines.find(x => x.id === id);
+        if (!o.alongside.includes(m.id)) o.alongside.push(m.id);
+      }
     for (const h of Array.isArray(p.hardware) ? p.hardware : []) {
       if (!h || typeof h !== 'object') continue;
       const hw = normalizeHardware(h);
@@ -214,6 +223,47 @@
     return input === 'vga' && mon.sog ? ['vga', 'sog'] : [input];
   }
 
+  /* The machines that should be on screen at the same time, each pair once */
+  function togetherPairs(plan) {
+    const pairs = [];
+    plan.machines.forEach((m, i) => {
+      for (const id of m.alongside || []) {
+        const j = plan.machines.findIndex(x => x.id === id);
+        if (j > i) pairs.push({ a: m.id, b: id });
+      }
+    });
+    return pairs;
+  }
+
+  const wantsOf = (plan, m) => m.wants === null ? plan.monitors.map(t => t.id) : m.wants;
+
+  /* What a route holds while it shows a picture: a converter (one picture
+   * at a time), a switch output, a monitor (or one of its inputs, when it
+   * can show more than one picture). Two routes that share none of these
+   * can show at the same time. */
+  function holds(plan, hops) {
+    const out = [];
+    for (const h of hops) {
+      if (h.dev) {
+        const hw = plan.hardware.find(x => x.id === h.dev);
+        out.push(hw && hw.kind === 'converter' ? 'dc:' + h.dev : 'do:' + h.dev + ':' + h.outPort);
+      } else if (h.monitor) {
+        const t = plan.monitors.find(x => x.id === h.monitor);
+        out.push(t && t.atOnce > 1 ? 'ti:' + h.monitor + ':' + h.input : 't:' + h.monitor);
+      }
+    }
+    return out;
+  }
+
+  function holdName(plan, key) {
+    const [kind, id, port] = key.split(':');
+    if (kind === 't') return `${plan.monitors.find(x => x.id === id).name}, which shows one picture at a time`;
+    if (kind === 'ti') return `the same input of ${plan.monitors.find(x => x.id === id).name}`;
+    const hw = plan.hardware.find(x => x.id === id);
+    if (kind === 'dc') return `${hw.name}, which shows one picture at a time`;
+    return hw.outs === 1 ? `the one output of ${hw.name}` : `${hw.name} output ${+port + 1}`;
+  }
+
   function wantedPairs(plan) {
     const pairs = [];
     for (const m of plan.machines) {
@@ -229,23 +279,29 @@
    * Cables are laid one wanted pair at a time, as a cheapest-path search
    * over what exists: an existing cable is almost free, a new one costs 1
    * (10 when a machine would take a monitor input that other machines want
-   * too, 3 for a box doing that, so a switch gets used), a conversion
+   * too, 3 for a converter doing that, so a switch gets used), a conversion
    * costs 2, going through hardware not bought yet 1.5.  Ports hold one
    * cable each.  The order matters for a greedy search, so it is run again
    * with the failed pairs first and the better result kept.
+   *
+   * Machines that should show at the same time go first: one is routed,
+   * then the other with everything the first holds (see holds) blocked,
+   * trying each pair of their monitors until both fit.
    */
   function route(plan, opts) {
     opts = opts || {};
     const ctx = buildCtx(plan);
     const pairs = wantedPairs(plan);
-    let best = runOrder(ctx, pairs);
-    if (best.failed.length && !opts.quick) {
+    const together = togetherPairs(plan);
+    const better = (x, y) => x.score > y.score || (x.score === y.score && x.cables.length < y.cables.length);
+    let best = runOrder(ctx, pairs, together);
+    if ((best.failed.length || best.togetherFailed.length) && !opts.quick) {
       const failedKeys = new Set(best.failed.map(f => f.m + '|' + f.t));
       const failedFirst = pairs.filter(p => failedKeys.has(p.m + '|' + p.t)).concat(pairs.filter(p => !failedKeys.has(p.m + '|' + p.t)));
       for (const order of [failedFirst, pairs.slice().reverse()]) {
-        const again = runOrder(ctx, order);
-        if (again.okCount > best.okCount || (again.okCount === best.okCount && again.cables.length < best.cables.length)) best = again;
-        if (!best.failed.length) break;
+        const again = runOrder(ctx, order, together);
+        if (better(again, best)) best = again;
+        if (!best.failed.length && !best.togetherFailed.length) break;
       }
     }
     return best;
@@ -266,27 +322,53 @@
   const fromKey = f => f.t + ':' + f.id + ':' + f.port;
   const toKey = t => t.t + ':' + t.id + ':' + t.port;
 
-  function runOrder(ctx, pairs) {
+  function runOrder(ctx, pairs, together) {
     const st = { cables: [], byFrom: new Map(), toUsed: new Set() };
+    const commit = r => {
+      for (const c of r.newCables) {
+        st.cables.push(c);
+        st.byFrom.set(fromKey(c.from), c);
+        st.toUsed.add(toKey(c.to));
+      }
+    };
+    const plan = ctx.plan;
+    const side = [], togetherFailed = [];
+    for (const p of together || []) {
+      const A = ctx.machines.get(p.a), B = ctx.machines.get(p.b);
+      let found = null;
+      for (const ta of wantsOf(plan, A)) {
+        for (const tb of wantsOf(plan, B)) {
+          if (ta === tb && ctx.monitors.get(ta).atOnce < 2) continue;
+          const snap = { cables: st.cables.slice(), byFrom: new Map(st.byFrom), toUsed: new Set(st.toUsed) };
+          const ra = search(ctx, st, p.a, ta);
+          if (ra) {
+            commit(ra);
+            const rb = search(ctx, st, p.b, tb, new Set(holds(plan, ra.hops)));
+            if (rb) { commit(rb); found = { ta, tb, hopsA: ra.hops, hopsB: rb.hops }; break; }
+          }
+          Object.assign(st, snap);
+        }
+        if (found) break;
+      }
+      if (found) side.push(Object.assign({ a: p.a, b: p.b, ok: true }, found));
+      else { side.push({ a: p.a, b: p.b, ok: false }); togetherFailed.push(p); }
+    }
+
     const reach = {};
     const failed = [];
     let okCount = 0;
     for (const p of pairs) {
       const r = search(ctx, st, p.m, p.t);
       (reach[p.m] = reach[p.m] || {})[p.t] = r ? { ok: true, hops: r.hops } : { ok: false };
-      if (r) {
-        okCount++;
-        for (const c of r.newCables) {
-          st.cables.push(c);
-          st.byFrom.set(fromKey(c.from), c);
-          st.toUsed.add(toKey(c.to));
-        }
-      } else failed.push(p);
+      if (r) { okCount++; commit(r); }
+      else failed.push(p);
     }
-    return { cables: st.cables, reach, failed, okCount, pairs };
+    const togetherOk = side.filter(x => x.ok).length;
+    return { cables: st.cables, reach, failed, okCount, pairs, together: side, togetherFailed, togetherOk,
+             score: okCount + togetherOk };
   }
 
-  function search(ctx, st, mId, tId) {
+  function search(ctx, st, mId, tId, blocked) {
     const mach = ctx.machines.get(mId), target = ctx.monitors.get(tId);
     if (!mach || !target) return null;
     const shared = (ctx.demand.get(tId) || 0) > 1;
@@ -299,10 +381,15 @@
       for (; s; s = s.prev) if (s.dev === devId) return true;
       return false;
     };
+    const free = k => !blocked || !blocked.has(k);
+    const target1 = target.atOnce > 1;
+    const monFree = i => free(target1 ? 'ti:' + tId + ':' + i : 't:' + tId);
     const enter = (s, devId, inPort, sig, cost, cable) => {
       const d = ctx.devs.get(devId);
       if (onPath(s, devId)) return;
+      if (d.hw.kind === 'converter' && !free('dc:' + devId)) return;
       d.ports.outs.forEach((o, j) => {
+        if (d.hw.kind === 'switch' && !free('do:' + devId + ':' + j)) return;
         let g = null, conv = false;
         if (d.hw.kind === 'switch') { if (takes(o.gives, sig)) g = sig; }
         else { g = o.gives[0]; conv = g !== sig; }
@@ -327,7 +414,7 @@
       if (existing) {
         const to = existing.to;
         if (to.t === 't') {
-          if (to.id === tId && takes(monitorAccepts(target, target.inputs[to.port]), s.sig))
+          if (to.id === tId && monFree(to.port) && takes(monitorAccepts(target, target.inputs[to.port]), s.sig))
             open.push({ cost: s.cost + 0.1, goal: true, prev: s, monInput: to.port, sig: s.sig, cable: null });
         } else {
           const d = ctx.devs.get(to.id);
@@ -338,10 +425,11 @@
       // a new cable from this port: to the monitor, or into any free device input
       target.inputs.forEach((inp, i) => {
         const to = { t: 't', id: tId, port: i };
-        if (st.toUsed.has(toKey(to)) || !takes(monitorAccepts(target, inp), s.sig)) return;
+        if (st.toUsed.has(toKey(to)) || !monFree(i) || !takes(monitorAccepts(target, inp), s.sig)) return;
         // a monitor several machines want is better fed from a switch, which
-        // keeps this port free for the others
-        const c = !shared ? 1 : s.from.t === 'm' ? 10 : 3;
+        // keeps this port free for the others (a switch output is meant for it)
+        const conv = s.from.t === 'd' && ctx.devs.get(s.from.id).hw.kind === 'converter';
+        const c = !shared ? 1 : s.from.t === 'm' ? 10 : conv ? 3 : 1;
         open.push({ cost: s.cost + c + (inp === s.sig ? 0 : 0.3), goal: true, prev: s, monInput: i, sig: s.sig,
                     cable: { from: s.from, to, sig: s.sig } });
       });
@@ -372,6 +460,7 @@
   function okSet(r) {
     const s = new Set();
     for (const m in r.reach) for (const t in r.reach[m]) if (r.reach[m][t].ok) s.add(m + '|' + t);
+    for (const x of r.together || []) if (x.ok) s.add('together|' + x.a + '|' + x.b);
     return s;
   }
 
@@ -389,7 +478,7 @@
     let cur = clone(plan);
     let curR = route(cur);
     const steps = [];
-    for (let n = 0; n < maxSteps && curR.failed.length; n++) {
+    for (let n = 0; n < maxSteps && (curR.failed.length || curR.togetherFailed.length); n++) {
       const inPlay = signalsInPlay(cur);
       let best = null;
       const gains = [];
@@ -401,9 +490,9 @@
         const hw = hardwareFromCatalogue(c.id, { planned: true, name: c.name });
         trial.hardware.push(hw);
         const r = route(trial);
-        const gain = r.okCount - curR.okCount;
+        const gain = r.score - curR.score;
         if (gain <= 0) continue;
-        const reach = potential(cur, curR.failed, c);
+        const reach = potential(cur, curR, c);
         gains.push({ c, gain, r });
         // most pairs fixed; then the box that could serve most of what is
         // still missing (so the next step can build on it); then the smaller step
@@ -413,7 +502,10 @@
       }
       if (!best) break;
       const before = okSet(curR), after = okSet(best.r);
-      const unlocks = [...after].filter(k => !before.has(k)).map(k => { const [m, t] = k.split('|'); return { m, t }; });
+      const unlocks = [...after].filter(k => !before.has(k)).map(k => {
+        const p = k.split('|');
+        return p[0] === 'together' ? { together: true, a: p[1], b: p[2] } : { m: p[0], t: p[1] };
+      });
       const same = r2 => { const a = okSet(r2); return [...after].every(k => a.has(k)); };
       const alternatives = gains.filter(g => g.c !== best.cat && g.gain === best.gain && same(g.r)).map(g => g.c);
       steps.push({ item: best.cat, hardwareId: best.hw.id, gain: best.gain, unlocks, alternatives, reason: explain(cur, curR, best, unlocks) });
@@ -426,7 +518,9 @@
   /* How many of the failed pairs a box could help with, ports aside: it
    * takes something the machine sends, and what comes out fits the monitor
    * or something already in the plan. */
-  function potential(plan, failed, c) {
+  function potential(plan, routing, c) {
+    const failed = routing.failed.concat(routing.togetherFailed.flatMap(p =>
+      [p.a, p.b].flatMap(m => wantsOf(plan, plan.machines.find(x => x.id === m)).map(t => ({ m, t })))));
     const M = new Map(plan.machines.map(m => [m.id, m]));
     const T = new Map(plan.monitors.map(t => [t.id, t]));
     const hwIns = plan.hardware.flatMap(h => portsOf(h).ins.flatMap(j => j.accepts));
@@ -460,6 +554,14 @@
     const bySignal = new Map(), byPorts = new Map();
     // only what goes through the new box: other pairs may just have moved
     // when the cables were laid again
+    const parts = [];
+    for (const u of unlocks.filter(x => x.together)) {
+      const x = best.r.together.find(y => y.a === u.a && y.b === u.b);
+      const why = apartReason(plan, before, u.a, u.b, true);
+      parts.push(`${M.get(u.a).name} and ${M.get(u.b).name} could not show at the same time${why}. ` +
+        `With ${need}, they can (${M.get(u.a).name} on ${T.get(x.ta).name}, ${M.get(u.b).name} on ${T.get(x.tb).name}).`);
+    }
+    unlocks = unlocks.filter(x => !x.together);
     const through = unlocks.filter(u => {
       const r = best.r.reach[u.m] && best.r.reach[u.m][u.t];
       return r && r.ok && r.hops.some(hp => hp.dev === best.hw.id);
@@ -470,7 +572,6 @@
       if (native) { if (!byPorts.has(u.t)) byPorts.set(u.t, []); byPorts.get(u.t).push(u.m); }
       else { if (!bySignal.has(u.m)) bySignal.set(u.m, []); bySignal.get(u.m).push(u.t); }
     }
-    const parts = [];
     for (const [mId, tIds] of bySignal) {
       const m = M.get(mId);
       const got = Object.entries(before.reach[mId] || {}).filter(([, v]) => v.ok).map(([t]) => T.get(t).name);
@@ -496,6 +597,36 @@
         ` and more machines want it (${names(wanting.map(m => m.name))}): ${need} lets them share.`);
     }
     return parts.join(' ');
+  }
+
+  /* Why two machines cannot be on screen at the same time.  short: just
+   * the ": both go through ..." part, for a suggestion's reason. */
+  function apartReason(plan, routing, a, b, short) {
+    const A = plan.machines.find(x => x.id === a), B = plan.machines.find(x => x.id === b);
+    const T = new Map(plan.monitors.map(t => [t.id, t]));
+    const wa = wantsOf(plan, A), wb = wantsOf(plan, B);
+    const head = `${A.name} and ${B.name} cannot show at the same time`;
+    if (!wa.length || !wb.length) return short ? '' : `${head}: pick screens for both of them in step 1.`;
+    if (!wa.some(ta => wb.some(tb => ta !== tb || T.get(ta).atOnce > 1))) {
+      const only = [...new Set(wa.concat(wb))].map(t => T.get(t).name);
+      return short ? `: they only show on ${names(only)}` :
+        `${head}: they only show on ${names(only)}, which shows one picture at a time. Let one of them show on another screen too.`;
+    }
+    const ways = m => Object.values(routing.reach[m] || {}).filter(v => v.ok);
+    const ra = ways(a), rb = ways(b);
+    if (!ra.length || !rb.length) {
+      const none = !ra.length ? A.name : B.name;
+      return short ? `: ${none} reaches none of its screens` : `${head}: ${none} reaches none of its screens yet.`;
+    }
+    // what every way of one shares with every way of the other
+    const count = new Map();
+    for (const x of ra) for (const y of rb) {
+      const hy = new Set(holds(plan, y.hops));
+      for (const k of new Set(holds(plan, x.hops))) if (hy.has(k)) count.set(k, (count.get(k) || 0) + 1);
+    }
+    const common = [...count.entries()].sort((p, q) => q[1] - p[1]).map(([k]) => k);
+    const what = common.length ? `both have to go through ${holdName(plan, common[0])}` : 'there are not enough free ways to their screens';
+    return short ? `: ${what}` : `${head}: ${what}.`;
   }
 
   /* Why a pair still cannot be done */
@@ -548,8 +679,9 @@
     const now = route(plan);
     const sug = suggest(plan);
     const missing = sug.routing.failed.map(f => ({ m: f.m, t: f.t, reason: diagnose(sug.plan, sug.routing, f.m, f.t) }));
+    const apart = sug.routing.togetherFailed.map(p => ({ a: p.a, b: p.b, reason: apartReason(sug.plan, sug.routing, p.a, p.b) }));
     return {
-      plan, now, suggestions: sug.steps, withSuggestions: sug.plan, routing: sug.routing, missing,
+      plan, now, suggestions: sug.steps, withSuggestions: sug.plan, routing: sug.routing, missing, apart,
       notes: notes(sug.plan, sug.routing.cables), pairs: now.pairs.length,
     };
   }
@@ -791,6 +923,12 @@
     });
     say('');
 
+    const together = togetherPairs(plan);
+    if (together.length) {
+      say('# Meant to be on screen at the same time (the cables above allow it):');
+      for (const p of together) say(`#   ${scrName.get(p.a)} and ${scrName.get(p.b)}`);
+      say('');
+    }
     say('# ---- hotkeys -----------------------------------------------------------');
     say('[hotkeys]');
     hotkeys.forEach(say);
@@ -801,7 +939,7 @@
   const api = {
     SIGNALS, SIGNAL_KEYS, MACHINE_PRESETS, MONITOR_PRESETS, CATALOGUE: CAT,
     takes, normalizePlan, normalizeHardware, hardwareFromCatalogue, parseDeviceFile, portsOf,
-    wantedPairs, route, suggest, analyse, diagnose, wiringList, describeHops, makeConfig, newId,
+    wantedPairs, togetherPairs, apartReason, route, suggest, analyse, diagnose, wiringList, describeHops, makeConfig, newId,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.RetroKMPlanner = api;

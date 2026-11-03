@@ -122,6 +122,8 @@ input[type="number"] { width: 5.5em; }
 .sug .eg { color: var(--muted); font-size: 0.92rem; }
 .miss { border-left: 4px solid var(--bad); padding: 8px 12px; margin: 10px 0; background: var(--node); border-radius: 0 8px 8px 0; }
 .note { color: var(--muted); font-size: 0.92rem; margin: 6px 0; }
+.note .ok { color: var(--ok); font-weight: 700; }
+.note .plan { color: var(--plan); font-weight: 700; }
 
 .scroller { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
 /* fits the card on wide screens; on a phone it keeps a readable size and scrolls sideways */

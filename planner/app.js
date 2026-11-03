@@ -124,7 +124,20 @@
               type: 'button', class: 'chip', 'aria-pressed': String(wants.includes(t.id)),
               onclick: () => { m.wants = wants.includes(t.id) ? wants.filter(x => x !== t.id) : wants.concat(t.id); changed(true); },
             }, t.name)))
-          : h('p', { class: 'empty' }, 'Add monitors in step 2.')));
+          : h('p', { class: 'empty' }, 'Add monitors in step 2.'),
+        plan.machines.length > 1 && [
+          h('div', { class: 'label' }, 'On screen at the same time as'),
+          h('div', { class: 'chips' }, plan.machines.filter(o => o !== m).map(o => h('button', {
+            type: 'button', class: 'chip', 'aria-pressed': String(m.alongside.includes(o.id)),
+            title: 'Both on screens at once, side by side',
+            onclick: () => {
+              const on = !m.alongside.includes(o.id);
+              m.alongside = on ? m.alongside.concat(o.id) : m.alongside.filter(x => x !== o.id);
+              o.alongside = on ? o.alongside.concat(m.id) : o.alongside.filter(x => x !== m.id);
+              changed(true);
+            },
+          }, o.name))),
+        ]));
     }
   }
 
@@ -288,6 +301,25 @@
     if (r.missing.length) {
       miss.append(h('h3', {}, 'Still not possible'));
       for (const m of r.missing) miss.append(h('div', { class: 'miss' }, h('p', {}, m.reason)));
+    }
+    const side = $('side');
+    side.replaceChildren();
+    if (r.routing.together.length) {
+      const M = id => byId(r.withSuggestions.machines, id).name;
+      const T = id => byId(r.withSuggestions.monitors, id).name;
+      side.append(h('h3', {}, 'Side by side'));
+      for (const x of r.routing.together) {
+        const before = r.now.together.find(y => y.a === x.a && y.b === x.b);
+        const pair = `${M(x.a)} and ${M(x.b)}`;
+        if (before && before.ok)
+          side.append(h('p', { class: 'note' }, h('span', { class: 'ok' }, '✓ '), `${pair}: ${M(x.a)} on ${T(before.ta)}, ${M(x.b)} on ${T(before.tb)}.`));
+        else if (x.ok)
+          side.append(h('p', { class: 'note' }, h('span', { class: 'plan' }, '★ '), `${pair}, with the suggestions: ${M(x.a)} on ${T(x.ta)}, ${M(x.b)} on ${T(x.tb)}.`));
+        else {
+          const why = r.apart.find(y => y.a === x.a && y.b === x.b);
+          side.append(h('div', { class: 'miss' }, h('p', {}, why ? why.reason : pair + ' cannot show at the same time yet.')));
+        }
+      }
     }
     const notes = $('notes');
     notes.replaceChildren();

@@ -7,8 +7,8 @@
     { "id": "pc", "name": "Windows 98 PC", "kind": "computer", "outputs": ["vga"], "agent": true, "wants": ["crt", "tall"] },
     { "id": "quadra", "name": "Quadra", "kind": "computer", "outputs": ["vga"], "agent": true, "wants": ["crt", "tall"] },
     { "id": "g4", "name": "Power Mac G4", "kind": "computer", "outputs": ["vga", "dvi"], "agent": true, "wants": ["crt", "tall"] },
-    { "id": "ps2", "name": "PlayStation 2", "kind": "console", "outputs": ["component", "svideo", "composite"], "agent": false, "wants": ["tv", "cap"] },
-    { "id": "n64", "name": "N64", "kind": "console", "outputs": ["svideo", "composite"], "agent": false, "wants": ["tv", "cap"] },
+    { "id": "ps2", "name": "PlayStation 2", "kind": "console", "outputs": ["component", "svideo", "composite"], "agent": false, "wants": ["tv", "cap"], "alongside": ["n64"] },
+    { "id": "n64", "name": "N64", "kind": "console", "outputs": ["svideo", "composite"], "agent": false, "wants": ["tv", "cap"], "alongside": ["ps2"] },
     { "id": "dc", "name": "Dreamcast", "kind": "console", "outputs": ["vga", "composite"], "agent": false, "wants": ["crt", "tv", "cap"] }
   ],
   "monitors": [

@@ -14,8 +14,9 @@ until you save it as a JSON file.
 
 1. **Machines**: consoles and computers, the video each can send
    (composite, S-Video, component, RGB/SCART, VGA, VGA sync-on-green, DVI,
-   HDMI), whether it runs a RetroKM agent, and which screens it should
-   show on.
+   HDMI), whether it runs a RetroKM agent, which screens it should show
+   on, and which other machines it should be on screen *at the same time
+   as* (two consoles side by side, say).
 2. **Monitors and TVs**: their inputs, whether a VGA input takes
    sync-on-green, and how many pictures they show at once. A capture card
    counts as a monitor.
@@ -38,6 +39,12 @@ prices or shop links: check a box's manual before you buy it.
   conversion more, and a machine taking a monitor input that other
   machines want costs a lot, so a switch gets used. Every jack holds one
   cable.
+- **Side by side**: two machines that should be on screen at the same
+  time are routed first, the second one with everything the first holds
+  blocked. A route holds each scaler or converter it passes (one picture
+  at a time), each switch output, and its monitor (or just the input, on a
+  monitor that shows two pictures at once). If that fails the plan says
+  what they share, and suggestions count the pair like a connection.
 - **Suggestions**: try adding each kind of box from the catalogue, keep the
   one that makes the most pairs work, and repeat. When two help equally,
   the one that could serve more of what is still missing wins, then the

@@ -88,6 +88,9 @@
           "wants": [
             "tv",
             "cap"
+          ],
+          "alongside": [
+            "n64"
           ]
         },
         {
@@ -102,6 +105,9 @@
           "wants": [
             "tv",
             "cap"
+          ],
+          "alongside": [
+            "ps2"
           ]
         },
         {
