@@ -114,7 +114,7 @@
       outs: [{ name: 'hdmi', gives: 'hdmi' }],
       need: 'a scaler that accepts RGB and sync-on-green (workstations and consoles to HDMI)',
       examples: ['OSSC', 'RetroTINK 4K'],
-      notes: 'No composite or S-Video.  Line-doubles with almost no lag.',
+      notes: 'No composite or S-Video. Line-doubles with almost no lag.',
       weight: 3.5, suggest: true,
     },
     {

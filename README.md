@@ -8,6 +8,10 @@ which monitor.
 
 "RetroKM" is a working name; rename freely.
 
+**Planning a desk?** The [setup planner](planner/) (`planner/index.html`,
+open it in a browser) lays out machines, monitors and switchers, suggests
+the hardware that is missing and why, and writes a starter `retrokm.conf`.
+
 ## How it works
 
 ```
@@ -257,6 +261,7 @@ agents/linux/   uinput input agent and clipboard helper
 panel/          M5Stack Tab5 touch panel (desk map, drag-to-switch); lib/rkm_panel is
                 the component lil' C's Tab5 firmware embeds
 injector/       M5Stack NanoC6 PS/2 hardware keyboard (BIOS, boot menus, PROMs)
+planner/        setup planner web page (static; design a desk, get a config)
 tests/          end-to-end test, Extron simulator, build stubs
 docs/           protocol description
 ```

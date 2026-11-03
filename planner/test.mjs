@@ -207,6 +207,20 @@ test('consoles to an HDMI TV get a retro scaler; several share it', () => {
   assert.equal(a.suggestions[0].unlocks.length, 2);
 });
 
+test('a box that can serve more of what is missing is picked on a tie', () => {
+  // a VGA-to-HDMI adapter fixes PC -> capture as well, but the OSSC can also
+  // take the Octane's sync-on-green, so with a switch in front it serves both
+  const plan = {
+    machines: [machine('Octane', ['sog'], ['crt', 'cap']), machine('PC', ['vga'], ['crt', 'cap'])],
+    monitors: [monitor('crt', 'CRT', ['vga'], { sog: true }), monitor('cap', 'Capture', ['hdmi'], { kind: 'capture' })],
+  };
+  const a = P.analyse(plan);
+  assert.equal(a.suggestions[0].item.id, 'ossc', a.suggestions.map(s => s.item.id).join());
+  assert.equal(a.missing.length, 0, JSON.stringify(a.missing));
+  assert.ok(a.suggestions.every(s => s.gain >= 1));
+  assert.ok(!/lets them share/.test(a.suggestions[0].reason), 'the scaler is not credited with sharing: ' + a.suggestions[0].reason);
+});
+
 test('impossible pairs are explained', () => {
   const plan = {
     machines: [machine('PS2', ['component'], ['crt'], { kind: 'console' })],
@@ -299,6 +313,13 @@ test('a plan survives JSON and junk is ignored', () => {
   assert.equal(junk.monitors.length, 0);
   assert.equal(junk.hardware.length, 0);
   assert.deepEqual(P.normalizePlan(null).machines, []);
+});
+
+test('examples.js has the same plans as examples/*.json', () => {
+  const embedded = require('./examples.js');
+  const files = readdirSync(path.join(here, 'examples')).filter(f => f.endsWith('.json')).map(f => f.replace(/\.json$/, '')).sort();
+  assert.deepEqual(Object.keys(embedded).sort(), files);
+  for (const f of files) assert.deepEqual(embedded[f], example(f + '.json'), f);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

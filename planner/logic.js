@@ -41,31 +41,31 @@
   // ---- presets -------------------------------------------------------------
 
   const MACHINE_PRESETS = [
-    { name: 'PC (90s, VGA)', kind: 'computer', outputs: ['vga'], agent: true },
-    { name: 'Modern PC or laptop', kind: 'computer', outputs: ['hdmi'], agent: true },
-    { name: 'SGI workstation', kind: 'computer', outputs: ['sog'], agent: true },
-    { name: 'Sun workstation', kind: 'computer', outputs: ['sog'], agent: true },
-    { name: 'Power Mac G4', kind: 'computer', outputs: ['vga', 'dvi'], agent: true },
-    { name: '68k Mac', kind: 'computer', outputs: ['vga'], agent: true },
-    { name: 'Amiga', kind: 'computer', outputs: ['rgb', 'composite'], agent: false },
-    { name: '16-bit console', kind: 'console', outputs: ['rgb', 'composite'], agent: false },
-    { name: 'N64', kind: 'console', outputs: ['svideo', 'composite'], agent: false },
-    { name: 'PlayStation 2', kind: 'console', outputs: ['component', 'rgb', 'svideo', 'composite'], agent: false },
-    { name: 'Dreamcast', kind: 'console', outputs: ['vga', 'rgb', 'svideo', 'composite'], agent: false },
-    { name: 'GameCube', kind: 'console', outputs: ['component', 'svideo', 'composite'], agent: false },
-    { name: 'Xbox', kind: 'console', outputs: ['component', 'svideo', 'composite'], agent: false },
-    { name: 'HDMI console', kind: 'console', outputs: ['hdmi'], agent: false },
+    { label: 'PC (90s, VGA)', name: 'PC', kind: 'computer', outputs: ['vga'], agent: true },
+    { label: 'Modern PC or laptop', name: 'Laptop', kind: 'computer', outputs: ['hdmi'], agent: true },
+    { label: 'SGI workstation', name: 'SGI', kind: 'computer', outputs: ['sog'], agent: true },
+    { label: 'Sun workstation', name: 'Sun', kind: 'computer', outputs: ['sog'], agent: true },
+    { label: 'Power Mac G4', name: 'G4', kind: 'computer', outputs: ['vga', 'dvi'], agent: true },
+    { label: '68k Mac', name: 'Mac', kind: 'computer', outputs: ['vga'], agent: true },
+    { label: 'Amiga', name: 'Amiga', kind: 'computer', outputs: ['rgb', 'composite'], agent: false },
+    { label: '16-bit console', name: 'Console', kind: 'console', outputs: ['rgb', 'composite'], agent: false },
+    { label: 'N64', name: 'N64', kind: 'console', outputs: ['svideo', 'composite'], agent: false },
+    { label: 'PlayStation 2', name: 'PS2', kind: 'console', outputs: ['component', 'rgb', 'svideo', 'composite'], agent: false },
+    { label: 'Dreamcast', name: 'Dreamcast', kind: 'console', outputs: ['vga', 'rgb', 'svideo', 'composite'], agent: false },
+    { label: 'GameCube', name: 'GameCube', kind: 'console', outputs: ['component', 'svideo', 'composite'], agent: false },
+    { label: 'Xbox', name: 'Xbox', kind: 'console', outputs: ['component', 'svideo', 'composite'], agent: false },
+    { label: 'HDMI console', name: 'Console', kind: 'console', outputs: ['hdmi'], agent: false },
   ];
 
   const MONITOR_PRESETS = [
-    { name: 'PC CRT', kind: 'monitor', inputs: ['vga'], sog: false },
-    { name: 'PC CRT (takes sync-on-green)', kind: 'monitor', inputs: ['vga'], sog: true },
-    { name: 'LCD monitor', kind: 'monitor', inputs: ['vga', 'dvi', 'hdmi'], sog: false },
-    { name: 'Modern TV', kind: 'tv', inputs: ['hdmi', 'hdmi', 'hdmi'], sog: false },
-    { name: 'CRT TV (SCART)', kind: 'tv', inputs: ['rgb', 'composite'], sog: false },
-    { name: 'CRT TV (AV)', kind: 'tv', inputs: ['composite', 'svideo'], sog: false },
-    { name: 'PVM / BVM', kind: 'tv', inputs: ['rgb', 'component', 'svideo', 'composite'], sog: false },
-    { name: 'Capture card', kind: 'capture', inputs: ['hdmi'], sog: false },
+    { label: 'PC CRT', name: 'CRT', kind: 'monitor', inputs: ['vga'], sog: false },
+    { label: 'PC CRT (takes sync-on-green)', name: 'CRT', kind: 'monitor', inputs: ['vga'], sog: true },
+    { label: 'LCD monitor', name: 'LCD', kind: 'monitor', inputs: ['vga', 'dvi', 'hdmi'], sog: false },
+    { label: 'Modern TV', name: 'TV', kind: 'tv', inputs: ['hdmi', 'hdmi', 'hdmi'], sog: false },
+    { label: 'CRT TV (SCART)', name: 'CRT TV', kind: 'tv', inputs: ['rgb', 'composite'], sog: false },
+    { label: 'CRT TV (AV)', name: 'CRT TV', kind: 'tv', inputs: ['composite', 'svideo'], sog: false },
+    { label: 'PVM / BVM', name: 'PVM', kind: 'tv', inputs: ['rgb', 'component', 'svideo', 'composite'], sog: false },
+    { label: 'Capture card', name: 'Capture', kind: 'capture', inputs: ['hdmi'], sog: false },
   ];
 
   // ---- the plan ------------------------------------------------------------
@@ -402,19 +402,47 @@
         trial.hardware.push(hw);
         const r = route(trial);
         const gain = r.okCount - curR.okCount;
-        if (gain > 0) gains.push({ c, gain });
-        if (gain > 0 && (!best || gain > best.gain || (gain === best.gain && c.weight < best.cat.weight)))
-          best = { gain, cat: c, trial, r, hw };
+        if (gain <= 0) continue;
+        const reach = potential(cur, curR.failed, c);
+        gains.push({ c, gain, r });
+        // most pairs fixed; then the box that could serve most of what is
+        // still missing (so the next step can build on it); then the smaller step
+        if (!best || gain > best.gain || (gain === best.gain && (reach > best.reach ||
+            (reach === best.reach && c.weight < best.cat.weight))))
+          best = { gain, reach, cat: c, trial, r, hw };
       }
       if (!best) break;
       const before = okSet(curR), after = okSet(best.r);
       const unlocks = [...after].filter(k => !before.has(k)).map(k => { const [m, t] = k.split('|'); return { m, t }; });
-      const alternatives = gains.filter(g => g.gain === best.gain && g.c !== best.cat).map(g => g.c);
-      steps.push({ item: best.cat, hardwareId: best.hw.id, unlocks, alternatives, reason: explain(cur, curR, best, unlocks) });
+      const same = r2 => { const a = okSet(r2); return [...after].every(k => a.has(k)); };
+      const alternatives = gains.filter(g => g.c !== best.cat && g.gain === best.gain && same(g.r)).map(g => g.c);
+      steps.push({ item: best.cat, hardwareId: best.hw.id, gain: best.gain, unlocks, alternatives, reason: explain(cur, curR, best, unlocks) });
       cur = best.trial;
       curR = best.r;
     }
     return { steps, plan: cur, routing: curR };
+  }
+
+  /* How many of the failed pairs a box could help with, ports aside: it
+   * takes something the machine sends, and what comes out fits the monitor
+   * or something already in the plan. */
+  function potential(plan, failed, c) {
+    const M = new Map(plan.machines.map(m => [m.id, m]));
+    const T = new Map(plan.monitors.map(t => [t.id, t]));
+    const hwIns = plan.hardware.flatMap(h => portsOf(h).ins.flatMap(j => j.accepts));
+    const ins = c.kind === 'switch' ? c.accepts : c.ins.flatMap(j => j.accepts);
+    let n = 0;
+    for (const f of failed) {
+      const m = M.get(f.m), t = T.get(f.t);
+      const tAcc = t.inputs.flatMap(i => monitorAccepts(t, i));
+      const ok = m.outputs.some(s => {
+        if (!takes(ins, s)) return false;
+        const outs = c.kind === 'switch' ? [s] : c.outs.map(o => o.gives);
+        return outs.some(g => takes(tAcc, g) || takes(hwIns, g));
+      });
+      if (ok) n++;
+    }
+    return n;
   }
 
   function names(list) {
@@ -430,7 +458,13 @@
     const T = new Map(plan.monitors.map(t => [t.id, t]));
     const need = best.cat.need.replace(/ \(.*\)$/, '');
     const bySignal = new Map(), byPorts = new Map();
-    for (const u of unlocks) {
+    // only what goes through the new box: other pairs may just have moved
+    // when the cables were laid again
+    const through = unlocks.filter(u => {
+      const r = best.r.reach[u.m] && best.r.reach[u.m][u.t];
+      return r && r.ok && r.hops.some(hp => hp.dev === best.hw.id);
+    });
+    for (const u of (through.length ? through : unlocks)) {
       const m = M.get(u.m), t = T.get(u.t);
       const native = t.inputs.some(inp => m.outputs.some(s => takes(monitorAccepts(t, inp), s)));
       if (native) { if (!byPorts.has(u.t)) byPorts.set(u.t, []); byPorts.get(u.t).push(u.m); }

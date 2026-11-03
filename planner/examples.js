@@ -1,0 +1,333 @@
+/* The example plans, for the page (fetch does not work when the page is
+ * opened from disk).  The same as examples/*.json; test.mjs checks that. */
+(function (root) {
+  'use strict';
+  const EXAMPLES = {
+    "retro-desk": {
+      "version": 1,
+      "name": "Example: a retro desk with an Extron, a RetroTINK and an HDMI matrix",
+      "machines": [
+        {
+          "id": "laptop",
+          "name": "Laptop",
+          "kind": "computer",
+          "outputs": [
+            "hdmi"
+          ],
+          "agent": true,
+          "hub": true,
+          "wants": [
+            "tall",
+            "tv"
+          ]
+        },
+        {
+          "id": "octane",
+          "name": "SGI Octane",
+          "kind": "computer",
+          "outputs": [
+            "sog"
+          ],
+          "agent": true,
+          "wants": [
+            "crt",
+            "tall",
+            "cap"
+          ]
+        },
+        {
+          "id": "pc",
+          "name": "Windows 98 PC",
+          "kind": "computer",
+          "outputs": [
+            "vga"
+          ],
+          "agent": true,
+          "wants": [
+            "crt",
+            "tall"
+          ]
+        },
+        {
+          "id": "quadra",
+          "name": "Quadra",
+          "kind": "computer",
+          "outputs": [
+            "vga"
+          ],
+          "agent": true,
+          "wants": [
+            "crt",
+            "tall"
+          ]
+        },
+        {
+          "id": "g4",
+          "name": "Power Mac G4",
+          "kind": "computer",
+          "outputs": [
+            "vga",
+            "dvi"
+          ],
+          "agent": true,
+          "wants": [
+            "crt",
+            "tall"
+          ]
+        },
+        {
+          "id": "ps2",
+          "name": "PlayStation 2",
+          "kind": "console",
+          "outputs": [
+            "component",
+            "svideo",
+            "composite"
+          ],
+          "agent": false,
+          "wants": [
+            "tv",
+            "cap"
+          ]
+        },
+        {
+          "id": "n64",
+          "name": "N64",
+          "kind": "console",
+          "outputs": [
+            "svideo",
+            "composite"
+          ],
+          "agent": false,
+          "wants": [
+            "tv",
+            "cap"
+          ]
+        },
+        {
+          "id": "dc",
+          "name": "Dreamcast",
+          "kind": "console",
+          "outputs": [
+            "vga",
+            "composite"
+          ],
+          "agent": false,
+          "wants": [
+            "crt",
+            "tv",
+            "cap"
+          ]
+        }
+      ],
+      "monitors": [
+        {
+          "id": "crt",
+          "name": "Dell CRT",
+          "kind": "monitor",
+          "inputs": [
+            "vga"
+          ],
+          "sog": true,
+          "atOnce": 1
+        },
+        {
+          "id": "tall",
+          "name": "Dell P2414H",
+          "kind": "monitor",
+          "inputs": [
+            "vga",
+            "dvi"
+          ],
+          "sog": false,
+          "atOnce": 1
+        },
+        {
+          "id": "tv",
+          "name": "TV",
+          "kind": "tv",
+          "inputs": [
+            "hdmi",
+            "hdmi"
+          ],
+          "sog": false,
+          "atOnce": 1
+        },
+        {
+          "id": "cap",
+          "name": "Capture card",
+          "kind": "capture",
+          "inputs": [
+            "hdmi"
+          ],
+          "sog": false,
+          "atOnce": 1
+        }
+      ],
+      "hardware": [
+        {
+          "id": "mvx",
+          "name": "Extron MVX 88 VGA A",
+          "catalog": "extron-mvx88",
+          "kind": "switch",
+          "driver": "extron-sis",
+          "deviceFile": "extron-mvx88",
+          "ins": 8,
+          "outs": 8,
+          "accepts": [
+            "vga",
+            "sog",
+            "rgb",
+            "component",
+            "svideo",
+            "composite"
+          ]
+        },
+        {
+          "id": "tink",
+          "name": "RetroTINK 5X Pro",
+          "catalog": "retrotink-5x",
+          "kind": "converter",
+          "driver": "manual",
+          "ins": [
+            {
+              "name": "scart",
+              "accepts": [
+                "rgb"
+              ]
+            },
+            {
+              "name": "component",
+              "accepts": [
+                "component",
+                "composite"
+              ]
+            },
+            {
+              "name": "svideo",
+              "accepts": [
+                "svideo"
+              ]
+            }
+          ],
+          "outs": [
+            {
+              "name": "hdmi",
+              "gives": "hdmi"
+            }
+          ]
+        },
+        {
+          "id": "matrix",
+          "name": "HDMI matrix 4x4 (RS-232 or network)",
+          "catalog": "hdmi-matrix-4x4",
+          "kind": "switch",
+          "driver": "text",
+          "deviceFile": "template-text",
+          "ins": 4,
+          "outs": 4,
+          "accepts": [
+            "hdmi",
+            "dvi"
+          ]
+        }
+      ]
+    },
+    "small-desk": {
+      "version": 1,
+      "name": "Example: a small desk with a TV and a CRT",
+      "machines": [
+        {
+          "id": "laptop",
+          "name": "Laptop",
+          "kind": "computer",
+          "outputs": [
+            "hdmi"
+          ],
+          "agent": true,
+          "hub": true,
+          "wants": [
+            "tv"
+          ]
+        },
+        {
+          "id": "pc",
+          "name": "DOS PC",
+          "kind": "computer",
+          "outputs": [
+            "vga"
+          ],
+          "agent": true,
+          "wants": [
+            "crt"
+          ]
+        },
+        {
+          "id": "ps4",
+          "name": "HDMI console",
+          "kind": "console",
+          "outputs": [
+            "hdmi"
+          ],
+          "agent": false,
+          "wants": [
+            "tv"
+          ]
+        },
+        {
+          "id": "snes",
+          "name": "SNES",
+          "kind": "console",
+          "outputs": [
+            "rgb",
+            "svideo",
+            "composite"
+          ],
+          "agent": false,
+          "wants": [
+            "tv"
+          ]
+        }
+      ],
+      "monitors": [
+        {
+          "id": "crt",
+          "name": "PC CRT",
+          "kind": "monitor",
+          "inputs": [
+            "vga"
+          ],
+          "sog": false,
+          "atOnce": 1
+        },
+        {
+          "id": "tv",
+          "name": "TV",
+          "kind": "tv",
+          "inputs": [
+            "hdmi"
+          ],
+          "sog": false,
+          "atOnce": 1
+        }
+      ],
+      "hardware": [
+        {
+          "id": "sw",
+          "name": "HDMI switch 4 in, 1 out",
+          "catalog": "hdmi-switch-4x1",
+          "kind": "switch",
+          "driver": "manual",
+          "ins": 4,
+          "outs": 1,
+          "accepts": [
+            "hdmi",
+            "dvi"
+          ]
+        }
+      ]
+    }
+  };
+  if (typeof module === 'object' && module.exports) module.exports = EXAMPLES;
+  else root.RetroKMExamples = EXAMPLES;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
