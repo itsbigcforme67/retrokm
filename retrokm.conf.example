@@ -8,6 +8,11 @@ device = auto
 speed = 1.0            # pointer speed
 accel = 0.5            # 0 = no acceleration
 #wiggle = 400          # back-and-forth (mouse counts in 0.4 s) that gets the desk pet's attention
+# A desk pet (docs/PETS.md) that wanders between the machines whose agents
+# can show it: a folder in pets/ (pets/example/ to start from).  Leave it
+# out if something else drives the buddy window (a pet's own brain).
+#pet = example
+#pets = /path/to/pets  # default: pets/ next to this file, then the source tree's
 # When the switcher puts another machine on the monitor under the pointer:
 # follow = start controlling that machine, stay = keep the current one.
 on_tie = follow

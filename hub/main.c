@@ -249,20 +249,38 @@ static void send_frame(Conn *c, int type, const unsigned char *payload, unsigned
     conn_write(c, buf, rkm_pack(buf, type, payload, len));
 }
 
-static void ctl_printf(Conn *c, const char *fmt, ...)
+static void ctl_vprintf(Conn *c, const char *fmt, va_list ap)
 {
     char buf[512];
-    va_list ap;
 
-    va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
     if (c) conn_write(c, buf, strlen(buf));
     else {
         size_t n = strlen(buf);
         if (n && buf[n - 1] == '\n') buf[n - 1] = 0;
         logmsg("%s", buf);
     }
+}
+
+static void ctl_printf(Conn *c, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    ctl_vprintf(c, fmt, ap);
+    va_end(ap);
+}
+
+void hub_reply(Conn *c, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    ctl_vprintf(c, fmt, ap);
+    va_end(ap);
+}
+
+void hub_send(Conn *c, int type, const unsigned char *payload, unsigned len)
+{
+    send_frame(c, type, payload, len);
 }
 
 /* ---- pointer delivery --------------------------------------------------- */
@@ -398,6 +416,8 @@ static Monitor *monitor_showing(const Screen *s)
         if (cfg.monitors[i].cur == s && !cfg.monitors[i].capture) return &cfg.monitors[i];
     return NULL;
 }
+
+Monitor *hub_monitor_of(const Screen *s) { return monitor_showing(s); }
 
 static Monitor *neighbor(const Seat *z, const Monitor *m, int dir)
 {
@@ -1453,7 +1473,10 @@ static void run_seat_command(Seat *z, int argc, char **argv, Conn *r)
         ctl_printf(r, "edge switching %s\n", z->locked ? "locked" : "unlocked");
     } else if (!strcasecmp(argv[0], "rel") && argc == 3) {          /* synthetic input */
         if (seat_input_ok(z, r)) {
-            if (z == kbd_seat()) ptr_moved_ms = now_ms();
+            if (z == kbd_seat()) {               /* as if the mouse did it */
+                ptr_moved_ms = now_ms();
+                note_wiggle(atoi(argv[1]), atoi(argv[2]), ptr_moved_ms);
+            }
             seat_motion(z, atoi(argv[1]), atoi(argv[2]));
             ctl_printf(r, "ok\n");
         }
@@ -1787,6 +1810,27 @@ static Monitor *monitor_at(int col, int row)
 /* pointer <screen> <monitor> <fx> <fy> <idle s> <wiggle>: where the pointer
  * is, as a fraction across and down the monitor it is on, and how hard it is
  * being wiggled (about-turns, fading over ~1.5 s) - a desk pet watches it */
+double hub_wiggle(void) { return wiggle_now(now_ms()); }
+
+Screen *hub_pointer(Monitor **m, double *fx, double *fy)
+{
+    const Seat *z = home();
+    const Screen *s = z->active;
+    double x0 = 0, y0 = 0, w, h;
+    int ai;
+    if (!s || !z->mon) return NULL;
+    w = s->w > 1 ? s->w : 1;
+    h = s->h > 1 ? s->h : 1;
+    if (has_areas(s) && (ai = area_at(s, z->px, z->py)) >= 0) {
+        x0 = s->area[ai][0]; y0 = s->area[ai][1];
+        w = s->area[ai][2]; h = s->area[ai][3];
+    }
+    *m = z->mon;
+    *fx = clampd((z->px - x0) / w, 0, 1);
+    *fy = clampd((z->py - y0) / h, 0, 1);
+    return z->active;
+}
+
 static void cmd_pointer(Seat *z, Conn *r)
 {
     const Screen *s = z->active;
@@ -1977,6 +2021,7 @@ static void run_panel_command(char *cmd, Conn *r)
             memcpy(p + 1, lab, n);
         }
         send_frame(s->buddy, RKM_BUDDY, p, (unsigned)(1 + n));
+    } else if (pet_command(argc, argv, argc >= 4 && !strcasecmp(argv[2], "say") ? cmd_rest(argv[3], cmd_end) : "", r)) {
     } else if (!strcasecmp(argv[0], "sound") && argc == 11) {
         /* sound <screen> <id> <rate> <chirp ms> <gap ms> <lo Hz> <hi Hz> <level %> <lead ms> <ch,ch,..>:
          * play a chirp on each listed channel in turn (a pet's brain locating it) */
@@ -2007,7 +2052,7 @@ static void run_panel_command(char *cmd, Conn *r)
                       "move <monitor> <col> <row>, share <monitor> [on|off], color <screen> <RRGGBB|default>, "
                       "goto <screen>, lock [on|off], offline, seat <name> goto|lock|offline|pointer, "
                       "seat add <name> [rrggbb], seat remove <name>, seat color <name> <rrggbb>, own <acc> <seat>, "
-                      "activity, buddy <screen> show|hide [label], "
+                      "activity, buddy <screen> show|hide [label], pet <name> where|go|say|look, "
                       "sound <screen> <id> <rate> <chirp> <gap> <lo> <hi> <level> <lead> <channels>, ping\n");
     }
 }
@@ -2026,7 +2071,7 @@ static void conn_detach(Conn *c)
             if (s->pads[k] == c) s->pads[k] = NULL;
     }
     if (s->clip == c) s->clip = NULL;
-    if (s->buddy == c) s->buddy = NULL;
+    if (s->buddy == c) { s->buddy = NULL; pet_left(s); }
     if (s->sound == c) s->sound = NULL;
     c->screen = NULL;
     logmsg("%s: disconnected (%s)", s->name, c->peer);
@@ -2121,6 +2166,7 @@ static void on_hello(Conn *c, const unsigned char *p, unsigned len)
     if (c->caps & RKM_CAP_SOUND) s->sound = c;
     w[1] = RKM_OK;
     send_frame(c, RKM_WELCOME, w, 2);
+    if (c->caps & RKM_CAP_BUDDY) pet_joined(s);   /* its look, and the pet if it is here */
     logmsg("%s: connected from %s, %dx%d%s%s%s%s%s", s->name, c->peer, s->w, s->h,
            c->caps & RKM_CAP_INPUT ? " input" : "", c->caps & RKM_CAP_CLIP ? " clipboard" : "",
            c->caps & RKM_CAP_REL ? " relative" : "", c->caps & RKM_CAP_KEYS ? " hardware-keyboard" : "",
@@ -2223,6 +2269,13 @@ static void screen_monitors(Screen *s, const unsigned char *p, int n)
     }
 }
 
+void hub_tell_panels(const char *line)
+{
+    int i;
+    for (i = 0; i < MAX_CONNS; i++)
+        if (conns[i].kind == CONN_PANEL && !conns[i].dead) conn_write(&conns[i], line, strlen(line));
+}
+
 static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned len)
 {
     Conn *c = ctx;
@@ -2282,22 +2335,19 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
     case RKM_SOUND_EVENT:                      /* how the chirps went: to the panels too */
         if (len >= 8) {
             char line[96];
-            int i;
             snprintf(line, sizeof line, "sound %s %u %s %u %lu\n", c->screen->name, RKM_GET16(p),
                      p[2] == RKM_SOUND_PLAYING ? "playing" : p[2] == RKM_SOUND_DONE ? "done" : "failed",
                      (unsigned)p[3], (unsigned long)RKM_GET32(p + 4));
-            for (i = 0; i < MAX_CONNS; i++)
-                if (conns[i].kind == CONN_PANEL && !conns[i].dead) conn_write(&conns[i], line, strlen(line));
+            hub_tell_panels(line);
         }
         break;
     case RKM_BUDDY_EVENT:                      /* tell the panels (a pet's brain) */
         if (len >= 1) {
             char line[64];
-            int i;
             snprintf(line, sizeof line, "buddy %s %s\n", c->screen->name,
                      p[0] == RKM_BUDDY_SUMMON ? "summon" : "click");
-            for (i = 0; i < MAX_CONNS; i++)
-                if (conns[i].kind == CONN_PANEL && !conns[i].dead) conn_write(&conns[i], line, strlen(line));
+            hub_tell_panels(line);
+            pet_buddy_event(c->screen, p[0]);
         }
         break;
     default:
@@ -2462,6 +2512,7 @@ int main(int argc, char **argv)
         }
     }
     if (config_load(path) < 0) return 1;
+    if (pet_load(path) < 0) return 1;
 
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, on_signal);
@@ -2550,6 +2601,7 @@ int main(int argc, char **argv)
         pad_tick();
         lights_tick();
         video_tick();
+        pet_tick();
         housekeeping();
         reap();
         panel_push(0);

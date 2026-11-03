@@ -34,7 +34,7 @@ clean:
 	$(MAKE) -C hub clean
 	rm -rf build
 
-.PHONY: all hub test test-consoles test-reset test-seats test-switching clean
+.PHONY: all hub test test-consoles test-pets test-reset test-seats test-switching clean
 
 # Video devices, wires and routes through simulated switchers; needs only the hub.
 test-switching: hub
@@ -47,3 +47,7 @@ test-reset: hub
 # Seats (docs/SEATS.md): the user and Claude on different machines at once; needs only the hub.
 test-seats: hub
 	python3 tests/seats_test.py
+
+# Desk pets (docs/PETS.md): the engine with a pet pack on simulated agents; needs only the hub.
+test-pets: hub
+	python3 tests/pets_test.py

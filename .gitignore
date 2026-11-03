@@ -4,3 +4,6 @@ hub/retrokm-hub
 retrokm.conf
 retrokm.tar.gz
 lilc/
+# desk pets are your own: only the example is in the repository
+pets/*
+!pets/example/

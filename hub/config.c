@@ -368,6 +368,8 @@ int config_load(const char *path)
             else if (!strcasecmp(k, "wiggle")) cfg.wiggle = atof(v);
             else if (!strcasecmp(k, "pad")) copy(cfg.pad, sizeof cfg.pad, v);
             else if (!strcasecmp(k, "on_tie")) cfg.follow_tie = !strcasecmp(v, "follow");
+            else if (!strcasecmp(k, "pet")) copy(cfg.pet, sizeof cfg.pet, v);
+            else if (!strcasecmp(k, "pets")) copy(cfg.pets_dir, sizeof cfg.pets_dir, v);
             else if (!strcasecmp(k, "device")) {
                 if (!strcasecmp(v, "auto")) cfg.ndevices = 0;
                 else if (!strcasecmp(v, "none")) cfg.ndevices = -1;

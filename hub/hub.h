@@ -222,6 +222,8 @@ typedef struct Config {
     int follow_tie;              /* active screen follows the monitor on a tie */
     int lights;                  /* colour the keyboard after the active machine */
     int lights_brightness;       /* percent */
+    char pet[32];                /* the desk pet: a folder in pets/; "" = none */
+    char pets_dir[256];          /* where the packs are; "" = pets/ next to the config ... */
     Screen screens[MAX_SCREENS];
     int nscreens;
     Monitor monitors[MAX_MONITORS];
@@ -254,6 +256,22 @@ int hub_routing(void);                  /* some screen is taking input */
 Screen *screen_by_name(const char *name);
 int screen_is_desktop(const Screen *s); /* the hub's own desktop (uinput, or an agent on this machine) */
 Monitor *monitor_by_name(const char *name);
+void hub_send(Conn *c, int type, const unsigned char *payload, unsigned len);   /* a frame */
+void hub_reply(Conn *c, const char *fmt, ...);   /* a reply line; no connection: the log */
+void hub_tell_panels(const char *line);  /* a line to every panel connection (and brains) */
+double hub_wiggle(void);                 /* how hard the mouse is being wiggled now */
+/* The first seat's pointer: its machine, monitor and fraction across and
+ * down that monitor; NULL when nothing has it */
+Screen *hub_pointer(Monitor **m, double *fx, double *fy);
+Monitor *hub_monitor_of(const Screen *s);   /* a desk monitor showing it, or NULL */
+
+/* pet.c: the desk pet engine (docs/PETS.md) */
+int pet_load(const char *conf_path);    /* cfg.pet's pack; -1: cannot */
+void pet_tick(void);
+void pet_joined(Screen *s);             /* s->buddy just connected */
+void pet_left(Screen *s);               /* ... went */
+void pet_buddy_event(Screen *s, int ev);   /* RKM_BUDDY_CLICK / _SUMMON */
+int pet_command(int argc, char **argv, const char *rest, Conn *r);   /* 1: it was "pet ..." */
 
 /* config.c */
 int config_load(const char *path);
