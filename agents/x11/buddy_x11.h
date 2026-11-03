@@ -49,6 +49,9 @@ static struct {
 
 enum { B_OFF, B_ENTER, B_PAUSE, B_DART, B_EXIT };
 
+/* The pet's name when the hub gives none (set before buddy_init) */
+static char buddy_name[RKM_NAME_MAX + 1];
+
 static double bd_now(void)
 {
     struct timeval tv;
@@ -108,6 +111,7 @@ static void buddy_init(Display *d)
     memset(&bd, 0, sizeof bd);
     bd.d = d;
     rkm_look_default(&bd.look);
+    strcpy(bd.look.name, buddy_name);
     bd.sw = DisplayWidth(d, scr);
     bd.sh = DisplayHeight(d, scr);
     bd.ww = 260;
@@ -122,7 +126,7 @@ static void buddy_init(Display *d)
     bd.w = XCreateWindow(d, RootWindow(d, scr), bd.sw, bd.sh, (unsigned)bd.ww, (unsigned)bd.wh, 2,
                          CopyFromParent, InputOutput, CopyFromParent,
                          CWOverrideRedirect | CWBackPixel | CWBorderPixel | CWEventMask, &a);
-    XStoreName(d, bd.w, "desk pet");
+    XStoreName(d, bd.w, buddy_name[0] ? buddy_name : "desk pet");
     bd.buf = XCreatePixmap(d, bd.w, (unsigned)bd.ww, (unsigned)bd.wh, (unsigned)DefaultDepth(d, scr));
     bd.weave = XCreatePixmap(d, bd.w, 4, 4, (unsigned)DefaultDepth(d, scr));
     v.foreground = BlackPixel(d, scr);
@@ -143,6 +147,7 @@ static void buddy_init(Display *d)
 static void buddy_look(const unsigned char *p, unsigned int n)
 {
     rkm_look_parse(&bd.look, p, n);
+    if (!bd.look.name[0]) strcpy(bd.look.name, buddy_name);
     bd_colors();
     XStoreName(bd.d, bd.w, bd.look.name[0] ? bd.look.name : "desk pet");
     bd.next_blink = 0;

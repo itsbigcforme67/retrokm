@@ -1,4 +1,17 @@
-# RetroKM wire protocol, version 1
+# RetroKM wire protocol, version 1, revision 2
+
+**Version** is the number in HELLO and WELCOME (`RKM_VERSION`, 1). It only
+changes if old agents can no longer work with a new hub, which has not
+happened yet. **Revision** (`RKM_REVISION`) counts additions: each one adds
+messages or optional fields, which older peers ignore, and never changes
+what an existing message means. Nobody needs to know the revision of the
+other side: a hub sends new messages only to agents with the capability
+they belong to, and an agent that never gets them keeps its old behaviour.
+
+| Revision | Added |
+|---|---|
+| 1 | everything up to and including BUDDY, SOUND, PAD (to 2026-10) |
+| 2 | BUDDY_LOOK, BUDDY_GAZE, BUDDY_SAY: the desk pet's eyes drawn from numbers (2026-11) |
 
 Designed so the smallest client (a 68000 Mac running MacTCP, or a
 microcontroller) can implement it in a page of C: fixed tiny frames,
@@ -48,13 +61,16 @@ Unknown types must be ignored, so new messages can be added later.
 | 0x21 | CLIP_DATA | both | up to 480 bytes |
 | 0x22 | CLIP_END | both | none |
 | 0x30 | BUDDY | H>A | cmd u8 (0 hide, 1 show), label (rest, up to 48 bytes) |
-| 0x31 | BUDDY_EVENT | A>H | event u8 (1 his window was clicked, 2 called from the machine) |
+| 0x31 | BUDDY_EVENT | A>H | event u8 (1 its window was clicked, 2 called from the machine) |
 | 0x32 | SOUND | H>A | id u16, rate u32, chirp ms u16, gap ms u16, low Hz u16, high Hz u16, level % u8, lead-in ms u16, count u8, channel u8 [count] |
 | 0x33 | SOUND_EVENT | A>H | id u16, status u8 (0 playing, 1 done, 2 failed), channels u8, rate u32 |
+| 0x34 | BUDDY_LOOK | H>A | how the eyes look: 20 bytes of numbers, then the name (below). Rev 2 |
+| 0x35 | BUDDY_GAZE | H>A | mode u8 (0 look about freely, 1 look along gx, gy, 2 watch the pointer), gx s8, gy s8 (-100..100 across and down), hold u8 (tenths of a second; 0 until the next GAZE), blink u8 (1 blink now). Rev 2 |
+| 0x36 | BUDDY_SAY | H>A | seconds u8 (0 = 4), text (rest, up to 120 bytes): a caption in the label strip. Rev 2 |
 
 **caps**: bit 0 `INPUT` (can inject), bit 1 `CLIP` (has a clipboard),
 bit 2 `REL` (pointer is relative only), bit 3 `KEYS` (a hardware keyboard),
-bit 4 `BUDDY` (can show the desk buddy window), bit 5 `SOUND` (can play test chirps),
+bit 4 `BUDDY` (can show the desk pet's buddy window), bit 5 `SOUND` (can play test chirps),
 bit 6 `PAD` (plays a game controller, see below).
 
 **charset**: 0 UTF-8, 1 ISO 8859-1, 2 Windows-1252, 3 MacRoman.
@@ -184,31 +200,90 @@ use the same name: one with `INPUT`, one with `CLIP`. This is how the hub's
 own desktop works (uinput in the hub plus a clipboard helper in the
 session), and how a hardware injector pairs with a software clipboard agent.
 
-## The desk buddy
+## The desk pet (buddy window)
 
-lil' C (a desk robot, a separate project) can visit the desk's machines.
-An agent with the `BUDDY` capability shows him as a small xeyes window
-when it gets BUDDY show, and sees him off on BUDDY hide; show while he is
-already there just changes the label. Clicking his window sends
-BUDDY_EVENT 1; calling him from the machine (the Windows agent's tray icon)
-sends BUDDY_EVENT 2. The hub passes events on to panel connections as
-`buddy <screen> click|summon`, and takes `buddy <screen> show|hide [label]`
-from them. Agents without the capability never see BUDDY frames.
+A desk pet (`docs/PETS.md`) can visit the desk's machines. An agent with
+the `BUDDY` capability shows it as a small window with its eyes when it
+gets BUDDY show, and sees it off on BUDDY hide; show while it is already
+there just changes the label (empty: the name from BUDDY_LOOK). Clicking
+its window sends BUDDY_EVENT 1; calling it from the machine (the Windows
+agent's tray icon) sends BUDDY_EVENT 2. The hub passes events on to panel
+connections as `buddy <screen> click|summon`, and takes
+`buddy <screen> show|hide [label]` from them. Agents without the
+capability never see BUDDY frames.
+
+**BUDDY_LOOK** (revision 2) gives the eyes as numbers; the agent draws them
+itself, so even a small one can. An agent that never gets one draws the
+default, which is also what agents drew before: tall black and white eyes
+on the X root weave. The hub sends it right after WELCOME when it runs a
+pet, and again if the pack changes. Payload (`rkm_look` in
+`common/rkm_proto.h`):
+
+| Byte | Field | Default |
+|---|---|---|
+| 0 | eye height : width, tenths (10 round, 15 tall) | 15 |
+| 1 | space between the eyes, % of an eye's half-width | 20 |
+| 2 | pupil half-width, % of the eye's half-width | 24 |
+| 3 | pupil height : width, tenths | 12 |
+| 4 | rim thickness, % of the eye's half-width | 16 |
+| 5 | flags: bit 0 use the colours (else black and white), bit 1 plain background (else the weave) | 0 |
+| 6 | upper lid: how much of the eye it covers, % | 0 |
+| 7 | seconds between blinks, about (0 never) | 0 |
+| 8 | mouth line width, % of the window (0 none) | 0 |
+| 9 | smile, s8: -100 frown .. 100 smile | 0 |
+| 10..12 | background colour, RGB | ffffff |
+| 13..15 | the whites, RGB | ffffff |
+| 16..18 | ink (rims, pupils, lids, mouth, label strip), RGB | 000000 |
+| 19 | name length (up to 31), then the name: window title and default label | "" |
+
+Fields may be added after the name in later revisions. A shorter payload
+than 20 bytes means the defaults. Zero shape and pupil sizes mean the
+defaults too.
+
+**BUDDY_GAZE** says where to look. With mode 1 or 2 the window stays where
+it is while it looks (it does not dart off), and on hide it keeps looking
+that way as it slides off (the way it is going). Mode 0, or the hold
+running out, lets it look about on its own again. **BUDDY_SAY** shows a
+caption in the label strip for a few seconds instead of the label; text
+too long for the strip scrolls. Text in BUDDY, BUDDY_LOOK and BUDDY_SAY is
+in the agent's charset from HELLO.
+
+### The pet engine (panel port)
+
+With `pet = <name>` in the config the hub runs a pet from
+`pets/<name>/pet.conf` itself (`docs/PETS.md`): it sends the BUDDY frames,
+and a brain can drive it on the panel port:
+
+- `pet <name> where` answers `pet <name> at <screen>`,
+  `pet <name> travelling <from> <to>` or `pet <name> nowhere`.
+- `pet <name> go <screen>`: off it goes (and stays there a while).
+- `pet <name> say <text>`: a caption where it is.
+- `pet <name> look <dx> <dy>` (-1..1 across and down), `look pointer`,
+  `look free`: its eyes; the engine leaves them to the brain for 3 s.
+
+Events to every panel connection: `pet <name> arrived <screen>`,
+`pet <name> clicked <screen>` (its window), `pet <name> summoned <screen>`
+(called from that machine; it comes), `pet <name> left <screen>` (the
+machine went away under it). `<name>` is the pack's folder name; the pet's
+display name works in commands too. The old `buddy <screen> click|summon`
+lines are still sent. Without `pet =` the hub only passes BUDDY frames on,
+as before, so a pet whose own brain drives `buddy` is not disturbed.
 
 The panel port also answers `activity` with
 `activity {"screen":[s since input, s since a key],...}` (-1: never), so
-lil' C can stay out of the way of a machine someone is using, and `pointer`
+a pet can stay out of the way of a machine someone is using, and `pointer`
 with `pointer <screen> <monitor> <fx> <fy> <s since the mouse moved> <wiggle>`
-(fx, fy: 0..1 across and down that monitor; wiggle: the mouse's
-back-and-forth over the last 0.4 s - distance travelled minus distance got,
-over the hub's `wiggle =` (default 400 counts) - held for a second, so 1 or
-more means it is being wiggled; `pointer - - 0 0 -1 0`
-when nothing has it), so he can watch the mouse go from monitor to monitor,
-and notice it being shaken at him.
+(fx, fy: 0..1 across and down that monitor; wiggle: how hard the
+mouse is being shaken - the motion is cut into short strokes and each turn
+between strokes adds up to 1 (a full about-turn), fading over about 1.5 s:
+a shake scores ~8, a slow wave ~4, ordinary pointing up to ~2; a pet pack's
+`wiggle =` is on this scale; `pointer - - 0 0 -1 0`
+when nothing has it), so it can watch the mouse go from monitor to monitor,
+and notice it being shaken at it.
 
 ## Test chirps
 
-For lil' C to work out where he is by sound, an agent with `SOUND` plays a
+For a pet's brain to work out where it is by sound, an agent with `SOUND` plays a
 linear chirp (low to high Hz, Hann window) on each listed speaker in turn:
 the first after the lead-in, then one every chirp + gap ms. Channels are in
 WAVE order (0 front left, 1 front right, 2 centre, 3 sub, 4 rear left, 5

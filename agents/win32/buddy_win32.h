@@ -44,6 +44,9 @@ static struct {
 
 enum { B_OFF, B_ENTER, B_PAUSE, B_DART, B_EXIT };
 
+/* The pet's name when the hub gives none (set before buddy_init) */
+static char buddy_name[RKM_NAME_MAX + 1];
+
 static void buddy_clicked(void);   /* in rkm_win32.c */
 static void buddy_tick(void);
 
@@ -255,6 +258,7 @@ static void buddy_init(HINSTANCE inst)
 
     memset(&bd, 0, sizeof bd);
     rkm_look_default(&bd.look);
+    lstrcpy(bd.look.name, buddy_name);
     bd_colors();
     for (i = 0; i < 8; i++) {                  /* rows of 16 bits, leftmost pixel in the top bit; 1 = paper */
         int x;
@@ -275,7 +279,7 @@ static void buddy_init(HINSTANCE inst)
     if (bd.ww < 120) bd.ww = 120;
     bd.wh = bd.ww * 176 / 260;
     bd.face_h = bd.wh * 84 / 100;
-    bd.w = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "rkmBuddy", "desk pet", WS_POPUP,
+    bd.w = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "rkmBuddy", buddy_name[0] ? buddy_name : "desk pet", WS_POPUP,
                           0, 0, bd.ww, bd.wh, NULL, NULL, inst, NULL);
     srand((unsigned)GetTickCount());
 }
@@ -284,6 +288,7 @@ static void buddy_init(HINSTANCE inst)
 static void buddy_look(const unsigned char *p, unsigned int n)
 {
     rkm_look_parse(&bd.look, p, n);
+    if (!bd.look.name[0]) strcpy(bd.look.name, buddy_name);
     bd_colors();
     if (bd.w) SetWindowText(bd.w, bd.look.name[0] ? bd.look.name : "desk pet");
     bd.next_blink = 0;

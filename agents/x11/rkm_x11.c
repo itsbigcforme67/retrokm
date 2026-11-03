@@ -10,7 +10,7 @@
  * With RKM_XRANDR it tells the hub where each monitor is (RKM_SCREEN), now
  * and whenever monitors are rotated, moved, added or removed.
  *
- *   rkm-x11 [-n name] [-p port] [-s clipboard|primary|both] [-l|-u] [-c] [-B] hub-host
+ *   rkm-x11 [-n name] [-p port] [-s clipboard|primary|both] [-l|-u] [-c] [-B] [-P pet] hub-host
  *
  * It can also show the desk pet's window when it visits (buddy_x11.h).
  */
@@ -732,7 +732,8 @@ static void usage(void)
         "  -l        clipboard text is ISO 8859-1 (default on IRIX)\n"
         "  -u        clipboard text is UTF-8 (default elsewhere)\n"
         "  -c        clipboard only, no mouse or keyboard\n"
-        "  -B        never show the desk pet's window\n", RKM_PORT);
+        "  -B        never show the desk pet's window\n"
+        "  -P name   the desk pet's name, when the hub does not say\n", RKM_PORT);
     exit(2);
 }
 
@@ -759,6 +760,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-u")) latin1 = 0;
         else if (!strcmp(argv[i], "-c")) clip_only = 1;
         else if (!strcmp(argv[i], "-B")) use_buddy = 0;
+        else if (!strcmp(argv[i], "-P") && i + 1 < argc) {
+            strncpy(buddy_name, argv[++i], RKM_NAME_MAX);
+            buddy_name[RKM_NAME_MAX] = 0;
+        }
         else if (argv[i][0] == '-') usage();
         else hub_host = argv[i];
     }

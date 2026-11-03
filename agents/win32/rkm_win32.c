@@ -13,6 +13,7 @@
  *   hub=192.168.1.10
  *   name=pc
  *   buddy=0          (never show the desk pet's window; see buddy_win32.h)
+ *   buddy_name=Example (the desk pet's name when the hub does not say)
  *
  * The tray icon's menu can also call the desk pet over.
  */
@@ -559,6 +560,7 @@ static void configure(const char *cmdline)
     GetPrivateProfileString("retrokm", "name", my_name, my_name, sizeof my_name, ini);
     hub_port = (int)GetPrivateProfileInt("retrokm", "port", RKM_PORT, ini);
     use_buddy = (int)GetPrivateProfileInt("retrokm", "buddy", 1, ini);
+    GetPrivateProfileString("retrokm", "buddy_name", "", buddy_name, sizeof buddy_name, ini);
 
     lstrcpyn(args, cmdline, sizeof args);
     tok = strtok(args, " \t");

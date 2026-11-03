@@ -23,12 +23,12 @@ file is the state of *this* desk and what was learned getting there.
   state is `/etc/retrokm.conf.state` (monitor moves, shared-monitor input,
   picked colours). Change things with `./install-laptop.sh` (sudo: the user
   types the password, so start it in a terminal tab for them).
-- **Laptop agent and lil' C's bridge:** user services `retrokm-agent` and
-  `lilc-bridge` (since 2026-10-14; they used to be an autostart entry and a
-  terminal tab, and both died with the desktop session). They start at login
-  and restart within seconds if they stop. Restart after updating:
-  `systemctl --user restart retrokm-agent lilc-bridge`. Logs:
-  `journalctl --user -u lilc-bridge -f`.
+- **Laptop agent and the desk pet's bridge:** user services `retrokm-agent`
+  and the bridge's own (since 2026-10-14; they used to be an autostart entry
+  and a terminal tab, and both died with the desktop session). They start at
+  login and restart within seconds if they stop. Restart after updating:
+  `systemctl --user restart retrokm-agent` (the bridge's service name and
+  logs are in the pet's own, private repository).
 - **Input:** only the USB Fnatic Streak keyboard and Logitech trackball go
   through the hub; the laptop's own keyboard and touchpad never do.
   Ctrl+Alt+Shift+Esc stops the hub. Ctrl+Alt+Shift+Backspace (or the
@@ -40,7 +40,7 @@ file is the state of *this* desk and what was learned getting there.
   also takes goto, show, tie, lock, key, key-to, rel, btn, ddc, lights,
   reset, and `seat <name> <command>` for any of them.
 - **Seats** (2026-10-28, built and tested, **not installed**: the owner runs
-  `./install-laptop.sh`, it needs sudo; the Tab5 shows seats once lil' C's
+  `./install-laptop.sh`, it needs sudo; the Tab5 shows seats once the pet's
   firmware is rebuilt with the new `panel/lib/rkm_panel`). Design and
   commands: `docs/SEATS.md`. Each seat has its own focus, pointer, held
   keys and clipboard; the owner's is `james` (green, the first, set in
@@ -188,19 +188,44 @@ The SGI Octane session ("SGI Octane bringup and data recovery") was given
 `sgi bringup/RETROKM-KEYBOARD.md` and `sgi bringup/type-octane.py` (types
 text into the Octane through the hub's control socket).
 
-## lil' C desk buddy (2026-10-10, built, not installed)
+## Desk buddy window (2026-10-10, built, not installed)
 
 Commits 01f0869 and 655097a. Hub: BUDDY frames, `activity` and `buddy`
-panel commands. X11 + Windows agents show lil' C's window; the Windows tray
-icon (left click) calls him. Panel code moved to `panel/lib/rkm_panel`
-(lil' C's Tab5 firmware embeds it); monitors show numbers. To install:
+panel commands. X11 + Windows agents show the desk pet's window; the Windows tray
+icon (left click) calls it. Panel code moved to `panel/lib/rkm_panel`
+(the pet's Tab5 firmware embeds it); monitors show numbers. To install:
 - hub: `./install-laptop.sh` (sudo, user types the password)
 - laptop agent: rebuild `build/rkm-x11` (X headers via apt-get download)
   and restart the autostarted one
 - armbox: rebuild rkm-x11 on the box with `~/rkm-sdk`, add `-lm`
 - Dell: done 2026-10-10 (see "Updating the Dell" below)
 - the stand-alone panel firmware still builds (`pio run -e tab5`), but the
-  Tab5 is meant to run lil' C's firmware now, which includes the desk map.
+  Tab5 is meant to run the pet's firmware now, which includes the desk map.
+
+## Desk pets, steps 1 and 2 (2026-11-03, built and tested, not installed)
+
+Branch `desk-pets` (from `switching-graph`), design in `docs/PETS.md`.
+- **Agents:** the X11 and Windows buddy windows draw the eyes from numbers
+  (BUDDY_LOOK), follow a gaze from the hub (BUDDY_GAZE) and show captions
+  (BUDDY_SAY): protocol revision 2. Without a look they draw the old one,
+  so nothing changes until the hub runs a pet. `-P <name>` / `buddy_name=`
+  sets the name an empty label shows (it used to be built in).
+- **Hub:** `hub/pet.c` runs one pet from `pets/<name>/pet.conf` when
+  `pet = <name>` is in `[hub]` (off by default: the owner's pet's bridge
+  keeps driving `buddy` as before). Wandering by weight, manners, travel,
+  looking; panel commands `pet <name> where|go|say|look`, events
+  `arrived|clicked|summoned|left`.
+- **Example pet:** `pets/example/` ("Example"), a placeholder. Only it is
+  in git; other folders in `pets/` are ignored.
+- **Tests:** `make test-pets` (fake agents) passes, as do test-switching,
+  test-consoles, test-reset and test-seats. `make test` (Xvfb) has three
+  failures (machine-gone fallback, relative agent homing and deltas) that
+  happen on `switching-graph` too, before this work.
+- Built: hub, X11 agent (Linux), Windows agent with MinGW (checked to
+  compile; not run on Windows). The panel's back button takes a label now
+  (`rkmPanelBegin(..., true, "label")`); not rebuilt.
+- To install: hub (`./install-laptop.sh`), the agents (rebuild), and decide
+  whether to turn a pet on (see the open questions in `docs/PETS.md`).
 
 ## Displays, accessories and the Xbox pad (2026-10-11, built, not on hardware)
 
@@ -224,10 +249,10 @@ to many). Decisions (owner, 2026-10-11):
 Hub: accessories (`hub/pad.c`, several pads, stable ids, remembered while
 unplugged), links/toggles in the state file, kinds in one table
 (`acc_kinds`). `make test-consoles` passes. Panel checked in the desktop
-build (screenshots); Tab5 and lil' C firmware build. `xboxpad/` is the
+build (screenshots); Tab5 and the pet's firmware build. `xboxpad/` is the
 Atom S3R original-Xbox pad (a pad player, `player 1-4`).
-Done 2026-10-11: hub installed; the Tab5 runs lil' C's firmware (the
-standard now: `cd lilc/firmware && pio run -e tab5-ota -t upload`). The
+Done 2026-10-11: hub installed; the Tab5 runs the pet's firmware (the
+standard now; how to flash it is in the pet's own repository). The
 Xbox pad runs on the owner's **Atom EchoS3R** (MAC ...F4:C8, 192.168.1.206,
 xboxpad.local; same ESP32-S3, no screen), first flashed by catching its
 ~4 s serial/JTAG window at boot (its old audio firmware had no serial),

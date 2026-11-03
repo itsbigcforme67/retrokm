@@ -59,7 +59,7 @@ machine another seat is still on sends key-ups for its own held keys and
 buttons instead.
 
 Keyboard lights follow the focus of the seat that owns the USB keyboard.
-lil' C's `pointer`/wiggle is the first seat's.
+A desk pet's `pointer`/wiggle is the first seat's.
 
 ## Commands
 
@@ -88,8 +88,8 @@ Layout JSON: a `seats` array (`name`, `label`, `color`, `active`, `monitor`,
 
 Limits: a machine's clipboard is reported by its agent on LEAVE, which is
 sent only when the last seat leaves; a seat leaving a machine another seat
-stays on does not hand over what it copied there. The phone page and lil'
-C's `pointer` are the first seat's.
+stays on does not hand over what it copied there. The phone page and a desk
+pet's `pointer` are the first seat's.
 
 ## Panel (Tab5 and the desktop build)
 

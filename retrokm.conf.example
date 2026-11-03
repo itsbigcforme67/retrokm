@@ -7,7 +7,7 @@
 device = auto
 speed = 1.0            # pointer speed
 accel = 0.5            # 0 = no acceleration
-#wiggle = 400          # back-and-forth (mouse counts in 0.4 s) that gets the desk pet's attention
+#wiggle = 400          # (not used any more: a pet pack's [looking] wiggle = says how hard to shake the mouse)
 # A desk pet (docs/PETS.md) that wanders between the machines whose agents
 # can show it: a folder in pets/ (pets/example/ to start from).  Leave it
 # out if something else drives the buddy window (a pet's own brain).

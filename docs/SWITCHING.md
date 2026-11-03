@@ -98,7 +98,7 @@ signal = vga component composite sog     # what passes through it
 
 [device tink]
 driver = retrotink5x    # from devices/retrotink5x.conf
-port = serial:/dev/ttyACM0          # or: ir:lilc  /  ir:atom-ir
+port = serial:/dev/ttyACM0          # or: ir:atom-ir
 # its ports (named, from the device file): component, svideo -> hdmi
 
 [device matrix]
@@ -137,7 +137,7 @@ Built into the hub, in C, each able to run several times (two Extrons):
 | `extron-sis` | today's `extron.c` made per-device: tie `in*out!`, read `out%`, front-panel changes arrive by themselves |
 | `ddc` | monitor input switching over DDC/CI (today's `ddc.c`) |
 | `text` | any box that takes text commands over serial or TCP; the commands come from a device file |
-| `ir` | sends codes through an IR blaster (an ESP32, or lil' C's head) |
+| `ir` | sends codes through an IR blaster (an ESP32, or a desk pet's head) |
 | `manual` | a hand switch: the panel shows the step |
 
 ### Device files (`devices/*.conf`)

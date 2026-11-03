@@ -116,7 +116,7 @@ Open Watcom or MinGW (command lines are at the top of the source file). Binaries
 from a current MinGW-w64 generally will not start on Windows 98; use VC6 or
 Open Watcom for that target. Run `rkm-win32.exe 192.168.1.10 pc`, or put an
 `rkm.ini` next to it and drop a shortcut in Startup. It sits in the tray.
-Clicking the tray icon calls lil' C over (see below); right-click for the
+Clicking the tray icon calls the desk pet over (see below); right-click for the
 menu.
 
 Both Windows installs on the dual-boot machine can use the same screen name.
@@ -157,17 +157,23 @@ An M5Stack Tab5 can show the desk and rearrange it: drag machines onto
 monitors to switch the Extron, drag monitors around, tap a machine to give it
 the keyboard. See [panel/README.md](panel/README.md).
 
-## lil' C, the desk buddy
+## Desk pets
 
-lil' C (the desk robot in [lilc/](lilc/README.md)) wanders between the desk's machines.
-The X11 and Windows agents can show him: a small xeyes window that darts
-around the screen until he leaves. His bridge connects to the panel port and
-sends `buddy <screen> show|hide`; clicking his window (or the Windows tray
-icon) tells the bridge, which calls him there. `activity` on the same port
-says how long since each machine was last given input, so he can get out of
-the way. `-B` on the X11 agent (or `buddy=0` in `rkm.ini`) keeps him away.
-lil' C can also run the desk by voice ("bring up the Octane on monitor 2").
-Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+A desk pet is a little character that wanders between the desk's machines
+([docs/PETS.md](docs/PETS.md)). The X11 and Windows agents can show it: a
+small window with its eyes (drawn from a few numbers: shape, colours, lids,
+a mouth) that darts around the screen, looks about, and leaves again.
+
+The hub can run one itself: put `pet = example` in `[hub]` and it wanders
+between the machines (by how much it likes each), gets out of the way of
+someone typing, comes when its window or the Windows tray icon is clicked,
+and watches a wiggled mouse. Make your own by copying `pets/example/` to
+`pets/<yours>/` (only the example is in git). A pet can also have its own
+**brain** on the panel port: `pet <name> go|say|look`, events
+`pet <name> arrived|clicked|summoned`, and the older `buddy <screen>
+show|hide`, `activity` and `pointer`. `-B` on the X11 agent (or `buddy=0`
+in `rkm.ini`) keeps pets away; `-P <name>` (`buddy_name=`) names the pet
+when the hub does not. Details in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Using it
 
@@ -255,7 +261,7 @@ agents/win32/   Windows 98 SE / 2000
 agents/macos/   classic Mac OS (68k binary, also for PowerPC)
 agents/linux/   uinput input agent and clipboard helper
 panel/          M5Stack Tab5 touch panel (desk map, drag-to-switch); lib/rkm_panel is
-                the component lil' C's Tab5 firmware embeds
+                the component another Tab5 firmware can embed
 injector/       M5Stack NanoC6 PS/2 hardware keyboard (BIOS, boot menus, PROMs)
 tests/          end-to-end test, Extron simulator, build stubs
 docs/           protocol description

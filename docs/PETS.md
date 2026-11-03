@@ -1,13 +1,15 @@
 # Desk pets (design, 2026-10-28)
 
-Status: design, not built yet.
+Status (2026-11-03): steps 1 and 2 are built and tested (`make test-pets`),
+not installed: the agents draw eyes from numbers, and the hub runs one pet
+from `pets/`. Steps 3 onwards are still design. See "Built" below.
 
 A desk pet is a little character that lives on the desk's screens and
 gadgets and moves between them: a face in a corner of whichever machine it
 is visiting, on the touch panel, on a TV, on a robot's head. The owner's
-own pet, lil' C, is private and stays in his own repository. This is the
-public part: an engine in RetroKM that anyone can give their own pet to,
-and a builder to make one.
+own pet is private and stays in its own repository. This is the public
+part: an engine in RetroKM that anyone can give their own pet to, and a
+builder to make one.
 
 ## What a pet is
 
@@ -19,7 +21,7 @@ Three parts, kept apart so each can be shared or kept private on its own:
   travels, what it looks at. Same for every pet.
 - **Brain** (optional, the pet's own): anything that gives it more to say
   or do: a voice, a Claude conversation, a robot body. It talks to the
-  engine over the panel port, like lil' C's bridge does today. A pet with
+  engine over the panel port, like the owner's pet's bridge does today. A pet with
   no brain still wanders, looks around and comes when called.
 
 Packs and brains are files on the owner's machine. `pets/` is ignored by
@@ -101,17 +103,19 @@ preview at real size on each kind of place), set behaviour with sliders,
 write its words, then download the pack as a zip to unpack into `pets/`.
 It can also open a pack to change it.
 
-## lil' C
+## The owner's own pet
 
-Nothing here changes lil' C. His bridge, bodies and look stay in his
-private repository. Later he could become a private pack plus his bridge as
-the brain on top of this engine, so the wandering code lives in one place,
-but that is the owner's call.
+Nothing here changes the owner's pet. Its bridge, bodies and look stay in
+its private repository. Later it could become a private pack plus its
+bridge as the brain on top of this engine, so the wandering code lives in
+one place, but that is the owner's call.
 
-What does change in public RetroKM: the buddy windows and docs talk about
-"the desk pet" instead of lil' C by name, and his eye shape becomes the
-default eyes only if his pack says so. The example pet in `pets/` is a new
-character, so the default look belongs to RetroKM.
+What did change in public RetroKM: the buddy windows and docs talk about
+"the desk pet" instead of naming it. Its window looks the same as before
+(the default numbers are the old look). An empty label used to show its
+name; now it shows the name from BUDDY_LOOK, else the agent's own setting
+(`-P <name>` on the X11 agent, `buddy_name=` in the Windows `rkm.ini`),
+else nothing. The example pet in `pets/` is a new character.
 
 ## Order of work
 
@@ -127,10 +131,64 @@ character, so the default look belongs to RetroKM.
    clients.
 7. Several pets at once (they could meet).
 
+## Built (steps 1 and 2)
+
+**Agents** (`agents/x11/buddy_x11.h`, `agents/win32/buddy_win32.h`): the
+window draws the eyes from BUDDY_LOOK's numbers (`rkm_look`, defaults =
+the old look), follows BUDDY_GAZE (stays put while told where to look;
+looks where it is going as it slides off), blinks, and shows BUDDY_SAY
+captions in the label strip. Protocol revision 2 (`docs/PROTOCOL.md`); old
+agents ignore the new frames, new agents with an old hub draw the defaults.
+
+**Engine** (`hub/pet.c`): `pet = <name>` in `[hub]` (off by default) reads
+`pets/<name>/pet.conf` (next to the config, then the source tree, or
+`pets = <dir>`). Places are the machines whose agent has `BUDDY`; panel,
+TV and gadget places come with step 3. The pack:
+
+```
+name = Example                 # what its window says
+[look]       shape gap pupil pupil_shape rim colors background paper eye ink
+             lid blink mouth smile           (as in pets/example/pet.conf)
+[wander]     every = 15 (minutes, about; 0 = stays put)  stay = 5 (minutes after a call)
+[places]     <screen> = weight  (0 = never wanders there; * = the rest)
+[manners]    leave_when_typing = yes  avoid_typing = yes  typing = 10 (seconds)
+[travel]     time = 3 (seconds)
+[looking]    glance = 20 (seconds)  follow = 30 (%)  wiggle = 4 (0 = ignore)
+[words]      arrive, leave, click, summoned, coming = lines | between | choices
+```
+
+What it does:
+- Turns up on a place by weight, and wanders every few minutes.
+- Leaves a machine when someone types there (not counting keys while it
+  was told to stay), and never goes where someone typed in the last
+  `typing` seconds; with nowhere else to go it stays.
+- Called (tray icon, or `pet <name> go`): comes, and stays `stay` minutes.
+  A weight of 0 only stops it wandering there; a call still works.
+- Travel: the place it leaves looks towards the destination (by where the
+  monitors stand) and says a `leave` line, then slides off; the
+  destination shows "on my way" (`coming`), watching the way it comes, for
+  the trip time, then the pet arrives and says an `arrive` line.
+- Looking: glances about; some of the time (`follow`) watches the pointer,
+  on its own machine or across monitors (looks towards the monitor the
+  pointer is on); a wiggled mouse gets its attention for 3 s; a click
+  makes it look at the pointer and say a `click` line.
+- A brain on the panel port: `pet <name> where | go | say | look`, events
+  `arrived | clicked | summoned | left` (`docs/PROTOCOL.md`).
+
+**Example pet**: `pets/example/` ("Example"): round eyes on a plain warm
+background, lids a quarter down, blinks, a small smile. A placeholder: to
+rename it, change the folder and `name =`. Everything else in `pets/` is
+ignored by git.
+
 ## Open questions
 
-- The example pet: what it is called and what it looks like.
-- Does the hub do the wandering for lil' C too, or does his bridge keep
-  its own? (The owner's call; both work.)
+- The example pet: what it is called and what it looks like (it is a
+  placeholder, "Example", for now).
+- Does the hub do the wandering for the owner's pet too, or does its
+  bridge keep its own? (The owner's call; both work. Not both at once: with
+  `pet =` set the hub sends BUDDY frames itself.)
+- The empty-label default: the window used to show the owner's pet's name
+  when its bridge sent no label. To keep that, set `-P <name>` /
+  `buddy_name=` on the agents, or have the bridge send the label.
 - Sound: places that can play sound could play a pet's chirps or voice
   clips. Later.
