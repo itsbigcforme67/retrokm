@@ -13,7 +13,7 @@ A 1280x720 touch screen with two pages (tabs in the header):
   linked pads go there). A controller badge in a card's corner means a pad
   is linked to it.
 - Each monitor has a **number** on its corner (screens left to right, then
-  capture cards), so "monitor 2" means the same thing to you and to lil' C.
+  capture cards), so "monitor 2" means the same thing to you and to a desk pet.
 
 **accessories**
 - The things you hold along the top (keyboard + mouse, each game pad the
@@ -37,12 +37,12 @@ Pages are `Page` subclasses in `lib/rkm_panel/rkm_panel.cpp` (the
 `pages[]` list); kinds of accessory come from the hub, so a new kind
 (mics, headsets) shows up in the options without panel changes.
 
-## Inside lil' C
+## Inside another app
 
 The panel is a component, `lib/rkm_panel` (`rkm_panel.h`). This firmware
-(`src/main.cpp`) runs it full time. lil' C's Tab5 firmware links the same
-folder in and opens it from the bottom bar of his desktop, with a "lil' C"
-button in the header to go back. Desktop test of that mode:
+(`src/main.cpp`) runs it full time. Another Tab5 firmware (a desk pet's,
+say) can link the same folder in and open it from its own desktop, with a
+back button in the header (`rkmPanelBegin(host, port, true, "label")`). Desktop test of that mode:
 `PANEL_EMBEDDED=1` (the button then quits).
 
 ## Hub side

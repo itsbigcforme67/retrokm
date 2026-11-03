@@ -1,8 +1,8 @@
 /*
- * Test chirps for lil' C (RKM_SOUND), for the Windows agent.
+ * Test chirps for a desk pet (RKM_SOUND), for the Windows agent.
  *
- * lil' C's bridge works out where he is on the desk by timing chirps played
- * from each speaker in turn, as heard by his microphones.  The hub sends the
+ * A pet's brain can work out where it is on the desk by timing chirps played
+ * from each speaker in turn, as heard by its microphones.  The hub sends the
  * recipe (rate, chirp length and sweep, gap, level, lead-in, which channels
  * in which order); this builds the sound here and plays it with waveOut.
  * It tries 5.1 first (WAVE_FORMAT_EXTENSIBLE, then plain 6-channel PCM),

@@ -39,7 +39,7 @@ static long long ptr_moved_ms;   /* when the mouse last moved */
 static double wiggle;            /* how much the mouse swung about lately */
 static long long wiggle_ms;
 
-/* Wiggling the mouse gets lil' C's eye.  Loosely, so a trackball needs no
+/* Wiggling the mouse gets the desk pet's eye.  Loosely, so a trackball needs no
  * clean reversals: the motion is cut into short strokes, and each one adds
  * how far it swung from the one before (a full about-turn = 1; under 30
  * degrees is just a wobbly line).  It fades over about 1.5 s: a shake scores
@@ -1783,10 +1783,10 @@ static Monitor *monitor_at(int col, int row)
 }
 
 /* activity {"screen":[seconds since input, seconds since a key],...}; -1 = never.
- * lil' C's bridge asks for this to stay out of the way of machines in use. */
+ * A desk pet's brain asks for this to stay out of the way of machines in use. */
 /* pointer <screen> <monitor> <fx> <fy> <idle s> <wiggle>: where the pointer
  * is, as a fraction across and down the monitor it is on, and how hard it is
- * being wiggled (about-turns, fading over ~1.5 s) - lil' C watches it */
+ * being wiggled (about-turns, fading over ~1.5 s) - a desk pet watches it */
 static void cmd_pointer(Seat *z, Conn *r)
 {
     const Screen *s = z->active;
@@ -1964,11 +1964,11 @@ static void run_panel_command(char *cmd, Conn *r)
         /* trace on|off: stream raw mouse motion to this connection */
         r->trace = !strcasecmp(argv[1], "on");
     } else if (!strcasecmp(argv[0], "buddy") && argc >= 3) {
-        /* buddy <screen> show|hide [label]: lil' C's window on that machine */
+        /* buddy <screen> show|hide [label]: the desk pet's window on that machine */
         Screen *s = screen_by_name(argv[1]);
         unsigned char p[1 + 48];
         size_t n = 0;
-        if (!s || !s->buddy) { ctl_printf(r, "error %s cannot show lil' C\n", argv[1]); return; }
+        if (!s || !s->buddy) { ctl_printf(r, "error %s cannot show the desk pet\n", argv[1]); return; }
         p[0] = !strcasecmp(argv[2], "show") ? RKM_BUDDY_SHOW : RKM_BUDDY_HIDE;
         if (argc >= 4) {                          /* the label is the rest of the line */
             const char *lab = cmd_rest(argv[3], cmd_end);
@@ -1979,7 +1979,7 @@ static void run_panel_command(char *cmd, Conn *r)
         send_frame(s->buddy, RKM_BUDDY, p, (unsigned)(1 + n));
     } else if (!strcasecmp(argv[0], "sound") && argc == 11) {
         /* sound <screen> <id> <rate> <chirp ms> <gap ms> <lo Hz> <hi Hz> <level %> <lead ms> <ch,ch,..>:
-         * play a chirp on each listed channel in turn (lil' C locating himself) */
+         * play a chirp on each listed channel in turn (a pet's brain locating it) */
         Screen *s = screen_by_name(argv[1]);
         unsigned char p[32];
         unsigned n = 0, k;
@@ -2290,7 +2290,7 @@ static void agent_frame(void *ctx, int type, const unsigned char *p, unsigned le
                 if (conns[i].kind == CONN_PANEL && !conns[i].dead) conn_write(&conns[i], line, strlen(line));
         }
         break;
-    case RKM_BUDDY_EVENT:                      /* tell the panels (lil' C's bridge) */
+    case RKM_BUDDY_EVENT:                      /* tell the panels (a pet's brain) */
         if (len >= 1) {
             char line[64];
             int i;

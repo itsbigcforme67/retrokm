@@ -1,5 +1,5 @@
 /*
- * RetroKM wire protocol, version 1.
+ * RetroKM wire protocol, version 1, revision 2 (docs/PROTOCOL.md).
  *
  * Strict C89, no libc dependencies, safe to call at interrupt time on
  * classic Mac OS.  See docs/PROTOCOL.md for the full description.
@@ -9,7 +9,8 @@
 #ifndef RKM_PROTO_H
 #define RKM_PROTO_H
 
-#define RKM_VERSION      1
+#define RKM_VERSION      1     /* HELLO version: changes only if old agents must break */
+#define RKM_REVISION     2     /* new messages added; old ones mean the same */
 #define RKM_PORT         24850
 #define RKM_HDR          3
 #define RKM_MAX_PAYLOAD  512
@@ -42,11 +43,14 @@
 #define RKM_CLIP_DATA  0x21  /* bytes (<= RKM_CLIP_CHUNK)                         */
 #define RKM_CLIP_END   0x22  /* (none)                                            */
 
-#define RKM_BUDDY      0x30  /* H->A cmd,label..  show/hide lil' C's window       */
-#define RKM_BUDDY_EVENT 0x31 /* A->H event  someone clicked him / called him      */
+#define RKM_BUDDY      0x30  /* H->A cmd,label..  show/hide the desk pet's window */
+#define RKM_BUDDY_EVENT 0x31 /* A->H event  someone clicked it / called it        */
 #define RKM_SOUND      0x32  /* H->A id16,rate32,chirp16,gap16,lo16,hi16,level,   */
                              /*      lead16,n,channel[n]  play a chirp sequence   */
 #define RKM_SOUND_EVENT 0x33 /* A->H id16,status,channels,rate32                  */
+#define RKM_BUDDY_LOOK 0x34  /* H->A the pet's eyes as numbers (rkm_look)  rev 2  */
+#define RKM_BUDDY_GAZE 0x35  /* H->A mode,gx8,gy8,hold,blink  where to look  rev 2  */
+#define RKM_BUDDY_SAY  0x36  /* H->A secs,text..  a caption for a while      rev 2  */
 
 /* HELLO caps */
 #define RKM_CAP_INPUT  0x01  /* can inject mouse and keyboard                     */
@@ -129,8 +133,37 @@
 /* RKM_BUDDY cmd and RKM_BUDDY_EVENT event */
 #define RKM_BUDDY_HIDE   0
 #define RKM_BUDDY_SHOW   1
-#define RKM_BUDDY_CLICK  1   /* his window was clicked                          */
+#define RKM_BUDDY_CLICK  1   /* its window was clicked                          */
 #define RKM_BUDDY_SUMMON 2   /* called from the machine (tray icon, hotkey)     */
+
+/* RKM_BUDDY_GAZE mode.  gx, gy are signed, -100..100 across and down;
+ * hold is in tenths of a second (0: until the next GAZE). */
+#define RKM_GAZE_FREE    0   /* look about on its own (the default)             */
+#define RKM_GAZE_AT      1   /* look along gx, gy                               */
+#define RKM_GAZE_POINTER 2   /* watch the pointer on this machine               */
+
+/* RKM_BUDDY_LOOK: how the eyes are drawn.  The fixed part is
+ * RKM_LOOK_LEN bytes, then name_len and the name; an agent that never
+ * gets one draws the defaults (rkm_look_default). */
+#define RKM_LOOK_LEN   20
+#define RKM_LOOK_COLOR 0x01  /* flags: use the colours (else black and white)   */
+#define RKM_LOOK_PLAIN 0x02  /* flags: plain background (else the X root weave) */
+typedef struct rkm_look {
+    unsigned char shape;       /* eye height : width, tenths (15 = 1.5 times as tall) */
+    unsigned char gap;         /* space between the eyes, % of an eye's half-width */
+    unsigned char pupil;       /* pupil half-width, % of the eye's half-width */
+    unsigned char pupil_shape; /* pupil height : width, tenths */
+    unsigned char rim;         /* rim thickness, % of the eye's half-width */
+    unsigned char flags;       /* RKM_LOOK_* */
+    unsigned char lid;         /* how much of the eye the upper lid covers, % */
+    unsigned char blink;       /* seconds between blinks, about; 0 = never */
+    unsigned char mouth;       /* mouth line width, % of the window; 0 = none */
+    signed char smile;         /* -100 (frown) .. 100 (smile); 0 = straight */
+    unsigned char paper[3];    /* background, RGB */
+    unsigned char eye[3];      /* the whites */
+    unsigned char ink[3];      /* rims, pupils, lids, mouth, the label strip */
+    char name[RKM_NAME_MAX + 1];   /* window title and default label; "" = none */
+} rkm_look;
 
 /* RKM_SOUND channels (WAVE order) and RKM_SOUND_EVENT status */
 #define RKM_CH_FL 0
@@ -180,6 +213,14 @@ unsigned int rkm_pack(unsigned char *out, int type,
 unsigned int rkm_hello(unsigned char *out, int caps, int charset, int eol,
                        unsigned int w, unsigned int h, unsigned int clipmax_kb,
                        const char *name);
+
+/* The look the buddy window had before revision 2: tall black and white
+ * eyes on the X root weave. */
+void rkm_look_default(rkm_look *l);
+/* Read a BUDDY_LOOK payload; a short one gives the default look */
+void rkm_look_parse(rkm_look *l, const unsigned char *p, unsigned int len);
+/* Build one (needs RKM_LOOK_LEN + 1 + RKM_NAME_MAX bytes); returns its length */
+unsigned int rkm_look_pack(unsigned char *out, const rkm_look *l);
 
 /* ---- USB HID keyboard usages used on the wire (page 0x07) -------------- */
 #define HID_A 0x04

@@ -6,7 +6,7 @@
 // plug off a monitor to unplug it.  Tap a machine to give it the keyboard.
 //
 // A component (rkm_panel.h): the panel's own firmware (src/main.cpp) runs it
-// full time, and lil' C's Tab5 firmware opens it from his desktop.  The same
+// full time, and another Tab5 firmware (a desk pet's) can open it from its own desktop.  The same
 // code runs in a window on Linux (env:native, SDL2) for testing.
 #include <M5Unified.h>
 #include <chrono>
@@ -48,12 +48,12 @@ static const int CY = 482, CH = 204;                      // machine cards
 
 // The frame lives in the panel's own layout (720x1280 portrait, 565 not
 // byte-swapped), drawn on through setRotation(1), so it reaches the screen
-// as straight row copies (the trick from lil' C).
+// as straight row copies.
 static M5Canvas frame(&M5.Display);  // what goes to the screen
 static M5Canvas scene(&M5.Display);  // the desk without whatever is under the finger
 static M5Canvas* G = &frame;         // the one being drawn on
 
-// Lands on the screen in two layers, as in lil' C: the scene is redrawn only
+// Lands on the screen in two layers: the scene is redrawn only
 // when something changes (the layout, a drag starting or ending, a toast);
 // while a finger moves, only the patch under the dragged thing is restored
 // from the scene, redrawn, and sent to the panel.
@@ -71,7 +71,8 @@ static bool sceneDirty = true, fingerDirty = false;
 
 static Layout lay;
 static HubLink hub;
-static bool embedded = false, wantBack = false;  // inside lil' C: a back button
+static bool embedded = false, wantBack = false;  // inside another app: a back button
+static std::string backLabel = "Back";
 static std::string toast;
 static uint32_t toastUntil = 0;
 
@@ -791,8 +792,8 @@ static void cable(int x0, int y0, int x1, int y1, uint32_t col, CableStyle style
 }
 
 // Monitors are numbered for talking about them ("put the Octane on monitor
-// 2"): screens left to right, then the capture cards.  lil' C's bridge counts
-// the same way.
+// 2"): screens left to right, then the capture cards.  A desk pet's brain
+// should count the same way.
 static int monitorNumber(const Monitor& m) {
   int n = 1;
   for (auto& o : lay.monitors) {
@@ -1043,7 +1044,7 @@ static void drawHeader() {
   G->fillRect(0, 0, SW, HEAD_H, C(0x101317));
   G->drawFastHLine(0, HEAD_H, SW, C(LINE));
   int tx0 = 24;
-  if (embedded) {  // back to lil' C's desktop
+  if (embedded) {  // back to the host app's desktop
     backBtn = {10, 8, 136, HEAD_H - 16};
     G->fillSmoothRoundRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h, 20,
                            C(drag == D_PRESS_BACK ? 0x3A4250 : 0x262C35));
@@ -1054,7 +1055,7 @@ static void drawHeader() {
       G->fillEllipse(ex, ey, 6, 9, C(0xFFFFFF));
       G->fillEllipse(ex - 2, ey + 1, 2, 3, C(0x000000));
     }
-    text("lil' C", backBtn.x + 62, HEAD_H / 2, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
+    text(backLabel.c_str(), backBtn.x + 62, HEAD_H / 2, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
     tx0 = backBtn.x + backBtn.w + 18;
   }
   text("RetroKM", tx0, HEAD_H / 2, TEXT, &fonts::FreeSansBold12pt7b, middle_left);
@@ -1900,8 +1901,9 @@ void rkmPanelSetHub(const char* host) {
   hub.reconnect();
 }
 
-void rkmPanelBegin(const char* host, int port, bool inside) {
+void rkmPanelBegin(const char* host, int port, bool inside, const char* back) {
   embedded = inside;
+  backLabel = back && *back ? back : "Back";
   for (M5Canvas* c : {&frame, &scene}) {
     c->setPsram(true);
     c->setColorDepth(lgfx::color_depth_t::rgb565_nonswapped);

@@ -12,9 +12,9 @@
  *   [retrokm]
  *   hub=192.168.1.10
  *   name=pc
- *   buddy=0          (never show lil' C's window; see buddy_win32.h)
+ *   buddy=0          (never show the desk pet's window; see buddy_win32.h)
  *
- * The tray icon's menu can also call lil' C, the desk robot, over.
+ * The tray icon's menu can also call the desk pet over.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -403,12 +403,21 @@ static void on_frame(void *ctx, int type, const unsigned char *p, unsigned int l
         if (p[0] == RKM_BUDDY_SHOW) buddy_show((const char *)p + 1, len - 1);
         else buddy_hide();
         break;
+    case RKM_BUDDY_LOOK:
+        if (use_buddy) buddy_look(p, len);
+        break;
+    case RKM_BUDDY_GAZE:
+        if (use_buddy) buddy_gaze(p, len);
+        break;
+    case RKM_BUDDY_SAY:
+        if (use_buddy) buddy_say(p, len);
+        break;
     default:
         break;
     }
 }
 
-/* ---- lil' C --------------------------------------------------------------- */
+/* ---- the desk pet --------------------------------------------------------- */
 
 static void buddy_event(int e)
 {
@@ -496,14 +505,17 @@ static LRESULT CALLBACK wndproc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_TRAY:
         if (lp == WM_LBUTTONUP && use_buddy && state == ST_UP) {
-            buddy_event(RKM_BUDDY_SUMMON);       /* a click: call lil' C here */
+            buddy_event(RKM_BUDDY_SUMMON);       /* a click: call the pet here */
         } else if (lp == WM_RBUTTONUP || lp == WM_LBUTTONUP) {
             HMENU m = CreatePopupMenu();
             POINT pt;
             AppendMenu(m, MF_STRING | MF_GRAYED, 0, nid.szTip);
             AppendMenu(m, MF_SEPARATOR, 0, NULL);
-            if (use_buddy)
-                AppendMenu(m, MF_STRING | (state == ST_UP ? 0 : MF_GRAYED), IDM_CALL, "Call lil' C over");
+            if (use_buddy) {
+                char call[64];
+                wsprintf(call, "Call %s over", bd.look.name[0] ? bd.look.name : "the desk pet");
+                AppendMenu(m, MF_STRING | (state == ST_UP ? 0 : MF_GRAYED), IDM_CALL, call);
+            }
             AppendMenu(m, MF_STRING, IDM_QUIT, "Quit RetroKM");
             GetCursorPos(&pt);
             SetForegroundWindow(w);

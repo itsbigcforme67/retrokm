@@ -1,5 +1,5 @@
 // RetroKM touch panel firmware for the M5Stack Tab5: the desk map full time.
-// The panel itself is lib/rkm_panel (lil' C's Tab5 firmware embeds it too).
+// The panel itself is lib/rkm_panel (another Tab5 firmware can embed it too).
 //
 // The same code runs in a window on Linux (env:native, SDL2) for testing.
 #include <M5Unified.h>

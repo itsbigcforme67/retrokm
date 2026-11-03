@@ -12,7 +12,7 @@
  *
  *   rkm-x11 [-n name] [-p port] [-s clipboard|primary|both] [-l|-u] [-c] [-B] hub-host
  *
- * It can also show lil' C, the desk robot, when he visits (buddy_x11.h).
+ * It can also show the desk pet's window when it visits (buddy_x11.h).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -591,6 +591,15 @@ static void on_frame(void *ctx, int type, const unsigned char *p, unsigned int l
         if (p[0] == RKM_BUDDY_SHOW) buddy_show((const char *)p + 1, len - 1);
         else buddy_hide();
         break;
+    case RKM_BUDDY_LOOK:
+        if (use_buddy) buddy_look(p, len);
+        break;
+    case RKM_BUDDY_GAZE:
+        if (use_buddy) buddy_gaze(p, len);
+        break;
+    case RKM_BUDDY_SAY:
+        if (use_buddy) buddy_say(p, len);
+        break;
     case RKM_CLIP_END:
         if (!clip_in) break;
         if (clip_data) free(clip_data);
@@ -723,7 +732,7 @@ static void usage(void)
         "  -l        clipboard text is ISO 8859-1 (default on IRIX)\n"
         "  -u        clipboard text is UTF-8 (default elsewhere)\n"
         "  -c        clipboard only, no mouse or keyboard\n"
-        "  -B        never show lil' C's window\n", RKM_PORT);
+        "  -B        never show the desk pet's window\n", RKM_PORT);
     exit(2);
 }
 
@@ -829,7 +838,7 @@ int main(int argc, char **argv)
             mx = sock > xfd ? sock : xfd;
             tv.tv_sec = 1;
             tv.tv_usec = 0;
-            if (use_buddy) {                   /* lil' C is moving: wake up for each frame */
+            if (use_buddy) {                   /* the pet is moving: wake up for each frame */
                 int ms = buddy_tick();
                 if (ms >= 0) { tv.tv_sec = 0; tv.tv_usec = ms * 1000L; }
                 XFlush(dpy);
@@ -850,7 +859,7 @@ int main(int argc, char **argv)
         if (!clip_only) release_all();
         if (sock >= 0) close(sock);
         sock = -1;
-        if (use_buddy) {                       /* no hub, no visit: see him off */
+        if (use_buddy) {                       /* no hub, no visit: see it off */
             buddy_hide();
             while (buddy_tick() >= 0) { XFlush(dpy); nap(25); }
         }
