@@ -237,6 +237,44 @@
             "dvi"
           ]
         }
+      ],
+      "modes": [
+        {
+          "id": "work",
+          "name": "Workstations",
+          "shows": [
+            {
+              "m": "octane",
+              "t": "crt"
+            },
+            {
+              "m": "pc",
+              "t": "tall"
+            },
+            {
+              "m": "laptop",
+              "t": "tv"
+            }
+          ]
+        },
+        {
+          "id": "retro",
+          "name": "Retro night",
+          "shows": [
+            {
+              "m": "ps2",
+              "t": "tv"
+            },
+            {
+              "m": "n64",
+              "t": "cap"
+            },
+            {
+              "m": "dc",
+              "t": "crt"
+            }
+          ]
+        }
       ]
     },
     "small-desk": {

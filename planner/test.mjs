@@ -305,6 +305,55 @@ test('the example desk: PS2 and N64 side by side after the suggestions', () => {
   assert.match(text, /^#   playstation-2 and n64$/m);
 });
 
+// ---- modes -----------------------------------------------------------------
+
+test('a mode keeps each machine once and each screen to what it shows at once', () => {
+  const plan = P.normalizePlan(consoles({ modes: [{ name: 'M', shows: [
+    { m: 'ps2', t: 'tv' }, { m: 'ps2', t: 'cap' }, { m: 'n64', t: 'tv' }, { m: 'ghost', t: 'tv' }, { m: 'n64', t: 'cap' }] }] }));
+  assert.deepEqual(plan.modes[0].shows, [{ m: 'ps2', t: 'tv' }, { m: 'n64', t: 'cap' }]);
+});
+
+test('a machine wants the screens its modes put it on', () => {
+  const plan = P.normalizePlan(consoles({ modes: [{ name: 'M', shows: [{ m: 'ps2', t: 'cap' }] }] }));
+  plan.machines[0].wants = [];
+  assert.deepEqual(P.wantsOf(plan, plan.machines[0]), ['cap']);
+  assert.ok(P.wantedPairs(plan).some(p => p.m === 'ps2' && p.t === 'cap'));
+});
+
+test('a mode that needs two pictures through one scaler: reason and fix', () => {
+  const plan = consoles({ modes: [{ id: 'night', name: 'Night', shows: [{ m: 'ps2', t: 'tv' }, { m: 'n64', t: 'cap' }] }] });
+  plan.machines.forEach(m => { m.alongside = []; m.wants = []; });
+  const a = P.analyse(plan);
+  assert.equal(a.modes[0].status, 'plan');
+  assert.ok(a.modes[0].shows.some(x => x.status === 'ok') && a.modes[0].shows.some(x => x.status === 'plan'));
+  assert.match(a.suggestions[0].reason, /In "Night", .* could not work: (N64 and PS2|PS2 and N64) both need RetroTINK 5X Pro/);
+  assert.ok(a.routing.modes[0].ok);
+  const [x, y] = a.routing.modes[0].shows;
+  const hx = new Set(holdsOf(a.withSuggestions, x.hops));
+  assert.ok(!holdsOf(a.withSuggestions, y.hops).some(k => hx.has(k)), 'the shows of a mode share nothing');
+});
+
+test('a mode that cannot work says why', () => {
+  const plan = {
+    machines: [machine('PS2', ['component'], [], { id: 'ps2', kind: 'console' })],
+    monitors: [monitor('crt', 'PC CRT', ['vga'])],
+    modes: [{ name: 'Nope', shows: [{ m: 'ps2', t: 'crt' }] }],
+  };
+  const a = P.analyse(plan);
+  assert.equal(a.modes[0].status, 'bad');
+  assert.match(a.modes[0].shows[0].reason, /15 kHz/);
+});
+
+test('the config lists each mode as control-port commands', () => {
+  const a = P.analyse(example('retro-desk.json'));
+  const text = P.makeConfig(a.withSuggestions, a.routing.cables);
+  checkConf(text);
+  assert.match(text, /^# "Retro night"\n#   plug playstation-2\n#   show tink tv$/m);
+  assert.match(text, /^#   show sgi-octane dell-crt$/m);
+  assert.equal(a.modes.find(m => m.id === 'work').status, 'ok');
+  assert.equal(a.modes.find(m => m.id === 'retro').status, 'plan');
+});
+
 test('impossible pairs are explained', () => {
   const plan = {
     machines: [machine('PS2', ['component'], ['crt'], { kind: 'console' })],

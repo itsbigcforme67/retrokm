@@ -77,6 +77,12 @@ for plan in sorted(os.listdir(ROOT + "/planner/examples")):
             wire = re.search(r"(?ms)^\[wire\]\n(.*?)^\s*$", made.stdout)
             for w in re.findall(r"(?m)^(\S+ = \S+)", wire.group(1)) if wire else []:
                 check(tag + ": wire " + w, ("wire " + w) in dv, dv)
+            # each mode's commands name things the hub knows (the switchers are
+            # offline here, so a show may still fail for that reason)
+            for cmd in re.findall(r"(?m)^#   ((?:plug|show) \S+(?: \S+)?)$", made.stdout):
+                got = ctl(cmd)
+                check(tag + ": mode command " + cmd, not any(e in got for e in
+                      ("has no switcher input", "no switched monitor", "not a console behind a box", "unknown")), got)
             check(tag + ": no complaints in the log", "cannot parse" not in open(conf + ".log").read(), open(conf + ".log").read())
         finally:
             hub.terminate()

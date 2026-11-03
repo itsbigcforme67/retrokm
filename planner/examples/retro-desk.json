@@ -25,5 +25,9 @@
       "outs": [ { "name": "hdmi", "gives": "hdmi" } ] },
     { "id": "matrix", "name": "HDMI matrix 4x4 (RS-232 or network)", "catalog": "hdmi-matrix-4x4", "kind": "switch", "driver": "text", "deviceFile": "template-text",
       "ins": 4, "outs": 4, "accepts": ["hdmi", "dvi"] }
+  ],
+  "modes": [
+    { "id": "work", "name": "Workstations", "shows": [ { "m": "octane", "t": "crt" }, { "m": "pc", "t": "tall" }, { "m": "laptop", "t": "tv" } ] },
+    { "id": "retro", "name": "Retro night", "shows": [ { "m": "ps2", "t": "tv" }, { "m": "n64", "t": "cap" }, { "m": "dc", "t": "crt" } ] }
   ]
 }
